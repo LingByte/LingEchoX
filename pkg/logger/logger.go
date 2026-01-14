@@ -21,6 +21,28 @@ type LogConfig struct {
 
 var Lg *zap.Logger
 
+func init() {
+	// 默认初始化一个简单的 logger，避免 nil pointer
+	initDefaultLogger()
+}
+
+// initDefaultLogger 初始化默认的 logger
+func initDefaultLogger() {
+	config := zap.NewProductionConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+
+	logger, err := config.Build(zap.AddCaller())
+	if err != nil {
+		// 如果连默认 logger 都创建失败，使用 nop logger
+		Lg = zap.NewNop()
+		return
+	}
+
+	Lg = logger
+	zap.ReplaceGlobals(Lg)
+}
+
 // Init 初始化logger
 func Init(cfg *LogConfig, mode string) (err error) {
 	writeSyncer := getLogWriter(cfg.Filename, cfg.MaxSize, cfg.MaxBackups, cfg.MaxAge, cfg.Daily)
@@ -121,37 +143,57 @@ func getLogWriter(filename string, maxSize, maxBackup, maxAge int, daily bool) z
 
 // Info 通用 info 日志方法
 func Info(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		initDefaultLogger()
+	}
 	Lg.Info(msg, fields...)
 }
 
 // Warn 通用 warn 日志方法
 func Warn(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		initDefaultLogger()
+	}
 	Lg.Warn(msg, fields...)
 }
 
 // Error 通用 error 日志方法
 func Error(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		initDefaultLogger()
+	}
 	Lg.Error(msg, fields...)
 }
 
 // Debug 通用 debug 日志方法
 func Debug(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		initDefaultLogger()
+	}
 	Lg.Debug(msg, fields...)
 }
 
 // Fatal 通用 fatal 日志方法
 func Fatal(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		initDefaultLogger()
+	}
 	Lg.Fatal(msg, fields...)
 }
 
 // Panic 通用 panic 日志方法
 func Panic(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		initDefaultLogger()
+	}
 	Lg.Panic(msg, fields...)
 }
 
 // Sync 刷新缓冲区
 func Sync() {
-	_ = Lg.Sync()
+	if Lg != nil {
+		_ = Lg.Sync()
+	}
 }
 
 // GetDailyLogFilename 获取按日期分割的日志文件名
