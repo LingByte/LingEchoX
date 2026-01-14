@@ -1,5 +1,29 @@
 package constants
 
+import "time"
+
+const (
+	DefaultICETimeout = 10 * time.Second
+	DefaultStreamID   = "ling-echo"
+	DefaultCodec      = "pcmu"
+	WebRTCOffer       = "offer"
+	WebRTCAnswer      = "answer"
+	WebRTCCandidate   = "candidate"
+)
+
+const (
+	CodecPCMU = "pcmu"
+	CodecPCMA = "pcma"
+	CodecG722 = "g722"
+	CodecOPUS = "opus"
+	CodecG711 = "g711"
+	// 视频编解码器
+	CodecH264 = "h264"
+	CodecVP8  = "vp8"
+	CodecVP9  = "vp9"
+	CodecAV1  = "av1"
+)
+
 // Default Value: 1024
 const ENV_CONFIG_CACHE_SIZE = "CONFIG_CACHE_SIZE"
 
@@ -53,17 +77,6 @@ const KEY_SEARCH_ENABLED = "SEARCH_ENABLED"
 const KEY_SEARCH_PATH = "SEARCH_PATH"
 const KEY_SEARCH_BATCH_SIZE = "SEARCH_BATCH_SIZE"
 const KEY_SEARCH_INDEX_SCHEDULE = "SEARCH_INDEX_SCHEDULE"
-
-// Voice clone configuration keys
-const KEY_VOICE_CLONE_XUNFEI_CONFIG = "VOICE_CLONE_XUNFEI_CONFIG"
-const KEY_VOICE_CLONE_VOLCENGINE_CONFIG = "VOICE_CLONE_VOLCENGINE_CONFIG"
-
-// OTA and device configuration keys
-const KEY_SERVER_WEBSOCKET = "server.websocket"
-const KEY_SERVER_MQTT_GATEWAY = "server.mqtt_gateway"
-const KEY_SERVER_OTA = "server.ota"
-const KEY_SERVER_MQTT_SIGNATURE_KEY = "server.mqtt_signature_key"
-const KEY_SERVER_FRONTED_URL = "server.fronted_url"
 
 const ENV_STATIC_PREFIX = "STATIC_PREFIX"
 const ENV_STATIC_ROOT = "STATIC_ROOT"
