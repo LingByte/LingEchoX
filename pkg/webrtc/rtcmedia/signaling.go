@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/LingEchoX/pkg/constants"
+	"github.com/LingByte/LingEchoX/pkg/logger"
 	"github.com/pion/webrtc/v3"
 	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
 )
 
 // Signaling 信令处理器
@@ -30,7 +31,7 @@ func NewSignaling(conn *Connection) *Signaling {
 // 1. JSON 格式的 SessionDescription: {"type":"offer","sdp":"v=0\r\n..."}
 // 2. 纯 SDP 字符串: "v=0\r\n..."
 func (s *Signaling) SetRemoteDescription(sdp string) error {
-	fmt.Printf("[WebRTC] SetRemoteDescription called, OnTrack should fire if SDP contains media tracks\n")
+	logger.Info("[WebRTC] SetRemoteDescription called, OnTrack should fire if SDP contains media tracks")
 
 	var sessionDescription webrtc.SessionDescription
 
@@ -38,7 +39,7 @@ func (s *Signaling) SetRemoteDescription(sdp string) error {
 	err := json.Unmarshal([]byte(sdp), &sessionDescription)
 	if err != nil {
 		// 如果 JSON 解析失败，假设是纯 SDP 字符串
-		fmt.Printf("[WebRTC] SDP is not JSON format, treating as plain SDP string\n")
+		logger.Info("[WebRTC] SDP is not JSON format, treating as plain SDP string")
 
 		// 根据当前信令状态确定 SDP 类型
 		sdpType := s.determineSdpType(sdp)
@@ -47,7 +48,7 @@ func (s *Signaling) SetRemoteDescription(sdp string) error {
 			Type: sdpType,
 			SDP:  sdp,
 		}
-		fmt.Printf("[WebRTC] Determined SDP type: %s\n", sdpType.String())
+		logger.Info("[WebRTC] Determined SDP type: %s", zap.String("sdpType", sdpType.String()))
 	}
 
 	// 验证和记录SDP信息
@@ -59,7 +60,7 @@ func (s *Signaling) SetRemoteDescription(sdp string) error {
 		return fmt.Errorf("failed to set remote description: %w", err)
 	}
 
-	fmt.Printf("[WebRTC] SetRemoteDescription completed\n")
+	logger.Info("[WebRTC] SetRemoteDescription completed")
 	return nil
 }
 
@@ -91,9 +92,9 @@ func (s *Signaling) validateAndLogSDP(desc webrtc.SessionDescription) {
 
 	// 检查 SDP 中是否包含 "m=audio"（音频媒体行）
 	if strings.Contains(desc.SDP, "m=audio") {
-		fmt.Printf("[WebRTC] ✓ SDP contains audio media line (m=audio), OnTrack should fire\n")
+		logger.Info("[WebRTC] ✓ SDP contains audio media line (m=audio), OnTrack should fire")
 	} else {
-		fmt.Printf("[WebRTC] ✗ WARNING: SDP does NOT contain audio media line, OnTrack will NOT fire\n")
+		logger.Info("[WebRTC] ✗ WARNING: SDP does NOT contain audio media line, OnTrack will NOT fire")
 	}
 
 	// 打印 SDP 的前 300 个字符用于调试
@@ -101,7 +102,7 @@ func (s *Signaling) validateAndLogSDP(desc webrtc.SessionDescription) {
 	if len(sdpPreview) > 300 {
 		sdpPreview = sdpPreview[:300] + "..."
 	}
-	fmt.Printf("[WebRTC] SDP preview: %s\n", sdpPreview)
+	logger.Info("[WebRTC] SDP preview: ", zap.String("sdpPreview", sdpPreview))
 }
 
 // CreateOffer 创建Offer
@@ -109,14 +110,14 @@ func (s *Signaling) CreateOffer() (string, []string, error) {
 	// 创建 offer
 	offerSDP, err := s.connection.CreateOffer(nil)
 	if err != nil {
-		logrus.WithError(err).Error("Failed to create offer")
+		logger.Error("[WebRTC] Failed to create offer", zap.Error(err))
 		return "", nil, err
 	}
 
 	// 设置本地描述
 	err = s.connection.SetLocalDescription(offerSDP)
 	if err != nil {
-		logrus.WithError(err).Error("Failed to set local description")
+		logger.Error("[WebRTC] Failed to set local description", zap.Error(err))
 		return "", nil, err
 	}
 
@@ -211,7 +212,6 @@ func (s *Signaling) waitForICEGathering() error {
 		case <-ticker.C:
 			candidates := s.connection.GetCandidates()
 			if len(candidates) > 0 {
-				// 等待一小段时间确保收集完成
 				time.Sleep(200 * time.Millisecond)
 				return nil
 			}
@@ -225,11 +225,10 @@ func (s *Signaling) logOfferGenerated(offer string, candidateCount int) {
 	if len(offer) > 50 {
 		offerPreview = offer[:50] + "..."
 	}
-
-	logrus.WithFields(logrus.Fields{
-		constants.WebRTCOffer:     offerPreview,
-		constants.WebRTCCandidate: candidateCount,
-	}).Info("Offer generated")
+	logger.Info("[WebRTC] Offer generated",
+		zap.String("offer", offerPreview),
+		zap.Int("candidateCount", candidateCount),
+	)
 }
 
 // logAnswerGenerated 记录Answer生成日志
@@ -238,11 +237,10 @@ func (s *Signaling) logAnswerGenerated(answer string, candidateCount int) {
 	if len(answer) > 50 {
 		answerPreview = answer[:50] + "..."
 	}
-
-	logrus.WithFields(logrus.Fields{
-		constants.WebRTCAnswer:    answerPreview,
-		constants.WebRTCCandidate: candidateCount,
-	}).Info("Answer generated")
+	logger.Info("[WebRTC] Answer generated",
+		zap.String("answer", answerPreview),
+		zap.Int("candidateCount", candidateCount),
+	)
 }
 
 // GetOfferSDP 获取Offer SDP

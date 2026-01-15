@@ -11,6 +11,14 @@ const (
 	WebRTCCandidate   = "candidate"
 )
 
+// Message types for WebRTC signaling
+const (
+	MESSAGE_TYPE_INIT      = "init"
+	MESSAGE_TYPE_OFFER     = "offer"
+	MESSAGE_TYPE_ANSWER    = "answer"
+	MESSAGE_TYPE_CONNECTED = "connected"
+)
+
 const (
 	CodecPCMU = "pcmu"
 	CodecPCMA = "pcma"
@@ -78,3 +86,36 @@ const KEY_STORAGE_KIND = "STORAGE_KIND"
 
 const ENV_STATIC_PREFIX = "STATIC_PREFIX"
 const ENV_STATIC_ROOT = "STATIC_ROOT"
+
+const (
+	DEFAULT_LINGECHOX_STREAM_ID = "lingechox"
+	MaxConnectionRetries        = 50
+	ConnectionStateLogInterval  = 10
+	ConnectionRetryDelay        = 100 * time.Millisecond
+	AudioChannels               = 1
+	AudioBitDepth               = 16
+	// Audio configuration
+	TargetSampleRate = 8000 // PCMA standard sample rate
+	// Logging intervals
+	PacketLogInterval = 100
+	WarningLogLimit   = 3
+)
+
+var DefaultStunServers = []string{
+	"stun:stun.l.google.com:19302",
+	"stun:stun1.l.google.com:19302",
+	"stun:stun2.l.google.com:19302",
+	"stun:stun3.l.google.com:19302",
+	"stun:stun4.l.google.com:19302",
+	"stun:stun.cloudflare.com:3478",
+	"stun:stun.stunprotocol.org:3478",
+	"stun:stun.sipgate.net",
+	"stun:stun.ideasip.com",
+	"stun:stun.iptel.org",
+	"stun:stun.ekiga.net",
+	"stun:stun.voiparound.com",
+	"stun:stun.voipbuster.com",
+	"stun:stun.voipstunt.com",
+	"stun:stun.telnyx.com:3478",
+	"stun:stun.rixtelecom.se",
+}
