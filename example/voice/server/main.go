@@ -40,7 +40,6 @@ const (
 	targetSampleRate = 8000 // PCMA standard sample rate
 	audioChannels    = 1
 	audioBitDepth    = 16
-	bytesPerSample   = 2 // 16-bit = 2 bytes
 
 	// Logging intervals
 	packetLogInterval = 100

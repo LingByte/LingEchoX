@@ -269,3 +269,30 @@ func LoadEnv(env string) error {
 
 	return nil
 }
+
+// GetIntOrDefault 获取整数环境变量值，如果为空则返回默认值
+func GetIntOrDefault(key string, defaultValue int) int {
+	value := GetIntEnv(key)
+	if value == 0 {
+		return defaultValue
+	}
+	return int(value)
+}
+
+// GetStringOrDefault 获取环境变量值，如果为空则返回默认值
+func GetStringOrDefault(key, defaultValue string) string {
+	value := GetEnv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+// GetBoolOrDefault 获取布尔环境变量值，如果为空则返回默认值
+func GetBoolOrDefault(key string, defaultValue bool) bool {
+	value := GetEnv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return GetBoolEnv(key)
+}
