@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LingByte/LingEchoX/pkg/logger"
 	media2 "github.com/LingByte/LingEchoX/pkg/media"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
@@ -49,12 +50,9 @@ func (tm *TrackManager) setupOnTrackCallback() {
 	}
 
 	tm.pc.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		// 打印调试信息
-		fmt.Printf("[WebRTC] ===== OnTrack callback FIRED! =====\n")
-		fmt.Printf("[WebRTC] OnTrack: codec=%s, ssrc=%d, streamID=%s, kind=%s\n",
-			remoteTrack.Codec().MimeType, remoteTrack.SSRC(), remoteTrack.StreamID(), remoteTrack.Kind().String())
-
-		// 根据轨道类型保存到对应的变量
+		logger.Info("[WebRTC] OnTrack callback FIRED")
+		logger.Info(fmt.Sprintf("[WebRTC] OnTrack: codec=%s, ssrc=%d, streamID=%s, kind=%s",
+			remoteTrack.Codec().MimeType, remoteTrack.SSRC(), remoteTrack.StreamID(), remoteTrack.Kind().String()))
 		tm.mu.Lock()
 		if remoteTrack.Kind() == webrtc.RTPCodecTypeAudio {
 			tm.audioRxTrack = remoteTrack
@@ -62,21 +60,10 @@ func (tm *TrackManager) setupOnTrackCallback() {
 			tm.videoRxTrack = remoteTrack
 		}
 		tm.mu.Unlock()
-
-		// 记录日志
-		logrus.WithFields(logrus.Fields{
-			"codec":    remoteTrack.Codec().MimeType,
-			"ssrc":     remoteTrack.SSRC(),
-			"streamID": remoteTrack.StreamID(),
-			"kind":     remoteTrack.Kind().String(),
-		}).Info("Received remote track")
-
-		fmt.Printf("[WebRTC] OnTrack callback completed: %s track saved\n", remoteTrack.Kind().String())
-
-		// 调用用户自定义回调
 		if tm.onTrackFn != nil {
 			tm.onTrackFn(remoteTrack, receiver)
 		}
+		logger.Info(fmt.Sprintf("[WebRTC] OnTrack callback completed: %s track saved", remoteTrack.Kind().String()))
 	})
 }
 
