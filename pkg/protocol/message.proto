@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package protocol;
+
+option go_package = "echoflow/pkg/protocol";
+
+// Message types for control plane communication
+message ControlMessage {
+  MessageType type = 1;
+  string node_id = 2;
+  string room_id = 3;
+  oneof payload {
+    JoinRequest join_request = 4;
+    JoinResponse join_response = 5;
+    StatusUpdate status_update = 6;
+    RoleAssignment role_assignment = 7;
+    StreamAssignment stream_assignment = 8;
+    HealthCheck health_check = 9;
+    ErrorMessage error_message = 10;
+  }
+}
+
+enum MessageType {
+  JOIN_REQUEST = 0;
+  JOIN_RESPONSE = 1;
+  STATUS_UPDATE = 2;
+  ROLE_ASSIGNMENT = 3;
+  STREAM_ASSIGNMENT = 4;
+  HEALTH_CHECK = 5;
+  ERROR = 6;
+  LEAVE = 7;
+}
+
+message JoinRequest {
+  string user_id = 1;
+  string room_id = 2;
+  NodeCapabilities capabilities = 3;
+}
+
+message JoinResponse {
+  bool success = 1;
+  string node_id = 2;
+  string room_id = 3;
+  repeated string participant_ids = 4;
+  Role initial_role = 5;
+  repeated StreamInfo streams = 6;
+}
+
+message StatusUpdate {
+  NodeMetrics metrics = 1;
+  bool can_forward = 2;
+  Role current_role = 3;
+}
+
+message NodeMetrics {
+  float bandwidth_mbps = 1;
+  float cpu_usage_percent = 2;
+  float memory_usage_percent = 3;
+  int64 rtt_ms = 4;
+  float packet_loss_percent = 5;
+  int64 timestamp = 6;
+}
+
+message NodeCapabilities {
+  bool can_forward = 1;
+  int32 max_forwarding_streams = 2;
+  float min_bandwidth_mbps = 3;
+}
+
+message RoleAssignment {
+  Role role = 1;
+  string reason = 2;
+  repeated StreamInfo assigned_streams = 3;
+}
+
+enum Role {
+  RECEIVER = 0;
+  FORWARDER = 1;
+  HYBRID = 2;
+}
+
+message StreamAssignment {
+  string stream_id = 1;
+  string source_node_id = 2;
+  repeated string target_node_ids = 3;
+  StreamType stream_type = 4;
+  bool is_forwarding = 5;
+}
+
+enum StreamType {
+  AUDIO = 0;
+  VIDEO = 1;
+  AUDIO_VIDEO = 2;
+}
+
+message StreamInfo {
+  string stream_id = 1;
+  string source_node_id = 2;
+  StreamType stream_type = 3;
+  string sdp_offer = 4;
+  string sdp_answer = 5;
+}
+
+message HealthCheck {
+  bool healthy = 1;
+  string message = 2;
+}
+
+message ErrorMessage {
+  string code = 1;
+  string message = 2;
+}
+
