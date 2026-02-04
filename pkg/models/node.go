@@ -7,20 +7,24 @@ import (
 	"github.com/LingByte/LingEchoX/pkg/protocol"
 )
 
-// Node represents a client node in the system
+// Node 表示系统中的客户端节点
 type Node struct {
 	ID           string
 	UserID       string
 	RoomID       string
 	Role         protocol.Role
-	Capabilities protocol.NodeCapabilities // Node capabilities
+	Capabilities protocol.NodeCapabilities
 	Metrics      protocol.NodeMetrics
 	LastUpdate   time.Time
 	Connections  map[string]*Connection
-	mu           sync.RWMutex
+
+	// 该节点当前正在转发的流
+	ForwardingStreams []string // 流 ID 列表
+
+	mu sync.RWMutex
 }
 
-// Connection represents a WebRTC connection
+// Connection 表示 WebRTC 连接
 type Connection struct {
 	ID             string
 	PeerID         string
@@ -41,33 +45,33 @@ const (
 	ConnectionStateFailed
 )
 
-// Stream represents a media stream
+// Stream 表示媒体流
 type Stream struct {
 	ID           string
 	SourceNodeID string
 	Type         protocol.StreamType
-	Track        interface{} // *webrtc.TrackLocal or *webrtc.TrackRemote
+	Track        interface{} // *webrtc.TrackLocal 或 *webrtc.TrackRemote
 	Buffer       *StreamBuffer
 	IsForwarding bool
 	TargetNodes  []string
 	Mu           sync.RWMutex
 }
 
-// SetForwarding sets the forwarding state of the stream
+// SetForwarding 设置流的转发状态
 func (s *Stream) SetForwarding(forwarding bool) {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 	s.IsForwarding = forwarding
 }
 
-// GetForwarding gets the forwarding state of the stream
+// GetForwarding 获取流的转发状态
 func (s *Stream) GetForwarding() bool {
 	s.Mu.RLock()
 	defer s.Mu.RUnlock()
 	return s.IsForwarding
 }
 
-// GetTargetNodes gets a copy of target nodes
+// GetTargetNodes 获取目标节点的副本
 func (s *Stream) GetTargetNodes() []string {
 	s.Mu.RLock()
 	defer s.Mu.RUnlock()
@@ -76,7 +80,7 @@ func (s *Stream) GetTargetNodes() []string {
 	return nodes
 }
 
-// StreamBuffer handles buffering for stream recovery
+// StreamBuffer 处理流恢复的缓冲
 type StreamBuffer struct {
 	Packets     []*RTPPacket
 	MaxSize     int
@@ -84,14 +88,14 @@ type StreamBuffer struct {
 	mu          sync.RWMutex
 }
 
-// RTPPacket represents a buffered RTP packet
+// RTPPacket 表示缓冲的 RTP 包
 type RTPPacket struct {
 	Data      []byte
 	Timestamp time.Time
 	Sequence  uint16
 }
 
-// Room represents a communication room
+// Room 表示通信房间
 type Room struct {
 	ID        string
 	Nodes     map[string]*Node
@@ -100,19 +104,20 @@ type Room struct {
 	Mu        sync.RWMutex
 }
 
-// NewNode creates a new node instance
+// NewNode 创建新的节点实例
 func NewNode(id, userID, roomID string) *Node {
 	return &Node{
-		ID:          id,
-		UserID:      userID,
-		RoomID:      roomID,
-		Role:        protocol.RoleReceiver,
-		Connections: make(map[string]*Connection),
-		LastUpdate:  time.Now(),
+		ID:                id,
+		UserID:            userID,
+		RoomID:            roomID,
+		Role:              protocol.RoleReceiver,
+		Connections:       make(map[string]*Connection),
+		ForwardingStreams: make([]string, 0),
+		LastUpdate:        time.Now(),
 	}
 }
 
-// UpdateMetrics updates node metrics
+// UpdateMetrics 更新节点指标
 func (n *Node) UpdateMetrics(metrics protocol.NodeMetrics) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -120,7 +125,7 @@ func (n *Node) UpdateMetrics(metrics protocol.NodeMetrics) {
 	n.LastUpdate = time.Now()
 }
 
-// CanForward checks if node can forward streams
+// CanForward 检查节点是否能够转发流
 func (n *Node) CanForward() bool {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -129,7 +134,7 @@ func (n *Node) CanForward() bool {
 		return false
 	}
 
-	// Check if metrics allow forwarding
+	// 检查指标是否允许转发
 	if n.Metrics.BandwidthMbps < n.Capabilities.MinBandwidthMbps {
 		return false
 	}
@@ -145,7 +150,49 @@ func (n *Node) CanForward() bool {
 	return true
 }
 
-// NewStreamBuffer creates a new stream buffer
+// SetForwardingStreams 设置该节点正在转发的流列表
+func (n *Node) SetForwardingStreams(streamIDs []string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.ForwardingStreams = make([]string, len(streamIDs))
+	copy(n.ForwardingStreams, streamIDs)
+}
+
+// GetForwardingStreams 返回转发流列表的副本
+func (n *Node) GetForwardingStreams() []string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	streams := make([]string, len(n.ForwardingStreams))
+	copy(streams, n.ForwardingStreams)
+	return streams
+}
+
+// AddForwardingStream 添加流到转发列表
+func (n *Node) AddForwardingStream(streamID string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	// 检查是否已存在
+	for _, id := range n.ForwardingStreams {
+		if id == streamID {
+			return
+		}
+	}
+	n.ForwardingStreams = append(n.ForwardingStreams, streamID)
+}
+
+// RemoveForwardingStream 从转发列表中移除流
+func (n *Node) RemoveForwardingStream(streamID string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for i, id := range n.ForwardingStreams {
+		if id == streamID {
+			n.ForwardingStreams = append(n.ForwardingStreams[:i], n.ForwardingStreams[i+1:]...)
+			return
+		}
+	}
+}
+
+// NewStreamBuffer 创建新的流缓冲
 func NewStreamBuffer(maxSize int) *StreamBuffer {
 	return &StreamBuffer{
 		Packets:     make([]*RTPPacket, 0, maxSize),
@@ -154,13 +201,13 @@ func NewStreamBuffer(maxSize int) *StreamBuffer {
 	}
 }
 
-// AddPacket adds a packet to the buffer
+// AddPacket 添加包到缓冲区
 func (sb *StreamBuffer) AddPacket(packet *RTPPacket) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
 	if sb.CurrentSize >= sb.MaxSize {
-		// Remove oldest packet
+		// 移除最旧的包
 		sb.Packets = sb.Packets[1:]
 		sb.CurrentSize--
 	}
@@ -169,7 +216,7 @@ func (sb *StreamBuffer) AddPacket(packet *RTPPacket) {
 	sb.CurrentSize++
 }
 
-// GetPacketsSince returns packets since a given sequence number
+// GetPacketsSince 返回给定序列号之后的包
 func (sb *StreamBuffer) GetPacketsSince(seq uint16) []*RTPPacket {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
@@ -183,7 +230,7 @@ func (sb *StreamBuffer) GetPacketsSince(seq uint16) []*RTPPacket {
 	return packets
 }
 
-// NewRoom creates a new room
+// NewRoom 创建新房间
 func NewRoom(id string) *Room {
 	return &Room{
 		ID:        id,
@@ -193,21 +240,21 @@ func NewRoom(id string) *Room {
 	}
 }
 
-// AddNode adds a node to the room
+// AddNode 添加节点到房间
 func (r *Room) AddNode(node *Node) {
 	r.Mu.Lock()
 	defer r.Mu.Unlock()
 	r.Nodes[node.ID] = node
 }
 
-// RemoveNode removes a node from the room
+// RemoveNode 从房间移除节点
 func (r *Room) RemoveNode(nodeID string) {
 	r.Mu.Lock()
 	defer r.Mu.Unlock()
 	delete(r.Nodes, nodeID)
 }
 
-// GetNode retrieves a node by ID
+// GetNode 通过 ID 获取节点
 func (r *Room) GetNode(nodeID string) (*Node, bool) {
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()
@@ -215,7 +262,7 @@ func (r *Room) GetNode(nodeID string) (*Node, bool) {
 	return node, exists
 }
 
-// GetAllNodes returns all nodes in the room (thread-safe copy)
+// GetAllNodes 返回房间中所有节点（线程安全的副本）
 func (r *Room) GetAllNodes() []*Node {
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()
@@ -226,7 +273,7 @@ func (r *Room) GetAllNodes() []*Node {
 	return nodes
 }
 
-// GetAllStreams returns all streams in the room (thread-safe copy)
+// GetAllStreams 返回房间中所有流（线程安全的副本）
 func (r *Room) GetAllStreams() []*Stream {
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()

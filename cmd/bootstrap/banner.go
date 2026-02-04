@@ -382,7 +382,7 @@ func EnsureBannerFile(filename, defaultText string) error {
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		// File doesn't exist, generate it
 		if defaultText == "" {
-			defaultText = "LingStorage"
+			defaultText = "LingEchoX"
 		}
 		fmt.Printf("Banner file not found, generating %s with Doom font...\n", filename)
 		err := GenerateBannerWithDoomFont(defaultText, filename)
