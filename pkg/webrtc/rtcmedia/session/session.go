@@ -9,6 +9,7 @@ import (
 	"github.com/LingByte/LingEchoX/pkg/webrtc/constants"
 	"github.com/LingByte/LingEchoX/pkg/webrtc/rtcmedia"
 	"github.com/pion/webrtc/v3"
+	"go.uber.org/zap"
 )
 
 // StartMessageListener starts listening for WebSocket messages
@@ -186,4 +187,21 @@ func (c *Client) WaitForConnection() error {
 		time.Sleep(constants.ConnectionRetryDelay)
 	}
 	return fmt.Errorf("connection timeout after %d retries", constants.MaxConnectionRetries)
+}
+
+// StartBidirectionalAudio starts both audio sending and receiving simultaneously
+func (c *Client) StartBidirectionalAudio() error {
+	// Start audio receiver in goroutine
+	go func() {
+		if err := c.StartAudioReceiver(); err != nil {
+			c.logger.Error("audio receiver error", zap.Error(err))
+		}
+	}()
+	// Start audio sender in goroutine
+	go func() {
+		if err := c.StartAudioSender(); err != nil {
+			c.logger.Error("audio sender error", zap.Error(err))
+		}
+	}()
+	return nil
 }

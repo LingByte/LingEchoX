@@ -1,9 +1,10 @@
 package encoder
 
 import (
-	"github.com/LingByte/LingEchoX/pkg/media"
 	"strings"
 	"time"
+
+	"github.com/LingByte/LingEchoX/pkg/media"
 )
 
 const (
@@ -18,7 +19,7 @@ func init() {
 	RegisterCodec(CodecPCMU, createPCMUEncode, createPCMUDecode)
 	RegisterCodec(CodecPCMA, createPCMAEncode, createPCMADecode)
 	RegisterCodec(CodecPCM, PcmToPcm, PcmToPcm)
-	//RegisterCodec(CodecOPUS, createOPUSEncode, createOPUSDecode)
+	RegisterCodec(CodecOPUS, createOPUSEncode, createOPUSDecode)
 	RegisterCodec(CodecG722, createG722Encode, createG722Decode)
 }
 

@@ -224,7 +224,7 @@ func (wts *WebRTCTransport) SetRemoteDescription(sdp string) error {
 	return nil
 }
 
-func (wts *WebRTCTransport) CreateOffer() (offer string, candidates []string, err error) {
+func (wts *WebRTCTransport) CreateOffer() (offer string, candidates []interface{}, err error) {
 	if wts.peerConnection == nil {
 		wts.logger.Error(fmt.Sprintf("[WebRTC] CreateOffer error: peer connection is nil"))
 		return "", nil, errors.New("peer connection is nil")
@@ -253,7 +253,7 @@ func (wts *WebRTCTransport) CreateOffer() (offer string, candidates []string, er
 		return
 	}
 	for _, c := range wts.Candidates {
-		candidates = append(candidates, c.Candidate)
+		candidates = append(candidates, c)
 	}
 	localOfferSDP := wts.peerConnection.LocalDescription()
 	offer = localOfferSDP.SDP
@@ -261,7 +261,7 @@ func (wts *WebRTCTransport) CreateOffer() (offer string, candidates []string, er
 	return offer, candidates, nil
 }
 
-func (wts *WebRTCTransport) CreateAnswer(clientCandidates []string) (serverAnswer string, serverCandidates []string, err error) {
+func (wts *WebRTCTransport) CreateAnswer(clientCandidates []string) (serverAnswer string, serverCandidates []interface{}, err error) {
 	if wts.peerConnection == nil {
 		wts.logger.Error(fmt.Sprintf("[WebRTC] CreateAnswer error: peer connection is nil"))
 		return "", nil, errors.New("peer connection is nil")
@@ -296,7 +296,7 @@ func (wts *WebRTCTransport) CreateAnswer(clientCandidates []string) (serverAnswe
 		}
 	}
 	for _, c := range wts.Candidates {
-		serverCandidates = append(serverCandidates, c.Candidate)
+		serverCandidates = append(serverCandidates, c)
 	}
 	localSDP := wts.peerConnection.LocalDescription()
 	serverAnswer = localSDP.SDP

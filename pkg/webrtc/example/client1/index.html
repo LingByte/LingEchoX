@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Audio Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .status {
+            background: #f5f5f5;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .status.connected {
+            border-left-color: #4caf50;
+            background: #f1f8f4;
+            color: #2e7d32;
+        }
+
+        .status.error {
+            border-left-color: #f44336;
+            background: #fef5f5;
+            color: #c62828;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+            grid-column: 1 / -1;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #efefef;
+            border-color: #bbb;
+        }
+
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #da190b;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(244, 67, 54, 0.4);
+        }
+
+        .btn-success {
+            background: #4caf50;
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #388e3c;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4);
+        }
+
+        .info-section {
+            background: #f9f9f9;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+            font-size: 13px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .info-section h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .stat-item {
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #eee;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #667eea;
+            margin-top: 5px;
+        }
+
+        .log {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
+            line-height: 1.4;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+        }
+
+        .log-entry.error {
+            color: #ff6b6b;
+        }
+
+        .log-entry.success {
+            color: #51cf66;
+        }
+
+        .log-entry.info {
+            color: #74c0fc;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ WebRTC Audio</h1>
+
+        <div class="status" id="status">
+            <strong>Status:</strong> <span id="statusText">Disconnected</span>
+        </div>
+
+        <div class="controls">
+            <button class="btn-primary" id="connectBtn" onclick="connect()">Connect</button>
+            <button class="btn-secondary" id="micBtn" onclick="toggleMicrophone()" disabled>
+                🎤 Microphone: OFF
+            </button>
+            <button class="btn-secondary" id="speakerBtn" onclick="toggleSpeaker()" disabled>
+                🔊 Speaker: ON
+            </button>
+            <button class="btn-danger" id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+        </div>
+
+        <div class="info-section">
+            <h3>📊 Statistics</h3>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-label">Sent Packets</div>
+                    <div class="stat-value" id="sentPackets">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Received Packets</div>
+                    <div class="stat-value" id="receivedPackets">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        // Configuration
+        const SERVER_URL = 'ws://localhost:8080/websocket';
+        const SAMPLE_RATE = 8000;
+        const CHANNELS = 1;
+        const FRAME_DURATION_MS = 20;
+        const BYTES_PER_FRAME = 160;
+
+        // State
+        let state = {
+            ws: null,
+            peerConnection: null,
+            sessionId: null,
+            localStream: null,
+            audioContext: null,
+            txTrack: null,
+            rxTrack: null,
+            microphoneEnabled: false,
+            speakerEnabled: true,
+            sentPackets: 0,
+            receivedPackets: 0,
+            initialized: false
+        };
+
+        // Logging
+        function log(message, type = 'info') {
+            const logEl = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // Update status
+        function updateStatus(text, isConnected = false) {
+            const statusEl = document.getElementById('status');
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = text;
+            statusEl.classList.toggle('connected', isConnected);
+            statusEl.classList.toggle('error', !isConnected && text.includes('Error'));
+        }
+
+        // Update UI buttons
+        function updateUI() {
+            const connected = state.peerConnection && state.peerConnection.connectionState === 'connected';
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+            document.getElementById('micBtn').disabled = !connected;
+            document.getElementById('speakerBtn').disabled = !connected;
+        }
+
+        // Connect to server
+        function connect() {
+            try {
+                log('Connecting to server...', 'info');
+                
+                state.ws = new WebSocket(SERVER_URL);
+                state.ws.onopen = onWebSocketOpen;
+                state.ws.onmessage = onWebSocketMessage;
+                state.ws.onerror = (error) => {
+                    log(`WebSocket error: ${error}`, 'error');
+                    updateStatus('Connection Error', false);
+                };
+                state.ws.onclose = () => {
+                    log('WebSocket closed', 'info');
+                    updateStatus('Disconnected', false);
+                    updateUI();
+                };
+            } catch (error) {
+                log(`Connection error: ${error.message}`, 'error');
+                updateStatus('Connection Error', false);
+            }
+        }
+
+        // WebSocket open
+        function onWebSocketOpen() {
+            log('WebSocket connected', 'success');
+        }
+
+        // WebSocket message handler
+        async function onWebSocketMessage(event) {
+            try {
+                const message = JSON.parse(event.data);
+                
+                switch (message.type) {
+                    case 'init':
+                        state.sessionId = message.session_id || message.sessionID || message.sessionId;
+                        log(`Session ID: ${state.sessionId}`, 'success');
+                        
+                        // Now initialize peer connection after getting session ID
+                        if (!state.initialized) {
+                            await initializePeerConnection();
+                            state.initialized = true;
+                        }
+                        break;
+
+                    case 'answer':
+                        log('Received answer from server', 'success');
+                        const answerData = message.data;
+                        const answer = new RTCSessionDescription({
+                            type: 'answer',
+                            sdp: answerData.sdp
+                        });
+                        await state.peerConnection.setRemoteDescription(answer);
+
+                        // Add ICE candidates
+                        if (answerData.candidates) {
+                            for (const candidateData of answerData.candidates) {
+                                try {
+                                    let candidateObj;
+                                    if (typeof candidateData === 'string') {
+                                        candidateObj = {
+                                            candidate: candidateData,
+                                            sdpMLineIndex: 0,
+                                            sdpMid: 'audio'
+                                        };
+                                    } else {
+                                        candidateObj = {
+                                            candidate: candidateData.Candidate || candidateData.candidate,
+                                            sdpMLineIndex: candidateData.SDPMLineIndex !== undefined ? candidateData.SDPMLineIndex : 0,
+                                            sdpMid: candidateData.SDPMid || 'audio'
+                                        };
+                                    }
+                                    
+                                    const candidate = new RTCIceCandidate(candidateObj);
+                                    await state.peerConnection.addIceCandidate(candidate);
+                                } catch (e) {
+                                    // Silently ignore invalid candidates
+                                }
+                            }
+                        }
+
+                        // Send connected message to server
+                        state.ws.send(JSON.stringify({
+                            type: 'connected',
+                            sessionId: state.sessionId,
+                            data: {}
+                        }));
+                        log('Sent connected message to server', 'success');
+                        break;
+
+                    case 'connected':
+                        log('Server confirmed connection', 'success');
+                        break;
+
+                    default:
+                        log(`Unknown message type: ${message.type}`, 'info');
+                }
+            } catch (error) {
+                log(`Message error: ${error.message}`, 'error');
+            }
+        }
+
+        // Initialize peer connection
+        async function initializePeerConnection() {
+            try {
+                // Initialize audio context
+                if (!state.audioContext) {
+                    state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                // Create peer connection
+                const config = {
+                    iceServers: [
+                        { urls: ['stun:stun.l.google.com:19302'] },
+                        { urls: ['stun:stun1.l.google.com:19302'] }
+                    ]
+                };
+                state.peerConnection = new RTCPeerConnection(config);
+
+                // Handle connection state changes
+                state.peerConnection.onconnectionstatechange = () => {
+                    const state_str = state.peerConnection.connectionState;
+                    log(`Connection state: ${state_str}`, 'info');
+                    if (state_str === 'connected') {
+                        updateStatus('Connected', true);
+                        updateUI();
+                    } else if (state_str === 'failed' || state_str === 'disconnected') {
+                        updateStatus('Disconnected', false);
+                        updateUI();
+                    }
+                };
+
+                // Handle remote track
+                state.peerConnection.ontrack = (event) => {
+                    log(`Received remote track: ${event.track.kind}`, 'success');
+                    state.rxTrack = event.track;
+                    playRemoteAudio(event.streams[0]);
+                };
+
+                // Get microphone
+                state.localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: false
+                    } 
+                });
+                log('Microphone access granted', 'success');
+
+                // Add local stream to peer connection
+                for (const track of state.localStream.getTracks()) {
+                    state.peerConnection.addTrack(track, state.localStream);
+                }
+
+                // Create offer
+                const offer = await state.peerConnection.createOffer();
+                await state.peerConnection.setLocalDescription(offer);
+
+                // Wait for ICE gathering
+                await new Promise(resolve => {
+                    const checkGathering = () => {
+                        if (state.peerConnection.iceGatheringState === 'complete') {
+                            resolve();
+                        } else {
+                            setTimeout(checkGathering, 100);
+                        }
+                    };
+                    checkGathering();
+                });
+
+                // Collect candidates
+                const candidates = [];
+                const onIceCandidate = (event) => {
+                    if (event.candidate) {
+                        candidates.push({
+                            candidate: event.candidate.candidate,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            sdpMid: event.candidate.sdpMid
+                        });
+                    }
+                };
+                state.peerConnection.onicecandidate = onIceCandidate;
+
+                // Send offer
+                state.ws.send(JSON.stringify({
+                    type: 'offer',
+                    data: {
+                        sdp: state.peerConnection.localDescription.sdp,
+                        candidates: candidates
+                    }
+                }));
+                log('Offer sent to server', 'success');
+
+            } catch (error) {
+                log(`Initialization error: ${error.message}`, 'error');
+                updateStatus('Initialization Error', false);
+            }
+        }
+
+        // Play remote audio
+        function playRemoteAudio(stream) {
+            const audioElement = document.createElement('audio');
+            audioElement.srcObject = stream;
+            audioElement.autoplay = true;
+            audioElement.playsinline = true;
+            document.body.appendChild(audioElement);
+            log('Playing remote audio', 'success');
+        }
+
+        // Toggle microphone
+        function toggleMicrophone() {
+            if (!state.localStream) return;
+
+            state.microphoneEnabled = !state.microphoneEnabled;
+            for (const track of state.localStream.getAudioTracks()) {
+                track.enabled = state.microphoneEnabled;
+            }
+
+            const btn = document.getElementById('micBtn');
+            btn.textContent = `🎤 Microphone: ${state.microphoneEnabled ? 'ON' : 'OFF'}`;
+            btn.classList.toggle('btn-success', state.microphoneEnabled);
+            btn.classList.toggle('btn-secondary', !state.microphoneEnabled);
+            
+            log(`Microphone ${state.microphoneEnabled ? 'enabled' : 'disabled'}`, 'info');
+        }
+
+        // Toggle speaker
+        function toggleSpeaker() {
+            state.speakerEnabled = !state.speakerEnabled;
+            const btn = document.getElementById('speakerBtn');
+            btn.textContent = `🔊 Speaker: ${state.speakerEnabled ? 'ON' : 'OFF'}`;
+            btn.classList.toggle('btn-success', state.speakerEnabled);
+            btn.classList.toggle('btn-secondary', !state.speakerEnabled);
+            
+            log(`Speaker ${state.speakerEnabled ? 'enabled' : 'disabled'}`, 'info');
+        }
+
+        // Disconnect
+        function disconnect() {
+            if (state.peerConnection) {
+                state.peerConnection.close();
+                state.peerConnection = null;
+            }
+
+            if (state.localStream) {
+                for (const track of state.localStream.getTracks()) {
+                    track.stop();
+                }
+                state.localStream = null;
+            }
+
+            if (state.ws) {
+                state.ws.close();
+                state.ws = null;
+            }
+
+            state.initialized = false;
+            updateStatus('Disconnected', false);
+            updateUI();
+            log('Disconnected', 'info');
+        }
+
+        // Update stats
+        setInterval(() => {
+            document.getElementById('sentPackets').textContent = state.sentPackets;
+            document.getElementById('receivedPackets').textContent = state.receivedPackets;
+        }, 1000);
+
+        // Initialize
+        log('WebRTC Audio Client Ready', 'success');
+    </script>
+</body>
+</html>

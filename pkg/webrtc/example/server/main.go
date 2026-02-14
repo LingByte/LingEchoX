@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/LingEchoX/pkg/devices"
 	"github.com/LingByte/LingEchoX/pkg/logger"
 	media2 "github.com/LingByte/LingEchoX/pkg/media"
 	"github.com/LingByte/LingEchoX/pkg/media/encoder"
@@ -17,12 +16,10 @@ import (
 	"github.com/LingByte/LingEchoX/pkg/webrtc/rtcmedia"
 	"github.com/LingByte/LingEchoX/pkg/webrtc/rtcmedia/config"
 	"github.com/LingByte/LingEchoX/pkg/webrtc/rtcmedia/session"
-	"github.com/gen2brain/malgo"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
-	"github.com/pion/webrtc/v3/pkg/media"
+	webrtcmedia "github.com/pion/webrtc/v3/pkg/media"
 	"github.com/youpy/go-wav"
 )
 
@@ -116,13 +113,11 @@ func websocketHandler(c *gin.Context) {
 	client.SetConnection(conn)
 	client.Transport = transport
 	client.SessionID = sessionID
-
 	// Set up OnTrack callback for logging
 	transport.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		fmt.Printf("[Server] OnTrack fired: codec=%s, ssrc=%d, streamID=%s\n",
 			track.Codec().MimeType, track.SSRC(), track.StreamID())
 	})
-
 	manager.AddClient(sessionID, client)
 	defer manager.RemoveClient(sessionID)
 	client.SendInitSession(sessionID)
@@ -172,20 +167,64 @@ func startBidirectionalAudio(client *session.Client) error {
 // sendAudioToClient sends audio data to the client via WebRTC continuously
 func sendAudioToClient(client *session.Client) error {
 	fmt.Printf("[Server] Starting to send audio to client %s...\n", client.SessionID)
-
 	// Get transmit track
 	txTrack := client.Transport.GetTxTrack()
 	if txTrack == nil {
 		return fmt.Errorf("txTrack is nil")
 	}
 
-	// Load and process audio file
-	pcmaData, err := loadAndProcessAudioFile()
+	// Try to open audio file with different paths
+	var file *os.File
+	var err error
+
+	// First try the primary audio file
+	file, err = os.Open("ringing.wav")
+	if err != nil {
+		fmt.Errorf("failed to open primary audio file: %w", err)
+	}
+	defer file.Close()
+
+	// Read WAV format
+	w := wav.NewReader(file)
+	format, err := w.Format()
+	if err != nil {
+		fmt.Errorf("failed to get WAV format: %w", err)
+	}
+
+	fmt.Printf("[Server] WAV format: %dHz, %d channels, %d bits\n",
+		format.SampleRate, format.NumChannels, format.BitsPerSample)
+
+	// Read entire file
+	allPCMData, err := readWAVFile(w)
+	if err != nil {
+		fmt.Errorf("failed to read WAV file: %w", err)
+	}
+
+	fmt.Printf("[Server] Read %d bytes from WAV file\n", len(allPCMData))
+
+	// Convert to mono if needed
+	channels := int(format.NumChannels)
+	if channels > 1 {
+		allPCMData = convertToMono(allPCMData, channels, int(format.BitsPerSample))
+		channels = 1
+	}
+
+	// Resample if needed
+	if int(format.SampleRate) != targetSampleRate {
+		allPCMData, err = resampleAudio(allPCMData, int(format.SampleRate))
+	}
+
+	// Encode to PCMA
+	pcmaData, err := encoder.EncodePCMA(allPCMData)
+	if err != nil {
+		fmt.Errorf("failed to encode to PCMA: %w", err)
+	}
+
+	fmt.Printf("[Server] Encoded %d bytes PCM to %d bytes PCMA\n",
+		len(allPCMData), len(pcmaData))
 	if err != nil {
 		return fmt.Errorf("failed to load audio: %w", err)
 	}
-
-	// Send audio frames continuously (loop the audio)
 	for {
 		// Check connection state before sending
 		state := client.Transport.GetConnectionState()
@@ -208,64 +247,6 @@ func sendAudioToClient(client *session.Client) error {
 	}
 }
 
-// loadAndProcessAudioFile loads and processes the audio file
-func loadAndProcessAudioFile() ([]byte, error) {
-	// Try to open audio file with different paths
-	var file *os.File
-	var err error
-
-	// First try the primary audio file
-	file, err = os.Open("ringing.wav")
-	if err != nil {
-		return nil, fmt.Errorf("failed to open primary audio file: %w", err)
-	}
-	defer file.Close()
-
-	// Read WAV format
-	w := wav.NewReader(file)
-	format, err := w.Format()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get WAV format: %w", err)
-	}
-
-	fmt.Printf("[Server] WAV format: %dHz, %d channels, %d bits\n",
-		format.SampleRate, format.NumChannels, format.BitsPerSample)
-
-	// Read entire file
-	allPCMData, err := readWAVFile(w)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read WAV file: %w", err)
-	}
-
-	fmt.Printf("[Server] Read %d bytes from WAV file\n", len(allPCMData))
-
-	// Convert to mono if needed
-	channels := int(format.NumChannels)
-	if channels > 1 {
-		allPCMData = convertToMono(allPCMData, channels, int(format.BitsPerSample))
-		channels = 1
-	}
-
-	// Resample if needed
-	if int(format.SampleRate) != targetSampleRate {
-		allPCMData, err = resampleAudio(allPCMData, int(format.SampleRate))
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Encode to PCMA
-	pcmaData, err := encoder.EncodePCMA(allPCMData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode to PCMA: %w", err)
-	}
-
-	fmt.Printf("[Server] Encoded %d bytes PCM to %d bytes PCMA\n",
-		len(allPCMData), len(pcmaData))
-
-	return pcmaData, nil
-}
-
 // sendAudioFrames sends audio frames with precise timing
 func sendAudioFrames(txTrack *webrtc.TrackLocalStaticSample, pcmaData []byte) error {
 	frameDuration := time.Duration(frameDurationMs) * time.Millisecond
@@ -284,7 +265,7 @@ func sendAudioFrames(txTrack *webrtc.TrackLocalStaticSample, pcmaData []byte) er
 			time.Sleep(expectedTime.Sub(now))
 		}
 
-		sample := media.Sample{
+		sample := webrtcmedia.Sample{
 			Data:     pcmaData[i:end],
 			Duration: frameDuration,
 		}
@@ -386,7 +367,7 @@ func waitForConnection(transport *rtcmedia.WebRTCTransport) error {
 	return fmt.Errorf("connection timeout after %d retries", maxConnectionRetries)
 }
 
-// receiveAudioFromClient receives and plays audio from the client continuously
+// receiveAudioFromClient receives audio from the client and saves to file
 func receiveAudioFromClient(client *session.Client) error {
 	fmt.Printf("[Server] Starting to receive audio from client %s...\n", client.SessionID)
 
@@ -404,16 +385,49 @@ func receiveAudioFromClient(client *session.Client) error {
 		return fmt.Errorf("rxTrack not available after %d retries", maxConnectionRetries)
 	}
 
-	// Setup audio playback
-	streamPlayer, decodeFunc, err := setupAudioPlayback()
-	if err != nil {
-		return fmt.Errorf("failed to setup audio playback: %w", err)
-	}
-	defer streamPlayer.Close()
-
+	// Create decoder based on actual received codec
 	codec := rxTrack.Codec()
 	fmt.Printf("[Server] Receiving audio track: %s, %dHz from client %s\n",
 		codec.MimeType, codec.ClockRate, client.SessionID)
+
+	// Determine source codec from MIME type
+	var sourceCodec string
+	if codec.MimeType == "audio/opus" {
+		sourceCodec = "opus"
+	} else if codec.MimeType == "audio/PCMA" || codec.MimeType == "audio/pcma" {
+		sourceCodec = "pcma"
+	} else if codec.MimeType == "audio/PCMU" || codec.MimeType == "audio/pcmu" {
+		sourceCodec = "pcmu"
+	} else {
+		sourceCodec = "pcma" // default
+	}
+
+	decodeFunc, err := encoder.CreateDecode(
+		media2.CodecConfig{
+			Codec:         sourceCodec,
+			SampleRate:    int(codec.ClockRate),
+			Channels:      audioChannels,
+			BitDepth:      8,
+			FrameDuration: "20ms",
+		},
+		media2.CodecConfig{
+			Codec:         "pcm",
+			SampleRate:    int(codec.ClockRate),
+			Channels:      audioChannels,
+			BitDepth:      audioBitDepth,
+			FrameDuration: "20ms",
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create decoder: %w", err)
+	}
+
+	// Create output file for received audio
+	audioFile, err := os.Create("server_received_audio.pcm")
+	if err != nil {
+		return fmt.Errorf("failed to create audio file: %w", err)
+	}
+	defer audioFile.Close()
 
 	packetCount := 0
 
@@ -427,129 +441,34 @@ func receiveAudioFromClient(client *session.Client) error {
 			continue
 		}
 
-		if err := processAudioPacket(packet, decodeFunc, streamPlayer, packetCount); err != nil {
-			// Continue processing even if one packet fails
-			continue
+		// Decode and save to file
+		payload := packet.Payload
+		if len(payload) > 0 {
+			audioPacket := &media2.AudioPacket{Payload: payload}
+			decodedPackets, err := decodeFunc(audioPacket)
+			if err != nil {
+				if packetCount%packetLogInterval == 0 {
+					fmt.Printf("[Server] Error decoding frame %d: %v\n", packetCount, err)
+				}
+				continue
+			}
+
+			// Write decoded PCM to file
+			for _, pkt := range decodedPackets {
+				if af, ok := pkt.(*media2.AudioPacket); ok && len(af.Payload) > 0 {
+					if _, err := audioFile.Write(af.Payload); err != nil {
+						fmt.Printf("[Server] Error writing to audio file: %v\n", err)
+					}
+				}
+			}
 		}
 
 		packetCount++
 		if packetCount%packetLogInterval == 0 {
-			fmt.Printf("[Server] Received and played %d RTP packets from client %s\n",
+			fmt.Printf("[Server] Received and saved %d RTP packets from client %s\n",
 				packetCount, client.SessionID)
 		}
 	}
-}
-
-// setupAudioPlayback sets up audio playback components
-func setupAudioPlayback() (*devices.StreamAudioPlayer, media2.EncoderFunc, error) {
-	// Create stream player
-	streamPlayer, err := devices.NewStreamAudioPlayer(
-		audioChannels,
-		targetSampleRate,
-		malgo.FormatS16,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create stream player: %w", err)
-	}
-
-	// Start playback
-	if err := streamPlayer.Play(); err != nil {
-		streamPlayer.Close()
-		return nil, nil, fmt.Errorf("failed to start playback: %w", err)
-	}
-
-	fmt.Printf("[Server] Audio playback started: %dHz, %d channel(s)\n",
-		targetSampleRate, audioChannels)
-
-	// Create PCMA decoder
-	decodeFunc, err := encoder.CreateDecode(
-		media2.CodecConfig{
-			Codec:         "pcma",
-			SampleRate:    targetSampleRate,
-			Channels:      audioChannels,
-			BitDepth:      8,
-			FrameDuration: "20ms",
-		},
-		media2.CodecConfig{
-			Codec:         "pcm",
-			SampleRate:    targetSampleRate,
-			Channels:      audioChannels,
-			BitDepth:      audioBitDepth,
-			FrameDuration: "20ms",
-		},
-	)
-	if err != nil {
-		streamPlayer.Close()
-		return nil, nil, fmt.Errorf("failed to create decoder: %w", err)
-	}
-
-	return streamPlayer, decodeFunc, nil
-}
-
-// processAudioPacket processes a single RTP audio packet
-func processAudioPacket(
-	packet *rtp.Packet,
-	decodeFunc media2.EncoderFunc,
-	streamPlayer *devices.StreamAudioPlayer,
-	packetCount int,
-) error {
-	payload := packet.Payload
-	if len(payload) == 0 {
-		return nil
-	}
-
-	// Decode PCMA to PCM
-	audioPacket := &media2.AudioPacket{Payload: payload}
-	decodedPackets, err := decodeFunc(audioPacket)
-	if err != nil {
-		if packetCount%packetLogInterval == 0 {
-			fmt.Printf("[Server] Error decoding frame %d: %v\n", packetCount, err)
-		}
-		return err
-	}
-
-	// Collect all decoded PCM data and write at once to reduce discontinuity
-	allPCMData := collectPCMData(decodedPackets, packetCount)
-	if len(allPCMData) > 0 {
-		if err := streamPlayer.Write(allPCMData); err != nil {
-			// Buffer full is not critical, only log other errors
-			if packetCount%packetLogInterval == 0 && err.Error() != "音频缓冲区已满" {
-				fmt.Printf("[Server] Error writing to player: %v\n", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// collectPCMData collects and validates PCM data from decoded packets
-func collectPCMData(decodedPackets []media2.MediaPacket, packetCount int) []byte {
-	var allPCMData []byte
-
-	for _, packet := range decodedPackets {
-		af, ok := packet.(*media2.AudioPacket)
-		if !ok {
-			continue
-		}
-
-		// Skip empty frames
-		if len(af.Payload) == 0 {
-			continue
-		}
-
-		// Validate PCM data (should be 16-bit, so length must be even)
-		if len(af.Payload)%2 != 0 {
-			if packetCount <= warningLogLimit {
-				fmt.Printf("[Server] Warning: Odd PCM length at packet %d: %d bytes\n",
-					packetCount, len(af.Payload))
-			}
-			continue
-		}
-
-		allPCMData = append(allPCMData, af.Payload...)
-	}
-
-	return allPCMData
 }
 
 func main() {
