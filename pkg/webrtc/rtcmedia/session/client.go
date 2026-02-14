@@ -2,10 +2,8 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"sync"
 	"time"
@@ -25,16 +23,9 @@ import (
 )
 
 const (
-	// Connection retry configuration
-	maxConnectionRetries       = 100
-	connectionRetryDelay       = 100 * time.Millisecond
-	connectionStateLogInterval = 10
-	// Logging intervals
 	packetLogInterval = 100
 	warningLogLimit   = 3
 
-	// Audio file configuration
-	clientAudioFile = "ringring.wav"
 	// Frame configuration
 	frameDurationMs = 20
 	bytesPerFrame   = 160 // 20ms * 8000Hz = 160 samples = 160 bytes (PCMA is 1 byte per sample)
@@ -44,25 +35,16 @@ const (
 	audioBitDepth    = 16
 )
 
-// AudioSource represents different audio input sources
-type AudioSource int
-
-const (
-	AudioSourceFile AudioSource = iota
-	AudioSourceMicrophone
-	AudioSourceMixed
-)
-
 // Client represents a WebRTC client connection
 type Client struct {
-	Conn             *websocket.Conn
-	Transport        *rtcmedia.WebRTCTransport
-	SessionID        string
-	AudioReceived    bool // Track if we've started receiving audio
+	conn             *websocket.Conn           // client websocket connection
+	Transport        *rtcmedia.WebRTCTransport // webrtc transport
+	SessionID        string                    // sessionID
+	AudioReceived    bool                      // Track if we've started receiving audio
 	Mu               sync.Mutex
 	Interrupt        chan os.Signal
 	Done             chan struct{}
-	Logger           *zap.Logger
+	logger           *zap.Logger
 	OnConnected      func(client *Client, msg rtcmedia.SignalMessage)
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -78,252 +60,17 @@ type Client struct {
 func NewClient(logger *zap.Logger) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
-		Logger:      logger,
+		logger:      logger,
 		Done:        make(chan struct{}),
 		ctx:         ctx,
 		cancel:      cancel,
 		audioSource: AudioSourceFile,
-		audioFile:   clientAudioFile,
+		audioFile:   constants.ClientAudioFile,
 	}
 }
 
-// SetAudioSource sets the audio input source
-func (c *Client) SetAudioSource(source AudioSource, audioFile string) {
-	c.Mu.Lock()
-	defer c.Mu.Unlock()
-	c.audioSource = source
-	if audioFile != "" {
-		c.audioFile = audioFile
-	}
-}
-
-func (c *Client) SendInitSession(sessionID string) {
-	// Send session ID to client
-	initMsg := rtcmedia.SignalMessage{
-		Type:      constants.MESSAGE_INIT,
-		SessionID: sessionID,
-	}
-	if err := c.Conn.WriteJSON(initMsg); err != nil {
-		c.Logger.Error("failed to send init message",
-			zap.String("sessionID", sessionID),
-			zap.Error(err))
-	} else {
-		c.Logger.Info(fmt.Sprintf("[Client <- Server] Sent init message with session ID: %s", sessionID))
-	}
-}
-
-// InitializeSession initializes the WebSocket session and returns the session ID
-func (c *Client) InitializeSession() (string, error) {
-	_, initMsg, err := c.Conn.ReadMessage()
-	if err != nil {
-		return "", fmt.Errorf("failed to read init message: %w", err)
-	}
-	var initSignal rtcmedia.SignalMessage
-	if err := json.Unmarshal(initMsg, &initSignal); err != nil {
-		return "", fmt.Errorf("failed to unmarshal init message: %w", err)
-	}
-	if initSignal.Type != constants.MESSAGE_INIT {
-		return "", fmt.Errorf("unexpected message type: %s", initSignal.Type)
-	}
-	c.SessionID = initSignal.SessionID
-	c.Logger.Info(fmt.Sprintf("[Client <- Server] Connected with session ID: %s", c.SessionID))
-	return c.SessionID, nil
-}
-
-// CreateAndSendOffer creates a WebRTC offer and sends it to the server
-func (c *Client) CreateAndSendOffer() error {
-	c.Transport.NewPeerConnection()
-	offer, candidates, err := c.Transport.CreateOffer()
-	if err != nil {
-		return fmt.Errorf("failed to create offer: %w", err)
-	}
-	c.Logger.Info(fmt.Sprintf("Created offer with %d candidates", len(candidates)))
-	offerMsg := rtcmedia.SignalMessage{
-		Type:      constants.MESSAGE_OFFER,
-		SessionID: c.SessionID,
-		Data: map[string]interface{}{
-			"sdp":        offer,
-			"candidates": candidates,
-		},
-	}
-	offerBytes, err := json.Marshal(offerMsg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal offer: %w", err)
-	}
-
-	if err := c.Conn.WriteMessage(websocket.TextMessage, offerBytes); err != nil {
-		return fmt.Errorf("failed to send offer: %w", err)
-	}
-	c.Logger.Info("[Client -> Server] Sent offer with SDP")
-	return nil
-}
-
-func (c *Client) CreateAndSendAnswer(msg rtcmedia.SignalMessage) error {
-	offerData, ok := msg.Data.(map[string]interface{})
-	if !ok {
-		c.Logger.Error("[Server] Invalid signal message")
-		return fmt.Errorf("[Server] Invalid offer data")
-	}
-
-	offerStr, ok := offerData["sdp"].(string)
-	if !ok {
-		c.Logger.Error("[Server] Invalid offer data")
-		return fmt.Errorf("[Server] Invalid offer data")
-	}
-
-	// Set remote description
-	if err := c.Transport.SetRemoteDescription(offerStr); err != nil {
-		c.Logger.Error("[Server] Error setting remote description")
-		return err
-	}
-
-	// Extract candidates
-	candidates, ok := offerData["candidates"].([]interface{})
-	if !ok {
-		c.Logger.Error("[Server] Invalid candidates data")
-		return fmt.Errorf("[Server] Invalid candidates data")
-	}
-
-	candidateStrs := c.extractCandidates(candidates)
-	answer, serverCandidates, err := c.Transport.CreateAnswer(candidateStrs)
-	if err != nil {
-		c.Logger.Error("[Server] Error creating answer")
-		return err
-	}
-
-	// Send answer back to client
-	answerMsg := rtcmedia.SignalMessage{
-		Type:      constants.MESSAGE_ANSWER,
-		SessionID: c.SessionID,
-		Data: map[string]interface{}{
-			"sdp":        answer,
-			"candidates": serverCandidates,
-		},
-	}
-
-	if err := c.Conn.WriteJSON(answerMsg); err != nil {
-		c.Logger.Error("[Server] Error sending answer")
-		return err
-	}
-	c.Logger.Info("[Client <- Server] Sent answer with SDP")
-	return nil
-}
-
-// WaitForTrack waits for the remote audio track to be available
-func (c *Client) WaitForTrack() (*webrtc.TrackRemote, error) {
-	for i := 0; i < maxConnectionRetries; i++ {
-		rxTrack := c.Transport.GetRxTrack()
-		if rxTrack != nil {
-			return rxTrack, nil
-		}
-		time.Sleep(connectionRetryDelay)
-	}
-
-	return nil, fmt.Errorf("rxTrack not available after %d retries", maxConnectionRetries)
-}
-
-// WaitForConnection waits for the WebRTC connection to be established
-func (c *Client) WaitForConnection() error {
-	for i := 0; i < maxConnectionRetries; i++ {
-		state := c.Transport.GetConnectionState()
-		if state == webrtc.PeerConnectionStateConnected {
-			fmt.Println("[Client] WebRTC connection established")
-			return nil
-		}
-
-		if i%connectionStateLogInterval == 0 {
-			fmt.Printf("[Client] Waiting for connection... (state: %s)\n", state.String())
-		}
-
-		time.Sleep(connectionRetryDelay)
-	}
-
-	return fmt.Errorf("connection timeout after %d retries", maxConnectionRetries)
-}
-
-// StartMessageListener starts listening for WebSocket messages
-func (c *Client) StartMessageListener() {
-	for {
-		_, message, err := c.Conn.ReadMessage()
-		if err != nil {
-			log.Printf("[Client] Error reading message: %v", err)
-			return
-		}
-
-		var signal rtcmedia.SignalMessage
-		if err := json.Unmarshal(message, &signal); err != nil {
-			log.Printf("[Client] Error unmarshaling message: %v", err)
-			continue
-		}
-
-		switch signal.Type {
-		case constants.MESSAGE_OFFER:
-			if err := c.CreateAndSendAnswer(signal); err != nil {
-				log.Printf("[Client] Error creating answer: %v", err)
-			}
-		case constants.MESSAGE_ANSWER:
-			if err := c.HandleAnswerAndSendConnected(signal); err != nil {
-				log.Printf("[Client] Error handling answer: %v", err)
-			}
-		case constants.MESSAGE_CONNECTED:
-			c.OnConnected(c, signal)
-		default:
-			log.Printf("[Client] Unknown message type: %s", signal.Type)
-		}
-	}
-}
-
-// HandleAnswerAndSendConnected handles the answer message from the server
-func (c *Client) HandleAnswerAndSendConnected(msg rtcmedia.SignalMessage) error {
-	answerData, ok := msg.Data.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("invalid answer data")
-	}
-
-	// Extract answer SDP
-	answerStr, ok := answerData["sdp"].(string)
-	if !ok {
-		return fmt.Errorf("invalid answer SDP")
-	}
-
-	// Set remote description
-	if err := c.Transport.SetRemoteDescription(answerStr); err != nil {
-		return fmt.Errorf("failed to set remote description: %w", err)
-	}
-
-	// Extract and add ICE candidates
-	candidates, ok := answerData["candidates"].([]interface{})
-	if !ok {
-		return fmt.Errorf("invalid candidates data")
-	}
-
-	candidateStrs := c.extractCandidates(candidates)
-	for _, candidate := range candidateStrs {
-		if err := c.Transport.AddICECandidate(candidate); err != nil {
-			log.Printf("[Client] Error adding ICE candidate: %v", err)
-		}
-	}
-
-	connectedMsg := rtcmedia.SignalMessage{
-		Type:      constants.MESSAGE_CONNECTED,
-		SessionID: c.SessionID,
-		Data:      map[string]interface{}{},
-	}
-	err := c.Conn.WriteJSON(connectedMsg)
-	// Send connected message
-	if err != nil {
-		return fmt.Errorf("failed to send connected message: %w", err)
-	}
-
-	c.Logger.Info("[Client -> Server] Sent connected message")
-
-	// Wait for connection
-	if err := c.WaitForConnection(); err != nil {
-		return err
-	}
-
-	// Start bidirectional audio communication
-	return c.StartBidirectionalAudio()
+func (c *Client) SetConnection(conn *websocket.Conn) {
+	c.conn = conn
 }
 
 // StartBidirectionalAudio starts both audio sending and receiving simultaneously
@@ -336,14 +83,14 @@ func (c *Client) StartBidirectionalAudio() error {
 	// Start audio receiver in goroutine
 	go func() {
 		if err := c.StartAudioReceiver(); err != nil {
-			c.Logger.Error("audio receiver error", zap.Error(err))
+			c.logger.Error("audio receiver error", zap.Error(err))
 		}
 	}()
 
 	// Start audio sender in goroutine
 	go func() {
 		if err := c.StartAudioSender(); err != nil {
-			c.Logger.Error("audio sender error", zap.Error(err))
+			c.logger.Error("audio sender error", zap.Error(err))
 		}
 	}()
 
@@ -542,7 +289,7 @@ func (c *Client) sendAudioFromMicrophone(txTrack *webrtc.TrackLocalStaticSample)
 			// Encode PCM to PCMA
 			pcmaData, err := encoder.EncodePCMA(audioData)
 			if err != nil {
-				c.Logger.Error("failed to encode microphone audio", zap.Error(err))
+				c.logger.Error("failed to encode microphone audio", zap.Error(err))
 				continue
 			}
 
@@ -558,7 +305,7 @@ func (c *Client) sendAudioFromMicrophone(txTrack *webrtc.TrackLocalStaticSample)
 			}
 
 			if err := txTrack.WriteSample(sample); err != nil {
-				c.Logger.Error("failed to send microphone sample", zap.Error(err))
+				c.logger.Error("failed to send microphone sample", zap.Error(err))
 			} else {
 				frameCount++
 				if frameCount%100 == 0 {
@@ -623,7 +370,7 @@ func (c *Client) sendMixedAudio(txTrack *webrtc.TrackLocalStaticSample) error {
 			}
 
 			if err := txTrack.WriteSample(sample); err != nil {
-				c.Logger.Error("failed to send mixed audio sample", zap.Error(err))
+				c.logger.Error("failed to send mixed audio sample", zap.Error(err))
 			} else {
 				frameCount++
 				if frameCount%100 == 0 {
@@ -775,7 +522,7 @@ func (c *Client) mixAudioSources(micData []byte, fileData []byte) []byte {
 	// Encode mixed PCM back to PCMA
 	mixedPCMAData, err := encoder.EncodePCMA(mixedPCMData)
 	if err != nil {
-		c.Logger.Error("failed to encode mixed audio", zap.Error(err))
+		c.logger.Error("failed to encode mixed audio", zap.Error(err))
 		// Return silence on error
 		return make([]byte, targetSize)
 	}
@@ -1060,8 +807,8 @@ func (c *Client) Close() error {
 	}
 
 	// Close WebSocket connection
-	if c.Conn != nil {
-		return c.Conn.Close()
+	if c.conn != nil {
+		return c.conn.Close()
 	}
 
 	return nil

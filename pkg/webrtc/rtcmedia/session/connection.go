@@ -2,9 +2,12 @@ package session
 
 import (
 	"fmt"
+	"time"
 
 	media2 "github.com/LingByte/LingEchoX/pkg/media"
 	"github.com/LingByte/LingEchoX/pkg/media/encoder"
+	"github.com/LingByte/LingEchoX/pkg/webrtc/constants"
+	"github.com/pion/webrtc/v3"
 	"go.uber.org/zap"
 )
 
@@ -52,7 +55,7 @@ func (c *Client) StartAudioReceiver() error {
 	}
 
 	codec := rxTrack.Codec()
-	c.Logger.Info(fmt.Sprintf("[Client] Started receiving audio: %s, %dHz", codec.MimeType, codec.ClockRate))
+	c.logger.Info(fmt.Sprintf("[Client] Started receiving audio: %s, %dHz", codec.MimeType, codec.ClockRate))
 
 	packetCount := 0
 
@@ -68,7 +71,7 @@ func (c *Client) StartAudioReceiver() error {
 		default:
 			packet, _, err := rxTrack.ReadRTP()
 			if err != nil {
-				c.Logger.Error("error reading RTP packet", zap.Error(err))
+				c.logger.Error("error reading RTP packet", zap.Error(err))
 				continue
 			}
 
@@ -82,4 +85,16 @@ func (c *Client) StartAudioReceiver() error {
 			}
 		}
 	}
+}
+
+// WaitForTrack waits for the remote audio track to be available
+func (c *Client) WaitForTrack() (*webrtc.TrackRemote, error) {
+	for i := 0; i < constants.MaxConnectionRetries; i++ {
+		rxTrack := c.Transport.GetRxTrack()
+		if rxTrack != nil {
+			return rxTrack, nil
+		}
+		time.Sleep(constants.ConnectionRetryDelay)
+	}
+	return nil, fmt.Errorf("rxTrack not available after %d retries", constants.MaxConnectionRetries)
 }
