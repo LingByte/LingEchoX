@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	media2 "github.com/LingByte/LingEchoX/pkg/media"
+	"github.com/LingByte/LingEchoX/pkg/media"
 	"github.com/LingByte/LingEchoX/pkg/media/encoder"
 	"github.com/LingByte/LingEchoX/pkg/webrtc/constants"
 	"github.com/pion/webrtc/v3"
@@ -20,7 +20,6 @@ func (c *Client) StartAudioReceiver() error {
 	}
 	c.isReceiving = true
 	c.Mu.Unlock()
-
 	// Wait for track to be available
 	rxTrack, err := c.WaitForTrack()
 	if err != nil {
@@ -29,17 +28,10 @@ func (c *Client) StartAudioReceiver() error {
 		c.Mu.Unlock()
 		return err
 	}
-
 	// Create decoder
 	decodeFunc, err := encoder.CreateDecode(
-		media2.CodecConfig{
-			Codec:         "pcma",
-			SampleRate:    targetSampleRate,
-			Channels:      audioChannels,
-			BitDepth:      8,
-			FrameDuration: "20ms",
-		},
-		media2.CodecConfig{
+		c.Transport.Codec(),
+		media.CodecConfig{
 			Codec:         "pcm",
 			SampleRate:    targetSampleRate,
 			Channels:      audioChannels,
@@ -56,9 +48,7 @@ func (c *Client) StartAudioReceiver() error {
 
 	codec := rxTrack.Codec()
 	c.logger.Info(fmt.Sprintf("[Client] Started receiving audio: %s, %dHz", codec.MimeType, codec.ClockRate))
-
 	packetCount := 0
-
 	// Continuous audio receiving loop
 	for {
 		select {
@@ -74,11 +64,9 @@ func (c *Client) StartAudioReceiver() error {
 				c.logger.Error("error reading RTP packet", zap.Error(err))
 				continue
 			}
-
 			if err := c.ProcessAudioPacket(packet, decodeFunc, packetCount); err != nil {
 				continue
 			}
-
 			packetCount++
 			if packetCount%packetLogInterval == 0 {
 				fmt.Printf("[Client] Received and played %d RTP packets\n", packetCount)
@@ -89,12 +77,15 @@ func (c *Client) StartAudioReceiver() error {
 
 // WaitForTrack waits for the remote audio track to be available
 func (c *Client) WaitForTrack() (*webrtc.TrackRemote, error) {
-	for i := 0; i < constants.MaxConnectionRetries; i++ {
+	// Wait longer for track to be available (up to 10 seconds)
+	maxRetries := 200 // 200 * 50ms = 10 seconds
+	for i := 0; i < maxRetries; i++ {
 		rxTrack := c.Transport.GetRxTrack()
 		if rxTrack != nil {
+			fmt.Printf("[Client] Track available after %d retries\n", i)
 			return rxTrack, nil
 		}
 		time.Sleep(constants.ConnectionRetryDelay)
 	}
-	return nil, fmt.Errorf("rxTrack not available after %d retries", constants.MaxConnectionRetries)
+	return nil, fmt.Errorf("rxTrack not available after %d retries", maxRetries)
 }
