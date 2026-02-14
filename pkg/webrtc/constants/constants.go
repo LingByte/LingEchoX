@@ -27,3 +27,12 @@ const (
 	MESSAGE_ANSWER    = "answer"
 	MESSAGE_CONNECTED = "connected"
 )
+
+// ClientAudioFile Audio file configuration
+const ClientAudioFile = "ringring.wav"
+
+const (
+	ConnectionStateLogInterval = 10
+	MaxConnectionRetries       = 100
+	ConnectionRetryDelay       = 50 * time.Millisecond
+)
