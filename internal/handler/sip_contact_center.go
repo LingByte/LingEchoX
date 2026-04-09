@@ -68,15 +68,8 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 
 func (h *Handlers) listSIPUsers(c *gin.Context) {
 	page, size := parsePageSize(c)
-	var total int64
-	q := h.db.Model(&models.SIPUser{}).Where("is_deleted = ?", models.SoftDeleteStatusActive)
-	if err := q.Count(&total).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	offset := (page - 1) * size
-	var list []models.SIPUser
-	if err := q.Order("id DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+	list, total, err := models.ListSIPUsersPage(h.db, page, size)
+	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -89,8 +82,8 @@ func (h *Handlers) getSIPUser(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	var row models.SIPUser
-	if err := h.db.Where("id = ? AND is_deleted = ?", id, models.SoftDeleteStatusActive).First(&row).Error; err != nil {
+	row, err := models.GetActiveSIPUserByID(h.db, uint(id))
+	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -103,14 +96,12 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	res := h.db.Model(&models.SIPUser{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"is_deleted": models.SoftDeleteStatusDeleted,
-	})
-	if res.Error != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, res.Error)
+	rows, err := models.SoftDeleteSIPUserByID(h.db, uint(id))
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	if res.RowsAffected == 0 {
+	if rows == 0 {
 		response.Fail(c, "not found", nil)
 		return
 	}

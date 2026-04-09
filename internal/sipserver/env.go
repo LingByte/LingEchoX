@@ -1,4 +1,4 @@
-package sipcampaign
+package sipserver
 
 const (
 	EnvCampaignHTTPAddr  = "SIP_CAMPAIGN_HTTP_ADDR"  // e.g. :9082

@@ -1,4 +1,4 @@
-package sipcampaign
+package handlers
 
 import (
 	"context"
@@ -10,17 +10,18 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LingByte/SoulNexus/internal/sipserver"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"go.uber.org/zap"
 )
 
 type HTTPServer struct {
-	svc   *Service
+	svc   *sipserver.Service
 	token string
 	srv   *http.Server
 }
 
-func StartHTTPServer(addr, token string, svc *Service) (*HTTPServer, error) {
+func StartSIPCampaignHTTPServer(addr, token string, svc *sipserver.Service) (*HTTPServer, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" || svc == nil {
 		return nil, nil
@@ -88,7 +89,7 @@ func (h *HTTPServer) handleCampaigns(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	var body CreateCampaignInput
+	var body sipserver.CreateCampaignInput
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "json", http.StatusBadRequest)
 		return
@@ -175,7 +176,7 @@ func (h *HTTPServer) handleCampaignContacts(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "method", http.StatusMethodNotAllowed)
 		return
 	}
-	var contacts []ContactInput
+	var contacts []sipserver.ContactInput
 	if err := json.NewDecoder(r.Body).Decode(&contacts); err != nil {
 		http.Error(w, "json", http.StatusBadRequest)
 		return
