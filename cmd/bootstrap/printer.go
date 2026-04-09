@@ -1,23 +1,47 @@
 package bootstrap
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/LingByte/LingEchoX/pkg/config"
-	"github.com/LingByte/LingEchoX/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/config"
+	"github.com/LingByte/SoulNexus/pkg/logger"
 	"go.uber.org/zap"
 )
 
 // LogConfigInfo Print global configuration information
 func LogConfigInfo() {
 	logger.Info("system config load finished")
+	logger.Info("global config",
+		zap.String("server_name", config.GlobalConfig.Server.Name),
+		zap.String("server_desc", config.GlobalConfig.Server.Desc),
+		zap.String("server_logo", config.GlobalConfig.Server.Logo),
+		zap.String("server_url", config.GlobalConfig.Server.URL),
+		zap.String("server_terms_url", config.GlobalConfig.Server.TermsURL),
+		zap.String("mode", config.GlobalConfig.Server.Mode),
+	)
 
 	logger.Info("base config",
 		zap.Int64("machine_id", config.GlobalConfig.MachineID),
-		zap.String("db_driver", config.GlobalConfig.DBDriver),
-		zap.String("dsn", config.GlobalConfig.DSN),
+		zap.String("addr", config.GlobalConfig.Server.Addr),
+		zap.String("db_driver", config.GlobalConfig.Database.Driver),
+		zap.String("dsn", config.GlobalConfig.Database.DSN),
+		zap.String("monitor_prefix", config.GlobalConfig.Server.MonitorPrefix),
+		zap.Bool("language_enabled", config.GlobalConfig.Features.LanguageEnabled),
+		zap.String("api_secret_key", config.GlobalConfig.Auth.APISecretKey),
+	)
+
+	logger.Info("api config",
+		zap.String("api_prefix", config.GlobalConfig.Server.APIPrefix),
+		zap.String("docs_prefix", config.GlobalConfig.Server.DocsPrefix),
+		zap.String("admin_prefix", config.GlobalConfig.Server.AdminPrefix),
+		zap.String("auth_prefix", config.GlobalConfig.Server.AuthPrefix),
+		zap.String("secret_expire_days", config.GlobalConfig.Auth.SecretExpireDays),
+		zap.String("session_secret", config.GlobalConfig.Auth.SessionSecret),
 	)
 
 	logger.Info("log config",
@@ -27,15 +51,21 @@ func LogConfigInfo() {
 		zap.Int("log_max_age", config.GlobalConfig.Log.MaxAge),
 		zap.Int("log_max_backups", config.GlobalConfig.Log.MaxBackups),
 	)
+
+	logger.Info("search config",
+		zap.Bool("search_enabled", config.GlobalConfig.Features.SearchEnabled),
+		zap.String("search_path", config.GlobalConfig.Features.SearchPath),
+		zap.Int("search_batch_size", config.GlobalConfig.Features.SearchBatchSize),
+	)
+	logger.Info("backup config",
+		zap.Bool("backup_enabled", config.GlobalConfig.Features.BackupEnabled),
+		zap.String("backup_path", config.GlobalConfig.Features.BackupPath),
+		zap.String("backup_schedule", config.GlobalConfig.Features.BackupSchedule),
+	)
 }
 
-// PrintBannerFromFile Read file and print, auto-generate if file doesn't exist
-func PrintBannerFromFile(filename string, defaultText string) error {
-	// Ensure banner file exists, generate if it doesn't
-	if err := EnsureBannerFile(filename, defaultText); err != nil {
-		return fmt.Errorf("failed to ensure banner file: %w", err)
-	}
-
+// PrintBannerFromFile Read file and print
+func PrintBannerFromFile(filename string) error {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return err
@@ -53,9 +83,6 @@ func PrintBannerFromFile(filename string, defaultText string) error {
 	}
 
 	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
 		color := colors[i%len(colors)]
 		fmt.Println(color + line + "\x1b[0m")
 	}

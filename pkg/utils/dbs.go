@@ -1,12 +1,15 @@
 package utils
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"io"
 	"log"
 	"os"
 	"time"
 
-	"github.com/LingByte/LingEchoX/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )

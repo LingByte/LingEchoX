@@ -1,11 +1,12 @@
 package media
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/LingByte/LingEchoX/pkg/logger"
-	"go.uber.org/zap"
 	"io"
 	"os"
 	"reflect"
@@ -14,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/LingByte/SoulNexus/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // TransportManager manages transport connections
@@ -38,7 +42,11 @@ func (tl *TransportManager) processIncoming() {
 		if r := recover(); r != nil {
 			logger.Error("input transport processing panic", zap.String("sessionID", tl.session.GetSession().ID), zap.Any("transport", tl.transport), zap.Any("error", r), zap.String("stacktrace", string(debug.Stack())))
 		}
-		tl.incomingClosedChan <- struct{}{}
+		// Always signal termination to unblock cleanup.
+		select {
+		case tl.incomingClosedChan <- struct{}{}:
+		default:
+		}
 	}()
 
 	transport := tl.transport
@@ -102,7 +110,11 @@ func (tl *TransportManager) processOutgoing() {
 		if r := recover(); r != nil {
 			logger.Error("output transport processing panic", zap.String("sessionID", tl.session.ID), zap.Any("transport", tl.transport), zap.Any("error", r), zap.String("stacktrace", string(debug.Stack())))
 		}
-		tl.outcomingClosedChan <- struct{}{}
+		// Always signal termination to unblock cleanup.
+		select {
+		case tl.outcomingClosedChan <- struct{}{}:
+		default:
+		}
 	}()
 
 	logger.Info("output transport processing started", zap.String("sessionID", tl.session.ID), zap.Any("transport", tl.transport))
@@ -185,8 +197,14 @@ func (tl *TransportManager) cleanup() {
 	}
 
 	tl.transport.Close()
-	tl.waitForIncomingLoopStop()
-	tl.waitForOutcomingLoopStop()
+	// Only wait for the loops that actually exist for this transport manager.
+	// Inputs only run processIncoming, outputs only run processOutgoing.
+	if tl.incomingClosedChan != nil {
+		tl.waitForIncomingLoopStop()
+	}
+	if tl.outcomingClosedChan != nil {
+		tl.waitForOutcomingLoopStop()
+	}
 
 	tl.transport = nil
 
@@ -256,6 +274,13 @@ type MediaSession struct {
 	MaxSessionDuration int                `json:"maxSessionDuration"` // Set the maximum session duration in seconds.
 	EffectAudios       map[string]*[]byte `json:"-"`
 	StartAt            time.Time          `json:"startAt"`
+
+	// serveScheduled is set before the Serve goroutine is launched; shutdownCh is closed after
+	// Serve's transport cleanup so another reader (e.g. SIP transfer RTP relay) can own the UDP socket.
+	shutdownCh       chan struct{}
+	shutdownOnce     sync.Once
+	serveScheduledMu sync.Mutex
+	serveScheduled   bool
 }
 
 func NewDefaultSession() *MediaSession {
@@ -271,6 +296,7 @@ func NewDefaultSession() *MediaSession {
 		Running:            false,
 		QueueSize:          128,
 		MaxSessionDuration: 10 * 60,
+		shutdownCh:         make(chan struct{}),
 	}
 
 	// Initialize new architecture components
@@ -494,6 +520,14 @@ func (s *MediaSession) setupOutputRouter() {
 		"output-router",
 		PriorityLow,
 		func(ctx context.Context, session *MediaSession, packet MediaPacket) error {
+			// SIP AI voice: do not loop decoded uplink PCM back to the caller (no echo).
+			if ap, ok := packet.(*AudioPacket); ok && !ap.IsSynthesized {
+				if v, ok := session.Get(KeySIPSuppressUplinkEcho); ok {
+					if suppress, ok := v.(bool); ok && suppress {
+						return nil
+					}
+				}
+			}
 			// Get active output connectors
 			var activeOutputs []*TransportConnector
 			for _, connector := range session.outputConnectors {
@@ -502,16 +536,18 @@ func (s *MediaSession) setupOutputRouter() {
 				}
 			}
 
-			// Route packet to outputs
+			// Route packet to outputs. Must enqueue on each output TransportManager so
+			// processOutgoing runs the session encoder (e.g. Opus). Calling Transport.Send
+			// here would ship PCM as RTP payload with the negotiated codec PT — unreadable noise.
 			targets := session.router.Route(packet, activeOutputs)
 			for _, target := range targets {
-				if target.Transport != nil {
-					_, err := target.Transport.Send(ctx, packet)
-					if err != nil {
-						logger.Error("failed to send packet to transport",
-							zap.String("sessionID", session.ID),
-							zap.String("transportID", target.ID),
-							zap.Error(err))
+				if target.Transport == nil {
+					continue
+				}
+				for _, tl := range session.outputs {
+					if tl.transport == target.Transport {
+						tl.trySendPacket(packet)
+						break
 					}
 				}
 			}
@@ -606,8 +642,50 @@ func (s *MediaSession) IsValid() error {
 	return nil
 }
 
+// NotifyServeStarting records that Serve() is about to run. Call synchronously before starting
+// the Serve goroutine so WaitServeShutdown can block until that Serve instance has torn down.
+func (s *MediaSession) NotifyServeStarting() {
+	if s == nil {
+		return
+	}
+	s.serveScheduledMu.Lock()
+	s.serveScheduled = true
+	s.serveScheduledMu.Unlock()
+}
+
+func (s *MediaSession) markServeShutdownComplete() {
+	if s == nil || s.shutdownCh == nil {
+		return
+	}
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownCh)
+	})
+}
+
+// WaitServeShutdown blocks until Serve has finished and released transport readers/writers,
+// or until ctx ends. If Serve was never scheduled for this session, returns nil immediately.
+func (s *MediaSession) WaitServeShutdown(ctx context.Context) error {
+	if s == nil || ctx == nil {
+		return nil
+	}
+	s.serveScheduledMu.Lock()
+	sched := s.serveScheduled
+	s.serveScheduledMu.Unlock()
+	if !sched {
+		return nil
+	}
+	select {
+	case <-s.shutdownCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Serve Start the session, this will block the current goroutine
 func (s *MediaSession) Serve() error {
+	defer s.markServeShutdownComplete()
+
 	s.StartAt = time.Now()
 	s.Running = true
 
@@ -618,8 +696,9 @@ func (s *MediaSession) Serve() error {
 		}
 		s.Running = false
 		logger.Info("session stopped", zap.String("sessionID", s.ID))
-		s.cleanup()
+		// Emit End before cleanup (transports first, then EventBus) so shutdown stays ordered.
 		s.EmitState(s, End)
+		s.cleanup()
 		for idx := range s.postHoooks {
 			interceptor := s.postHoooks[idx]
 			interceptor(s)
@@ -671,11 +750,7 @@ func (s *MediaSession) Codec() CodecConfig {
 }
 
 func (s *MediaSession) cleanup() {
-	// Stop event bus
-	if s.eventBus != nil {
-		s.eventBus.Close()
-	}
-
+	// Stop transports first so input/output loops stop emitting to EventBus before we close it.
 	for idx := range s.inputs {
 		tl := s.inputs[idx]
 		tl.cleanup()
@@ -684,6 +759,10 @@ func (s *MediaSession) cleanup() {
 	for idx := range s.outputs {
 		tl := s.outputs[idx]
 		tl.cleanup()
+	}
+
+	if s.eventBus != nil {
+		s.eventBus.Close()
 	}
 }
 
@@ -715,7 +794,14 @@ func senderAsString(sender any) string {
 
 func (s *MediaSession) CauseError(sender any, err error) {
 	sender = senderAsString(sender)
-	logger.Error("cause error", zap.String("sessionID", s.ID), zap.Any("sender", sender), zap.Error(err))
+	if err != nil {
+		msg := strings.ToLower(strings.TrimSpace(err.Error()))
+		if strings.Contains(msg, "use of closed network connection") || strings.Contains(msg, "connection is closed") {
+			logger.Debug("cause error ignored (normal close)", zap.String("sessionID", s.ID), zap.Any("sender", sender), zap.Error(err))
+		} else {
+			logger.Error("cause error", zap.String("sessionID", s.ID), zap.Any("sender", sender), zap.Error(err))
+		}
+	}
 
 	// Publish error event
 	if s.eventBus != nil {
@@ -753,9 +839,9 @@ func (s *MediaSession) SendToOutput(sender any, packet MediaPacket) {
 }
 
 func (s *MediaSession) AddMetric(key string, duration time.Duration) {
-	// Metrics功能已移除
+	// Metrics functionality has been removed
 
-	// Metrics功能已移除
+	// Metrics functionality has been removed
 	if s.trace != nil {
 		data := MediaData{
 			CreatedAt: time.Now(),

@@ -1,5 +1,8 @@
 package media
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"context"
 	"errors"
@@ -32,6 +35,13 @@ type TextPacket struct {
 	StartAt        time.Time `json:"startAt"`
 }
 
+// Session value keys (sync.Map on MediaSession)
+const (
+	// KeySIPSuppressUplinkEcho: when true, output-router does not send decoded uplink
+	// microphone AudioPackets to RTP output; only synthesized (TTS) audio is sent.
+	KeySIPSuppressUplinkEcho = "sip_suppress_uplink_echo"
+)
+
 type AudioPacket struct {
 	PlayID        string `json:"id,omitempty"`
 	Sequence      int    `json:"sequence"`
@@ -43,16 +53,25 @@ type AudioPacket struct {
 	SourceText    string `json:"sourceText,omitempty"`
 }
 
-type VideoPacket struct {
-	PlayID        string `json:"id,omitempty"`
-	Sequence      int    `json:"sequence"`
-	Payload       []byte `json:"payload"`
-	IsFirstPacket bool   `json:"isFirstPacket,omitempty"`
-	IsEndPacket   bool   `json:"isEndPacket,omitempty"`
-	IsKeyFrame    bool   `json:"isKeyFrame,omitempty"`
-	Width         int    `json:"width,omitempty"`
-	Height        int    `json:"height,omitempty"`
-	Timestamp     int64  `json:"timestamp,omitempty"`
+// DTMFPacket carries one RFC 2833 / RFC 4733 telephone-event (RTP payload type typically 101).
+// Emitted by SIP RTP input when the peer sends out-of-band DTMF; not passed through audio codecs.
+type DTMFPacket struct {
+	Digit string `json:"digit"` // "0"–"9", "*", "#", "A"–"D"
+	End   bool   `json:"end"`   // RFC 2833 E (end) bit — prefer handling when true to avoid duplicate keys
+}
+
+func (d *DTMFPacket) Body() []byte {
+	if d == nil {
+		return nil
+	}
+	return []byte(d.Digit)
+}
+
+func (d *DTMFPacket) String() string {
+	if d == nil {
+		return "DTMFPacket{nil}"
+	}
+	return fmt.Sprintf("DTMFPacket{Digit:%q End:%v}", d.Digit, d.End)
 }
 
 type ClosePacket struct {
@@ -90,15 +109,6 @@ func (d *AudioPacket) Body() []byte {
 func (d *AudioPacket) String() string {
 	return fmt.Sprintf("AudioPacket{Payload: %d bytes, IsFirstPacket: %t, IsSynthesized: %t, IsSilence: %t}",
 		len(d.Payload), d.IsFirstPacket, d.IsSynthesized, d.IsSilence)
-}
-
-func (v *VideoPacket) Body() []byte {
-	return v.Payload
-}
-
-func (v *VideoPacket) String() string {
-	return fmt.Sprintf("VideoPacket{Payload: %d bytes, IsFirstPacket: %t, IsKeyFrame: %t, Size: %dx%d}",
-		len(v.Payload), v.IsFirstPacket, v.IsKeyFrame, v.Width, v.Height)
 }
 
 // State types
@@ -232,6 +242,12 @@ type CodecConfig struct {
 	BitDepth      int    `json:"bitDepth" form:"bit_depth" default:"16"`
 	FrameDuration string `json:"frameDuration" form:"frame_duration"`
 	PayloadType   uint8  `json:"payloadType" form:"payload_type"`
+	// OpusDecodeChannels: if 1 or 2, Opus inbound decode uses this many channels (from remote SDP offer),
+	// then downmixes to mono for PCM. Encoder/answer Channels stay 1.
+	OpusDecodeChannels int `json:"opusDecodeChannels,omitempty" form:"opus_decode_channels"`
+	// OpusPCMBridgeDecodeStereo: SIP two-leg PCM bridge only — SDP OPUS/48000/2 payloads use a stereo
+	// TOC; force a 2-channel libopus decoder then downmix to mono PCM. CallSession/ASR leaves this false.
+	OpusPCMBridgeDecodeStereo bool `json:"-"`
 }
 
 func DefaultCodecConfig() CodecConfig {

@@ -1,5 +1,8 @@
 package logger
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"os"
 	"path/filepath"
@@ -19,29 +22,11 @@ type LogConfig struct {
 	Daily      bool   `mapstructure:"daily"`
 }
 
-var Lg *zap.Logger
+var (
+	Lg *zap.Logger
+)
 
-func init() {
-	initDefaultLogger()
-}
-
-// initDefaultLogger 初始化默认的 logger
-func initDefaultLogger() {
-	config := zap.NewProductionConfig()
-	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-
-	logger, err := config.Build(zap.AddCaller())
-	if err != nil {
-		Lg = zap.NewNop()
-		return
-	}
-
-	Lg = logger
-	zap.ReplaceGlobals(Lg)
-}
-
-// Init init logger
+// Init 初始化logger
 func Init(cfg *LogConfig, mode string) (err error) {
 	writeSyncer := getLogWriter(cfg.Filename, cfg.MaxSize, cfg.MaxBackups, cfg.MaxAge, cfg.Daily)
 	encoder := getEncoder()
@@ -52,14 +37,17 @@ func Init(cfg *LogConfig, mode string) (err error) {
 	}
 	var core zapcore.Core
 	if mode == "dev" || mode == "development" {
+		// 进入开发模式，日志输出到终端，启用带色彩的编码器
 		consoleEncoderConfig := zap.NewDevelopmentEncoderConfig()
 		consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder // 启用色彩编码
 		consoleEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 		consoleEncoderConfig.TimeKey = "time"
 		consoleEncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
+		// 修改时间编码器，添加颜色
 		consoleEncoderConfig.EncodeTime = func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 			enc.AppendString("\x1b[90m" + t.Format("2006-01-02 15:04:05.000") + "\x1b[0m")
 		}
+		// 自定义级别编码器，使用[INFO]格式并添加颜色
 		consoleEncoderConfig.EncodeLevel = func(l zapcore.Level, enc zapcore.PrimitiveArrayEncoder) {
 			var levelColor = map[zapcore.Level]string{
 				zapcore.DebugLevel:  "\x1b[35m", // 紫色
@@ -72,14 +60,17 @@ func Init(cfg *LogConfig, mode string) (err error) {
 			}
 			color, ok := levelColor[l]
 			if !ok {
-				color = "\x1b[0m"
+				color = "\x1b[0m" // 默认颜色
 			}
 			enc.AppendString(color + "[" + l.CapitalString() + "]\x1b[0m")
 		}
+		// 修改调用者编码器，添加颜色
 		consoleEncoderConfig.EncodeCaller = func(caller zapcore.EntryCaller, enc zapcore.PrimitiveArrayEncoder) {
 			enc.AppendString("\x1b[90m" + caller.TrimmedPath() + "\x1b[0m")
 		}
 		consoleEncoder := zapcore.NewConsoleEncoder(consoleEncoderConfig)
+
+		// 为不同日志级别设置不同的颜色以增强可读性
 		highPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
 			return lvl >= zapcore.ErrorLevel
 		})
@@ -95,12 +86,13 @@ func Init(cfg *LogConfig, mode string) (err error) {
 	} else {
 		core = zapcore.NewCore(encoder, writeSyncer, l)
 	}
+	// 复习回顾：日志默认输出到app.log，如何将err日志单独在 app.err.log 记录一份
 
-	Lg = zap.New(core, zap.AddCaller())
+	Lg = zap.New(core, zap.AddCaller()) // zap.AddCaller() 添加调用栈信息
 
-	zap.ReplaceGlobals(Lg)
+	zap.ReplaceGlobals(Lg) // 替换zap包全局的logger
 
-	Info("logger initialized successfully")
+	Info("init logger success")
 	return
 }
 
@@ -116,6 +108,7 @@ func getEncoder() zapcore.Encoder {
 
 func getLogWriter(filename string, maxSize, maxBackup, maxAge int, daily bool) zapcore.WriteSyncer {
 	if daily {
+		// 按日期分割日志文件
 		ext := filepath.Ext(filename)
 		base := filename[:len(filename)-len(ext)]
 		dateStr := time.Now().Format("2006-01-02")
@@ -132,57 +125,45 @@ func getLogWriter(filename string, maxSize, maxBackup, maxAge int, daily bool) z
 	return zapcore.AddSync(lumberJackLogger)
 }
 
-// Info common info logger
+// Info 通用 info 日志方法
 func Info(msg string, fields ...zap.Field) {
-	if Lg == nil {
-		initDefaultLogger()
-	}
 	Lg.Info(msg, fields...)
 }
 
-// Warn common warn logger
+// Warn 通用 warn 日志方法
 func Warn(msg string, fields ...zap.Field) {
-	if Lg == nil {
-		initDefaultLogger()
-	}
 	Lg.Warn(msg, fields...)
 }
 
-// Error common error logger
+// Error 通用 error 日志方法
 func Error(msg string, fields ...zap.Field) {
-	if Lg == nil {
-		initDefaultLogger()
-	}
 	Lg.Error(msg, fields...)
 }
 
-// Debug common debug logger
+// Debug 通用 debug 日志方法
 func Debug(msg string, fields ...zap.Field) {
-	if Lg == nil {
-		initDefaultLogger()
-	}
 	Lg.Debug(msg, fields...)
 }
 
-// Fatal common fatal logger
+// Fatal 通用 fatal 日志方法
 func Fatal(msg string, fields ...zap.Field) {
-	if Lg == nil {
-		initDefaultLogger()
-	}
 	Lg.Fatal(msg, fields...)
 }
 
-// Panic common panic logger
+// Panic 通用 panic 日志方法
 func Panic(msg string, fields ...zap.Field) {
-	if Lg == nil {
-		initDefaultLogger()
-	}
 	Lg.Panic(msg, fields...)
 }
 
 // Sync 刷新缓冲区
 func Sync() {
-	if Lg != nil {
-		_ = Lg.Sync()
-	}
+	_ = Lg.Sync()
+}
+
+// GetDailyLogFilename 获取按日期分割的日志文件名
+func GetDailyLogFilename(baseFilename string) string {
+	ext := filepath.Ext(baseFilename)
+	base := baseFilename[:len(baseFilename)-len(ext)]
+	dateStr := time.Now().Format("2006-01-02")
+	return base + "-" + dateStr + ext
 }

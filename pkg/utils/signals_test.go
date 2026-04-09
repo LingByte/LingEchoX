@@ -1,8 +1,12 @@
 package utils
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"testing"
 
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,5 +21,6 @@ func TestSignal(t *testing.T) {
 	Sig().Emit("mock_test", "unittest")
 	assert.Equal(t, val, "unittest")
 	assert.Equal(t, 0, len(Sig().events))
-	assert.Equal(t, 1, len(Sig().sigHandlers))
+	Sig().Clear("mock_test", constants.SigUserResetPassword, constants.SigUserVerifyEmail)
+	assert.Equal(t, 0, len(Sig().sigHandlers))
 }

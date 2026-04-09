@@ -1,7 +1,10 @@
 package encoder
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
-	"github.com/LingByte/LingEchoX/pkg/media"
+	"github.com/LingByte/SoulNexus/pkg/media"
 )
 
 func createPCMADecode(src, pcm media.CodecConfig) media.EncoderFunc {
@@ -32,10 +35,10 @@ func createPCMADecode(src, pcm media.CodecConfig) media.EncoderFunc {
 }
 
 func createPCMAEncode(src, pcm media.CodecConfig) media.EncoderFunc {
-	// 使用配置的目标采样率，如果未设置则使用 PCMA 标准采样率 8000Hz
+	// Use configured target sample rate, if not set use PCMA standard sample rate 8000Hz
 	targetSampleRate := src.SampleRate
 	if targetSampleRate == 0 {
-		targetSampleRate = 8000 // PCMA 标准采样率
+		targetSampleRate = 8000 // PCMA standard sample rate
 	}
 	res := media.DefaultResampler(pcm.SampleRate, targetSampleRate)
 

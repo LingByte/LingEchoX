@@ -1,5 +1,8 @@
 package utils
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"net"
 	"testing"
@@ -122,6 +125,14 @@ func TestGetRealAddressByIP_InternalIP(t *testing.T) {
 	result = GetRealAddressByIP("127.0.0.1")
 	if result != INTERNAL_IP {
 		t.Fatalf("GetRealAddressByIP(127.0.0.1) = %q, want %q", result, INTERNAL_IP)
+	}
+}
+
+func TestGetRealAddressByIP_InvalidIP(t *testing.T) {
+	// Test with invalid IP
+	result := GetRealAddressByIP("invalid.ip.address")
+	if result == "" {
+		t.Fatalf("GetRealAddressByIP(invalid) should return UNKNOWN or error message")
 	}
 }
 
