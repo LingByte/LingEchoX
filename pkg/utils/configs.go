@@ -1,5 +1,8 @@
 package utils
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"os"
 	"reflect"
@@ -7,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/LingEchoX/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -63,6 +66,24 @@ func GetFloatEnv(key string) float64 {
 func GetIntEnv(key string) int64 {
 	v, _ := strconv.ParseInt(GetEnv(key), 10, 64)
 	return v
+}
+
+// GetFloatEnvWithDefault gets float environment variable with default value
+func GetFloatEnvWithDefault(key string, defaultValue float64) float64 {
+	v := GetFloatEnv(key)
+	if v == 0 {
+		return defaultValue
+	}
+	return v
+}
+
+// GetIntEnvWithDefault gets int environment variable with default value
+func GetIntEnvWithDefault(key string, defaultValue int) int {
+	v := GetIntEnv(key)
+	if v == 0 {
+		return defaultValue
+	}
+	return int(v)
 }
 
 func LookupEnv(key string) (value string, found bool) {
@@ -268,31 +289,4 @@ func LoadEnv(env string) error {
 	}
 
 	return nil
-}
-
-// GetIntOrDefault 获取整数环境变量值，如果为空则返回默认值
-func GetIntOrDefault(key string, defaultValue int) int {
-	value := GetIntEnv(key)
-	if value == 0 {
-		return defaultValue
-	}
-	return int(value)
-}
-
-// GetStringOrDefault 获取环境变量值，如果为空则返回默认值
-func GetStringOrDefault(key, defaultValue string) string {
-	value := GetEnv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-// GetBoolOrDefault 获取布尔环境变量值，如果为空则返回默认值
-func GetBoolOrDefault(key string, defaultValue bool) bool {
-	value := GetEnv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return GetBoolEnv(key)
 }

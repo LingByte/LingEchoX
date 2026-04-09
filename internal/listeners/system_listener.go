@@ -1,13 +1,16 @@
 package listeners
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"crypto/tls"
 	"sync"
 
-	"github.com/LingByte/LingEchoX/pkg/config"
-	"github.com/LingByte/LingEchoX/pkg/constants"
-	"github.com/LingByte/LingEchoX/pkg/logger"
-	"github.com/LingByte/LingEchoX/pkg/utils"
+	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/config"
+	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +24,7 @@ var (
 // InitSystemListeners initializes system listeners
 func InitSystemListeners() {
 	// Connect system initialization signal
-	utils.Sig().Connect(constants.SigInitSystemConfig, func(sender any, params ...any) {
+	utils.Sig().Connect(models.SigInitSystemConfig, func(sender any, params ...any) {
 		// Load SSL certificates
 		loadSSLCertificates()
 	})
@@ -31,13 +34,13 @@ func InitSystemListeners() {
 
 // loadSSLCertificates loads SSL certificates
 func loadSSLCertificates() {
-	if !config.GlobalConfig.SSLEnabled {
+	if !config.GlobalConfig.Server.SSLEnabled {
 		logger.Info("SSL is disabled, skipping SSL certificate loading")
 		return
 	}
 
-	certFile := config.GlobalConfig.SSLCertFile
-	keyFile := config.GlobalConfig.SSLKeyFile
+	certFile := config.GlobalConfig.Server.SSLCertFile
+	keyFile := config.GlobalConfig.Server.SSLKeyFile
 
 	if certFile == "" || keyFile == "" {
 		logger.Warn("SSL enabled but certificate files not configured",
@@ -75,7 +78,7 @@ func GetSSLCertificate() (tls.Certificate, error) {
 
 // IsSSLEnabled checks if SSL is enabled and certificates are loaded
 func IsSSLEnabled() bool {
-	return config.GlobalConfig.SSLEnabled && sslCertErr == nil
+	return config.GlobalConfig.Server.SSLEnabled && sslCertErr == nil
 }
 
 // GetTLSConfig gets TLS configuration

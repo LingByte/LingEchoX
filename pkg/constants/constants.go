@@ -1,39 +1,22 @@
 package constants
 
-import "time"
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
 
 const (
-	DefaultICETimeout = 10 * time.Second
-	DefaultStreamID   = "ling-echo"
-	DefaultCodec      = "pcmu"
-	WebRTCOffer       = "offer"
-	WebRTCAnswer      = "answer"
-	WebRTCCandidate   = "candidate"
-)
-
-// Message types for WebRTC signaling
-const (
-	MESSAGE_TYPE_INIT      = "init"
-	MESSAGE_TYPE_OFFER     = "offer"
-	MESSAGE_TYPE_ANSWER    = "answer"
-	MESSAGE_TYPE_CONNECTED = "connected"
-)
-
-const (
-	CodecPCMU = "pcmu"
-	CodecPCMA = "pcma"
-	CodecG722 = "g722"
-	CodecOPUS = "opus"
-	CodecG711 = "g711"
-	// 视频编解码器
-	CodecH264 = "h264"
-	CodecVP8  = "vp8"
-	CodecVP9  = "vp9"
-	CodecAV1  = "av1"
-)
-
-const (
-	SigInitSystemConfig = "system.init"
+	// sender: *LLMUsageInfo, params: ...any (additional context)
+	LLMUsage = "llm.usage"
+	// SIP module tables
+	SIP_USER_TABLE_NAME             = "sip_users"
+	SIP_CALL_TABLE_NAME             = "sip_calls"
+	SIP_CAMPAIGN_TABLE_NAME         = "sip_campaigns"
+	SIP_CAMPAIGN_CONTACT_TABLE_NAME = "sip_campaign_contacts"
+	SIP_CALL_ATTEMPT_TABLE_NAME     = "sip_call_attempts"
+	SIP_SCRIPT_RUN_TABLE_NAME       = "sip_script_runs"
+	SIP_CAMPAIGN_EVENT_TABLE_NAME   = "sip_campaign_events"
+	SIP_SCRIPT_TEMPLATE_TABLE_NAME  = "sip_script_templates"
+	// ACD: unified SIP + Web routing pool (targets + weights)
+	ACD_POOL_TARGET_TABLE_NAME = "acd_pool_targets"
 )
 
 // Default Value: 1024
@@ -84,38 +67,29 @@ const KEY_SITE_USER_ID_TYPE = "SITE_USER_ID_TYPE"
 const KEY_USER_ACTIVATED = "USER_ACTIVATED"
 const KEY_STORAGE_KIND = "STORAGE_KIND"
 
+// Search configuration keys
+const KEY_SEARCH_ENABLED = "SEARCH_ENABLED"
+const KEY_SEARCH_PATH = "SEARCH_PATH"
+const KEY_SEARCH_BATCH_SIZE = "SEARCH_BATCH_SIZE"
+const KEY_SEARCH_INDEX_SCHEDULE = "SEARCH_INDEX_SCHEDULE"
+
+// Voice clone configuration keys
+const KEY_VOICE_CLONE_XUNFEI_CONFIG = "VOICE_CLONE_XUNFEI_CONFIG"
+const KEY_VOICE_CLONE_VOLCENGINE_CONFIG = "VOICE_CLONE_VOLCENGINE_CONFIG"
+
+// Voiceprint recognition configuration keys
+const KEY_VOICEPRINT_ENABLED = "VOICEPRINT_ENABLED"
+const KEY_VOICEPRINT_CONFIG = "VOICEPRINT_CONFIG"
+
+// OTA and device configuration keys
+const KEY_SERVER_WEBSOCKET = "server.websocket"
+const KEY_SERVER_MQTT_GATEWAY = "server.mqtt_gateway"
+const KEY_SERVER_MQTT_SIGNATURE_KEY = "server.mqtt_signature_key"
+const KEY_SERVER_FRONTED_URL = "server.fronted_url"
+
 const ENV_STATIC_PREFIX = "STATIC_PREFIX"
 const ENV_STATIC_ROOT = "STATIC_ROOT"
 
-const (
-	DEFAULT_LINGECHOX_STREAM_ID = "lingechox"
-	MaxConnectionRetries        = 50
-	ConnectionStateLogInterval  = 10
-	ConnectionRetryDelay        = 100 * time.Millisecond
-	AudioChannels               = 1
-	AudioBitDepth               = 16
-	// Audio configuration
-	TargetSampleRate = 8000 // PCMA standard sample rate
-	// Logging intervals
-	PacketLogInterval = 100
-	WarningLogLimit   = 3
-)
-
-var DefaultStunServers = []string{
-	"stun:stun.l.google.com:19302",
-	"stun:stun1.l.google.com:19302",
-	"stun:stun2.l.google.com:19302",
-	"stun:stun3.l.google.com:19302",
-	"stun:stun4.l.google.com:19302",
-	"stun:stun.cloudflare.com:3478",
-	"stun:stun.stunprotocol.org:3478",
-	"stun:stun.sipgate.net",
-	"stun:stun.ideasip.com",
-	"stun:stun.iptel.org",
-	"stun:stun.ekiga.net",
-	"stun:stun.voiparound.com",
-	"stun:stun.voipbuster.com",
-	"stun:stun.voipstunt.com",
-	"stun:stun.telnyx.com:3478",
-	"stun:stun.rixtelecom.se",
-}
+const AUTHORIZATION_PREFIX = "Bearer "
+const CREDENTIAL_API_KEY = "X-API-KEY"
+const CREDENTIAL_API_SECRET = "X-API-SECRET"

@@ -1,11 +1,14 @@
 package media
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"context"
 	"sync"
 	"time"
 
-	"github.com/LingByte/LingEchoX/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/logger"
 	"go.uber.org/zap"
 )
 

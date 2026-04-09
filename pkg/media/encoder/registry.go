@@ -1,10 +1,13 @@
 package encoder
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/LingEchoX/pkg/media"
+	"github.com/LingByte/SoulNexus/pkg/media"
 )
 
 const (

@@ -1,12 +1,15 @@
 package media
 
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 import (
 	"context"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/LingByte/LingEchoX/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -85,6 +88,14 @@ func (eb *EventBus) Unsubscribe(eventType EventType, handler EventHandler) {
 
 // Publish sends an event to all subscribers
 func (eb *EventBus) Publish(event *MediaEvent) {
+	if eb == nil || event == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			// Shutdown race: channel closed while a transport still emitted (see MediaSession.cleanup order).
+		}
+	}()
 	select {
 	case eb.eventQueue <- event:
 	default:

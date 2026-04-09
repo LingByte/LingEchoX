@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/LingByte/LingEchoX/pkg/config"
-	"github.com/LingByte/LingEchoX/pkg/logger"
-	"github.com/LingByte/LingEchoX/pkg/utils"
+	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/config"
+	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
-
 	"gorm.io/gorm"
 )
 
@@ -28,7 +28,7 @@ type Options struct {
 // SetupDatabase unified entry: connect database -> run initialization SQL -> migrate entities -> (non-production) write default configuration
 func SetupDatabase(logWriter io.Writer, opts *Options) (*gorm.DB, error) {
 	if opts == nil {
-		opts = &Options{AutoMigrate: true, SeedNonProd: true}
+		opts = &Options{AutoMigrate: false, SeedNonProd: false}
 	}
 
 	// 1) Connect to database
@@ -48,18 +48,24 @@ func SetupDatabase(logWriter io.Writer, opts *Options) (*gorm.DB, error) {
 
 	// 3) Migrate entities
 	if opts.AutoMigrate {
+		// 首先执行迁移 SQL 脚本
+		migrationsDir := "cmd/bootstrap/migrations"
+		if err := runMigrationScripts(db, migrationsDir); err != nil {
+			logger.Warn("run migration scripts failed", zap.String("dir", migrationsDir), zap.Error(err))
+		}
+
 		if err := RunMigrations(db); err != nil {
 			logger.Error("migration failed", zap.Error(err))
 			return nil, err
 		}
 		logger.Info("migration success",
-			zap.String("database", config.GlobalConfig.DBDriver),
-			zap.String("dsn", config.GlobalConfig.DSN),
+			zap.String("database", config.GlobalConfig.Database.Driver),
+			zap.String("dsn", config.GlobalConfig.Database.DSN),
 		)
 	}
 
 	// 4) Non-production: default configuration
-	if opts.SeedNonProd {
+	if opts.SeedNonProd && utils.GetEnv("APP_ENV") != "production" && utils.GetEnv("APP_ENV") != "development" {
 		service := SeedService{
 			db: db,
 		}
@@ -75,8 +81,8 @@ func SetupDatabase(logWriter io.Writer, opts *Options) (*gorm.DB, error) {
 
 // initDBConn creates *gorm.DB based on global configuration
 func initDBConn(logWriter io.Writer) (*gorm.DB, error) {
-	dbDriver := config.GlobalConfig.DBDriver
-	dsn := config.GlobalConfig.DSN
+	dbDriver := config.GlobalConfig.Database.Driver
+	dsn := config.GlobalConfig.Database.DSN
 	return utils.InitDatabase(logWriter, dbDriver, dsn)
 }
 
@@ -94,7 +100,6 @@ func RunInitSQL(db *gorm.DB, sqlFilePath string) error {
 	// Relax token limit (long lines)
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 1024*1024)
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		trim := strings.TrimSpace(line)
@@ -125,6 +130,37 @@ func RunInitSQL(db *gorm.DB, sqlFilePath string) error {
 	return scanner.Err()
 }
 
+// runMigrationScripts executes all .sql files in the migrations directory
+func runMigrationScripts(db *gorm.DB, migrationsDir string) error {
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// 迁移目录不存在，跳过
+			return nil
+		}
+		return err
+	}
+
+	// 按文件名排序执行迁移脚本
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		filePath := migrationsDir + "/" + entry.Name()
+		logger.Info("executing migration script", zap.String("file", filePath))
+		if err := RunInitSQL(db, filePath); err != nil {
+			logger.Error("migration script failed", zap.String("file", filePath), zap.Error(err))
+			return err
+		}
+	}
+
+	return nil
+}
+
 // RunMigrations executes entity migration
 func RunMigrations(db *gorm.DB) error {
 	if db == nil {
@@ -132,5 +168,14 @@ func RunMigrations(db *gorm.DB) error {
 	}
 	return utils.MakeMigrates(db, []any{
 		&utils.Config{},
+		&models.SIPUser{},
+		&models.SIPCall{},
+		&models.ACDPoolTarget{},
+		&models.SIPCampaign{},
+		&models.SIPCampaignContact{},
+		&models.SIPCallAttempt{},
+		&models.SIPScriptRun{},
+		&models.SIPCampaignEvent{},
+		&models.SIPScriptTemplate{},
 	})
 }

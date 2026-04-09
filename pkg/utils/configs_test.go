@@ -1,3 +1,7 @@
+// configs_test.go
+// Copyright (c) 2026 LingByte. All rights reserved.
+// SPDX-License-Identifier: AGPL-3.0
+
 package utils
 
 import (
@@ -14,12 +18,13 @@ import (
 )
 
 func setupConfigTestDB() *gorm.DB {
+	// 自定义一个“静音 + 忽略 RecordNotFound”的 logger
 	silentLogger := glog.New(
-		log.New(io.Discard, "", log.LstdFlags),
+		log.New(io.Discard, "", log.LstdFlags), // 丢弃输出
 		glog.Config{
 			SlowThreshold:             200 * time.Millisecond,
-			LogLevel:                  glog.Silent,
-			IgnoreRecordNotFoundError: true,
+			LogLevel:                  glog.Silent, // 或 glog.Error
+			IgnoreRecordNotFoundError: true,        // 关键：忽略 not found
 			Colorful:                  false,
 		},
 	)
