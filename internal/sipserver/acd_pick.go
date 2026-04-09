@@ -1,4 +1,4 @@
-package sipacd
+package sipserver
 
 // Copyright (c) 2026 LingByte. All rights reserved.
 // SPDX-License-Identifier: AGPL-3.0
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/internal/sipreg"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"gorm.io/gorm"
 )
@@ -20,7 +19,7 @@ import (
 //   - web → WebSeat (browser agent leg).
 //   - sip trunk → DialTargetFromACDTrunk; sip internal → reg.DialTargetForUsername.
 // SIP rows: sipCallerId / sipCallerDisplayName copied onto DialTarget when set.
-func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *sipreg.GormStore) (outbound.DialTarget, bool) {
+func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *GormStore) (outbound.DialTarget, bool) {
 	if db == nil {
 		return outbound.DialTarget{}, false
 	}

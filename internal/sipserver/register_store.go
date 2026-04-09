@@ -1,4 +1,4 @@
-package sipreg
+package sipserver
 
 import (
 	"context"
@@ -36,34 +36,17 @@ func (s *GormStore) SaveRegister(ctx context.Context, user, domain, contactURI s
 	}
 	now := time.Now()
 	exp := expiresAt
-	var row models.SIPUser
-	err := s.db.WithContext(ctx).Where("username = ? AND domain = ? AND is_deleted = ?", user, domain, models.SoftDeleteStatusActive).First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		row = models.SIPUser{
-			Username:   user,
-			Domain:     domain,
-			ContactURI: contactURI,
-			RemoteIP:   sig.IP.String(),
-			RemotePort: sig.Port,
-			UserAgent:  userAgent,
-			Online:     true,
-			ExpiresAt:  &exp,
-			LastSeenAt: &now,
-		}
-		return s.db.WithContext(ctx).Create(&row).Error
-	}
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Model(&row).Updates(map[string]interface{}{
-		"contact_uri":  contactURI,
-		"remote_ip":    sig.IP.String(),
-		"remote_port":  sig.Port,
-		"user_agent":   userAgent,
-		"online":       true,
-		"expires_at":   exp,
-		"last_seen_at": now,
-	}).Error
+	return models.UpsertSIPUserRegister(ctx, s.db, models.SIPUser{
+		Username:   user,
+		Domain:     domain,
+		ContactURI: contactURI,
+		RemoteIP:   sig.IP.String(),
+		RemotePort: sig.Port,
+		UserAgent:  userAgent,
+		Online:     true,
+		ExpiresAt:  &exp,
+		LastSeenAt: &now,
+	})
 }
 
 func (s *GormStore) DeleteRegister(ctx context.Context, user, domain string) error {
@@ -75,13 +58,7 @@ func (s *GormStore) DeleteRegister(ctx context.Context, user, domain string) err
 	if user == "" || domain == "" {
 		return nil
 	}
-	return s.db.WithContext(ctx).Model(&models.SIPUser{}).
-		Where("username = ? AND domain = ? AND is_deleted = ?", user, domain, models.SoftDeleteStatusActive).
-		Updates(map[string]interface{}{
-			"online":       false,
-			"expires_at":   nil,
-			"last_seen_at": time.Now(),
-		}).Error
+	return models.MarkSIPUserOffline(ctx, s.db, user, domain)
 }
 
 func (s *GormStore) LookupRegister(ctx context.Context, user, domain string) (*net.UDPAddr, bool, error) {
@@ -93,14 +70,11 @@ func (s *GormStore) LookupRegister(ctx context.Context, user, domain string) (*n
 	if user == "" || domain == "" {
 		return nil, false, nil
 	}
-	var row models.SIPUser
-	err := s.db.WithContext(ctx).Where("username = ? AND domain = ? AND is_deleted = ? AND online = ?", user, domain, models.SoftDeleteStatusActive, true).
-		Where("expires_at IS NULL OR expires_at > ?", time.Now()).
-		First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, false, nil
-	}
+	row, err := models.FindOnlineSIPUserByAOR(ctx, s.db, user, domain)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, nil
+		}
 		return nil, false, err
 	}
 	if row.RemoteIP == "" || row.RemotePort <= 0 {
@@ -125,14 +99,8 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 		return zero, false
 	}
 	domain := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPDefaultDomain))
-	q := s.db.WithContext(ctx).Model(&models.SIPUser{}).
-		Where("username = ? AND is_deleted = ? AND online = ?", username, models.SoftDeleteStatusActive, true).
-		Where("expires_at IS NULL OR expires_at > ?", time.Now())
-	if domain != "" {
-		q = q.Where("domain = ?", domain)
-	}
-	var row models.SIPUser
-	if err := q.First(&row).Error; err != nil {
+	row, err := models.FindOnlineSIPUserByAOR(ctx, s.db, username, domain)
+	if err != nil {
 		return zero, false
 	}
 	if row.RemoteIP == "" || row.RemotePort <= 0 {

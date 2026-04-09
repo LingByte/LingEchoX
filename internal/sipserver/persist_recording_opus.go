@@ -1,4 +1,4 @@
-package sippersist
+package sipserver
 
 import (
 	"encoding/binary"

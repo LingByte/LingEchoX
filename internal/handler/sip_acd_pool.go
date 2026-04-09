@@ -129,10 +129,7 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 	for _, row := range list {
 		item := acdPoolTargetListItem{ACDPoolTarget: row}
 		if sipRowLiveLineEligible(row) {
-			var n int64
-			_ = h.db.Model(&models.SIPUser{}).
-				Where("is_deleted = ? AND username = ? AND online = ?", models.SoftDeleteStatusActive, strings.TrimSpace(row.TargetValue), true).
-				Count(&n).Error
+			n, _ := models.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
 			item.LiveLineOnline = n > 0
 		} else if row.RouteType == models.ACDPoolRouteTypeWeb {
 			item.LiveLineOnline = models.WebSeatLastSeenFresh(row.WebSeatLastSeenAt)
@@ -155,10 +152,7 @@ func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 	}
 	item := acdPoolTargetListItem{ACDPoolTarget: row}
 	if sipRowLiveLineEligible(row) {
-		var n int64
-		_ = h.db.Model(&models.SIPUser{}).
-			Where("is_deleted = ? AND username = ? AND online = ?", models.SoftDeleteStatusActive, strings.TrimSpace(row.TargetValue), true).
-			Count(&n).Error
+		n, _ := models.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
 		item.LiveLineOnline = n > 0
 	} else if row.RouteType == models.ACDPoolRouteTypeWeb {
 		item.LiveLineOnline = models.WebSeatLastSeenFresh(row.WebSeatLastSeenAt)

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LingByte/SoulNexus/internal/sippersist"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
@@ -41,7 +40,7 @@ type SIPServer struct {
 	regStore   SIPRegisterStore // optional: persisted REGISTER (sip_users), set via SetRegisterStore
 
 	callPersistMu sync.RWMutex
-	callPersist   *sippersist.Store // optional: SIPCall / recording / dialog persistence
+	callPersist   SIPCallPersistStore // optional: SIPCall / recording / dialog persistence
 
 	dlgMu  sync.RWMutex
 	uasDlg map[string]*uasDialogState // inbound Call-ID -> dialog (for server-initiated BYE)
@@ -260,7 +259,7 @@ func (s *SIPServer) registerStore() SIPRegisterStore {
 }
 
 // SetCallPersist wires DB-backed SIP call / session persistence and recording upload on BYE.
-func (s *SIPServer) SetCallPersist(st *sippersist.Store) {
+func (s *SIPServer) SetCallPersist(st SIPCallPersistStore) {
 	if s == nil {
 		return
 	}
@@ -269,7 +268,7 @@ func (s *SIPServer) SetCallPersist(st *sippersist.Store) {
 	s.callPersist = st
 }
 
-func (s *SIPServer) callPersistStore() *sippersist.Store {
+func (s *SIPServer) callPersistStore() SIPCallPersistStore {
 	if s == nil {
 		return nil
 	}
@@ -481,7 +480,7 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 
 	if p := s.callPersistStore(); p != nil {
 		neg := cs.NegotiatedCodec()
-		p.OnInvite(context.Background(), sippersist.InviteParams{
+		p.OnInvite(context.Background(), InvitePersistParams{
 			CallID:        callID,
 			From:          msg.GetHeader("From"),
 			To:            msg.GetHeader("To"),
@@ -599,7 +598,7 @@ func (s *SIPServer) handleBye(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 	if tb := conversation.HangupTransferBridgeIfAny(callID); tb != nil {
 		s.forgetUASDialog(callID)
 		if p := s.callPersistStore(); p != nil {
-			go p.OnBye(context.Background(), sippersist.ByeParams{
+			go p.OnBye(context.Background(), ByePersistParams{
 				CallID:             tb.InboundCallID,
 				RawPayload:         tb.RawPayload,
 				CodecName:          tb.CodecName,
@@ -635,7 +634,7 @@ func (s *SIPServer) handleBye(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 		cs.Stop()
 	}
 	if p := s.callPersistStore(); p != nil {
-		go p.OnBye(context.Background(), sippersist.ByeParams{
+		go p.OnBye(context.Background(), ByePersistParams{
 			CallID:             callID,
 			RawPayload:         raw,
 			CodecName:          codec,

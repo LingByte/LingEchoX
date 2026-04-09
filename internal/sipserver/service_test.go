@@ -1,4 +1,4 @@
-package sipcampaign
+package sipserver
 
 import (
 	"testing"

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,7 +18,8 @@ import (
 	handlers "github.com/LingByte/SoulNexus/internal/handler"
 	"github.com/LingByte/SoulNexus/internal/listeners"
 	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/internal/sipapp"
+	"github.com/LingByte/SoulNexus/internal/sipserver"
+	"github.com/LingByte/SoulNexus/internal/tasks"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
@@ -119,6 +121,8 @@ func main() {
 	utils.InitGlobalCache(1024, 5*time.Minute)
 	//// 11. New App
 	app := NewLingEchoApp(db)
+	sipUserCleaner := tasks.NewSIPUserOnlineCleaner(db, time.Duration(utils.GetIntEnv("SIP_USER_ONLINE_SWEEP_SECONDS"))*time.Second)
+	sipUserCleaner.Start()
 
 	// 12. Initialize Monitoring System
 	// Can be overridden via environment variables, default values suitable for 2GB memory servers
@@ -196,9 +200,10 @@ func main() {
 	// 21. Emit system initialization signal
 	utils.Sig().Emit(models.SigInitSystemConfig, nil)
 
-	var sipEmbedded *sipapp.Embedded
+	var sipEmbedded *sipserver.Embedded
+	var sipCampaignHTTP *handlers.HTTPServer
 	if !*noSIP {
-		se, err := sipapp.Start(sipapp.Config{
+		se, err := sipserver.Start(sipserver.Config{
 			Host:    *sipHost,
 			Port:    *sipPort,
 			LocalIP: *sipLocalIP,
@@ -208,6 +213,20 @@ func main() {
 			logger.Fatal("embedded SIP stack failed to start", zap.Error(err))
 		}
 		sipEmbedded = se
+		if svc := sipEmbedded.CampaignService(); svc != nil {
+			if campaignAddr := strings.TrimSpace(utils.GetEnv(sipserver.EnvCampaignHTTPAddr)); campaignAddr != "" {
+				campaignHTTP, err := handlers.StartSIPCampaignHTTPServer(
+					campaignAddr,
+					strings.TrimSpace(utils.GetEnv(sipserver.EnvCampaignHTTPToken)),
+					svc,
+				)
+				if err != nil {
+					logger.Warn("sip campaign http: start failed", zap.String("addr", campaignAddr), zap.Error(err))
+				} else {
+					sipCampaignHTTP = campaignHTTP
+				}
+			}
+		}
 		logger.Info("embedded SIP stack started",
 			zap.String("sip_host", *sipHost),
 			zap.Int("sip_port", *sipPort),
@@ -227,6 +246,10 @@ func main() {
 	shutdownAll := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
+		sipUserCleaner.Stop()
+		if sipCampaignHTTP != nil {
+			_ = sipCampaignHTTP.Shutdown(ctx)
+		}
 		if sipEmbedded != nil {
 			sipEmbedded.Shutdown(ctx)
 		}

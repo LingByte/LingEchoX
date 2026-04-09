@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/internal/sippersist"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 )
@@ -172,7 +171,7 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 	}
 	if tb := conversation.HangupTransferBridgeFull(callID); tb != nil {
 		if p := s.callPersistStore(); p != nil {
-			go p.OnBye(context.Background(), sippersist.ByeParams{
+			go p.OnBye(context.Background(), ByePersistParams{
 				CallID:             tb.InboundCallID,
 				RawPayload:         tb.RawPayload,
 				CodecName:          tb.CodecName,
@@ -206,7 +205,7 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 	}
 	s.forgetUASDialog(callID)
 	if p := s.callPersistStore(); p != nil {
-		go p.OnBye(context.Background(), sippersist.ByeParams{
+		go p.OnBye(context.Background(), ByePersistParams{
 			CallID:             callID,
 			RawPayload:         raw,
 			CodecName:          codec,

@@ -1,4 +1,4 @@
-package sippersist
+package sipserver
 
 import (
 	"context"
@@ -10,8 +10,9 @@ import (
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
+	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	lingstorage "github.com/LingByte/lingstorage-sdk-go"
+	"github.com/LingByte/lingstorage-sdk-go"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -32,23 +33,8 @@ func New(db *gorm.DB, lg *zap.Logger) *Store {
 	return &Store{db: db, lg: lg}
 }
 
-// InviteParams fields for a new inbound call row.
-type InviteParams struct {
-	CallID        string
-	From          string
-	To            string
-	RemoteSig     string
-	RemoteRTP     string
-	LocalRTP      string
-	Codec         string
-	PayloadType   uint8
-	ClockRate     int
-	CSeqInvite    string
-	Direction     string
-}
-
 // OnInvite upserts SIPCall in ringing state.
-func (s *Store) OnInvite(ctx context.Context, p InviteParams) {
+func (s *Store) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
 	if s == nil || s.db == nil || p.CallID == "" {
 		return
 	}
@@ -98,19 +84,6 @@ func (s *Store) OnInvite(ctx context.Context, p InviteParams) {
 	}).Error
 }
 
-// ByeParams finalizes one SIP dialog leg: updates sip_calls (end flags, recording URL), uploads recording via GlobalStore.
-type ByeParams struct {
-	CallID     string
-	RawPayload []byte
-	CodecName  string
-	// Initiator is "remote" when the process handles an incoming BYE, or "local" when HangupInboundCall tears down the UAS leg first.
-	Initiator string
-
-	// Uplink negotiated media (for Opus→WAV). From CallSession.SourceCodec().
-	RecordSampleRate   int
-	RecordOpusChannels int
-}
-
 func endStatusForBye(initiator string, hadSIPAgentTransfer, hadWebSeat bool) string {
 	hadXfer := hadSIPAgentTransfer || hadWebSeat
 	local := strings.EqualFold(strings.TrimSpace(initiator), "local")
@@ -140,7 +113,7 @@ func (s *Store) OnEstablished(ctx context.Context, callID string) {
 }
 
 // OnBye finalizes SIPCall, optionally uploads PCMU/PCMA or Opus (length-prefixed RTP payloads) as WAV via config.GlobalStore.
-func (s *Store) OnBye(ctx context.Context, p ByeParams) {
+func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	if s == nil || s.db == nil || p.CallID == "" {
 		return
 	}

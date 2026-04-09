@@ -1,4 +1,4 @@
-package sipcampaign
+package sipserver
 
 import (
 	"context"
@@ -321,12 +321,7 @@ func (s *Service) resolveRegisteredDialTarget(ctx context.Context, phone string)
 	if s.db == nil {
 		return outbound.DialTarget{}, false
 	}
-	var row models.SIPUser
-	err := s.db.WithContext(ctx).Model(&models.SIPUser{}).
-		Where("username = ? AND is_deleted = ? AND online = ?", username, models.SoftDeleteStatusActive, true).
-		Where("expires_at IS NULL OR expires_at > ?", time.Now()).
-		Order("last_seen_at DESC").
-		First(&row).Error
+	row, err := models.FindLatestOnlineSIPUserByUsername(ctx, s.db, username)
 	if err != nil || row.RemoteIP == "" || row.RemotePort <= 0 {
 		return outbound.DialTarget{}, false
 	}

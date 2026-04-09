@@ -1,6 +1,6 @@
-// Package sipapp starts the SIP UDP stack, WebSeat WebSocket/HTTP, outbound dial HTTP,
+// Package sipserver starts the SIP UDP stack, WebSeat WebSocket/HTTP, outbound dial HTTP,
 // and campaign HTTP — shared by cmd/server (embedded) and cmd/sip (standalone).
-package sipapp
+package sipserver
 
 import (
 	"context"
@@ -10,10 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/internal/sipcampaign"
-	"github.com/LingByte/SoulNexus/internal/sipacd"
-	"github.com/LingByte/SoulNexus/internal/sippersist"
-	"github.com/LingByte/SoulNexus/internal/sipreg"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
@@ -39,12 +35,18 @@ type Config struct {
 type Embedded struct {
 	sipServer       *server.SIPServer
 	outboundHTTPSrv *http.Server
-	campaignHTTPSrv *sipcampaign.HTTPServer
-	campaignSvc     *sipcampaign.Service
+	campaignSvc     *Service
 	outMgr          *outbound.Manager
 }
 
-func resolveOutboundDialTarget(store *sipreg.GormStore) (outbound.DialTarget, bool) {
+func (e *Embedded) CampaignService() *Service {
+	if e == nil {
+		return nil
+	}
+	return e.campaignSvc
+}
+
+func resolveOutboundDialTarget(store *GormStore) (outbound.DialTarget, bool) {
 	if store != nil {
 		n := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPTargetNumber))
 		if n != "" {
@@ -76,9 +78,9 @@ func Start(cfg Config) (*Embedded, error) {
 	}
 
 	var sipServerPtr *server.SIPServer
-	var sipRegStore *sipreg.GormStore
-	var sipCallPersist *sippersist.Store
-	var campaignSvc *sipcampaign.Service
+	var sipRegStore *GormStore
+	var sipCallPersist *Store
+	var campaignSvc *Service
 	var acdDB *gorm.DB
 
 	callerUser, callerDisplay := outbound.CallerIdentityFromEnv()
@@ -132,7 +134,7 @@ func Start(cfg Config) (*Embedded, error) {
 				}
 			}
 			ctx := context.Background()
-			sipCallPersist.OnInvite(ctx, sippersist.InviteParams{
+			sipCallPersist.OnInvite(ctx, server.InvitePersistParams{
 				CallID:      leg.CallID,
 				From:        leg.FromHeader,
 				To:          leg.ToHeader,
@@ -163,21 +165,21 @@ func Start(cfg Config) (*Embedded, error) {
 
 	if cfg.DB != nil {
 		acdDB = cfg.DB
-		campaignSvc = sipcampaign.NewService(cfg.DB)
+		campaignSvc = NewService(cfg.DB)
 		_ = campaignSvc.AutoMigrate()
-		sipRegStore = sipreg.NewGormStore(cfg.DB)
+		sipRegStore = NewGormStore(cfg.DB)
 		campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
 			return sipRegStore.DialTargetForUsername(ctx, phone)
 		})
 		campaignSvc.StartWorker(outMgr)
 		sipServerPtr.SetRegisterStore(sipRegStore)
-		sipCallPersist = sippersist.New(cfg.DB, logger.Lg)
+		sipCallPersist = New(cfg.DB, logger.Lg)
 		sipServerPtr.SetCallPersist(sipCallPersist)
 		conversation.SetSIPTurnPersist(func(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string) {
 			sipCallPersist.SaveConversationTurn(ctx, callID, userText, assistantText, asrProvider, llmModel, ttsProvider)
 		})
 		conversation.SetTransferDialTargetResolver(func(ctx context.Context) (outbound.DialTarget, bool) {
-			return sipacd.PickTransferDialTarget(ctx, acdDB, sipRegStore)
+			return PickTransferDialTarget(ctx, acdDB, sipRegStore)
 		})
 		if logger.Lg != nil {
 			logger.Lg.Info("sipapp: using shared database handle from web server")
@@ -200,21 +202,21 @@ func Start(cfg Config) (*Embedded, error) {
 				}
 			} else {
 				acdDB = db
-				campaignSvc = sipcampaign.NewService(db)
+				campaignSvc = NewService(db)
 				_ = campaignSvc.AutoMigrate()
-				sipRegStore = sipreg.NewGormStore(db)
+				sipRegStore = NewGormStore(db)
 				campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
 					return sipRegStore.DialTargetForUsername(ctx, phone)
 				})
 				campaignSvc.StartWorker(outMgr)
 				sipServerPtr.SetRegisterStore(sipRegStore)
-				sipCallPersist = sippersist.New(db, logger.Lg)
+				sipCallPersist = New(db, logger.Lg)
 				sipServerPtr.SetCallPersist(sipCallPersist)
 				conversation.SetSIPTurnPersist(func(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string) {
 					sipCallPersist.SaveConversationTurn(ctx, callID, userText, assistantText, asrProvider, llmModel, ttsProvider)
 				})
 				conversation.SetTransferDialTargetResolver(func(ctx context.Context) (outbound.DialTarget, bool) {
-					return sipacd.PickTransferDialTarget(ctx, acdDB, sipRegStore)
+					return PickTransferDialTarget(ctx, acdDB, sipRegStore)
 				})
 				if logger.Lg != nil {
 					logger.Lg.Info("sipapp: database persistence enabled",
@@ -264,7 +266,7 @@ func Start(cfg Config) (*Embedded, error) {
 			if sipCallPersist == nil {
 				return
 			}
-			sipCallPersist.OnBye(ctx, sippersist.ByeParams{
+			sipCallPersist.OnBye(ctx, server.ByePersistParams{
 				CallID:             callID,
 				RawPayload:         raw,
 				CodecName:          codecName,
@@ -289,20 +291,6 @@ func Start(cfg Config) (*Embedded, error) {
 			logger.Lg.Warn("sip outbound http: start failed", zap.String("addr", outHTTPAddr), zap.Error(err))
 		} else {
 			em.outboundHTTPSrv = srv
-		}
-	}
-	if campaignSvc != nil {
-		if campaignAddr := strings.TrimSpace(utils.GetEnv(sipcampaign.EnvCampaignHTTPAddr)); campaignAddr != "" {
-			srv, err := sipcampaign.StartHTTPServer(
-				campaignAddr,
-				strings.TrimSpace(utils.GetEnv(sipcampaign.EnvCampaignHTTPToken)),
-				campaignSvc,
-			)
-			if err != nil && logger.Lg != nil {
-				logger.Lg.Warn("sip campaign http: start failed", zap.String("addr", campaignAddr), zap.Error(err))
-			} else {
-				em.campaignHTTPSrv = srv
-			}
 		}
 	}
 	conversation.SetWebSeatTransfer(conversation.StartWebSeatHandoff)
@@ -373,11 +361,6 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 	if e.outboundHTTPSrv != nil {
 		shCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		_ = e.outboundHTTPSrv.Shutdown(shCtx)
-		cancel()
-	}
-	if e.campaignHTTPSrv != nil {
-		shCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_ = e.campaignHTTPSrv.Shutdown(shCtx)
 		cancel()
 	}
 	if e.campaignSvc != nil {
