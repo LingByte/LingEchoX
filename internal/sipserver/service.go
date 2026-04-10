@@ -92,26 +92,13 @@ func (s *Service) SetDialTargetResolver(fn func(ctx context.Context, phone strin
 	s.mu.Unlock()
 }
 
-func (s *Service) AutoMigrate() error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-	return s.db.AutoMigrate(
-		&models.SIPCampaign{},
-		&models.SIPCampaignContact{},
-		&models.SIPCallAttempt{},
-		&models.SIPScriptRun{},
-		&models.SIPCampaignEvent{},
-	)
-}
-
 func (s *Service) CreateCampaign(ctx context.Context, in CreateCampaignInput) (*models.SIPCampaign, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("campaign service unavailable")
 	}
 	var scriptSpec datatypes.JSON
 	if raw := strings.TrimSpace(in.ScriptSpec); raw != "" {
-		scriptSpec = datatypes.JSON([]byte(raw))
+		scriptSpec = datatypes.JSON(raw)
 	}
 	c := &models.SIPCampaign{
 		Name:              strings.TrimSpace(in.Name),
@@ -197,15 +184,7 @@ func (s *Service) setCampaignStatus(ctx context.Context, campaignID uint, status
 	if s == nil || s.db == nil {
 		return fmt.Errorf("campaign service unavailable")
 	}
-	updates := map[string]any{"status": status}
-	now := time.Now()
-	if status == models.SIPCampaignStatusRunning {
-		updates["started_at"] = &now
-	}
-	if status == models.SIPCampaignStatusDone {
-		updates["ended_at"] = &now
-	}
-	return s.db.WithContext(ctx).Model(&models.SIPCampaign{}).Where("id = ?", campaignID).Updates(updates).Error
+	return models.UpdateSIPCampaignStatusByID(ctx, s.db, campaignID, status)
 }
 
 func (s *Service) HandleDialEvent(ctx context.Context, evt outbound.DialEvent) {
@@ -397,7 +376,7 @@ func (s *Service) appendEvent(ctx context.Context, evt models.SIPCampaignEvent) 
 	if s == nil || s.db == nil || evt.CampaignID == 0 {
 		return
 	}
-	_ = s.db.WithContext(ctx).Create(&evt).Error
+	_ = models.InsertSIPCampaignEvent(ctx, s.db, &evt)
 }
 
 func (s *Service) updateAttemptRow(ctx context.Context, campaignID, contactID uint, attemptNo int, updates map[string]any) {
@@ -612,16 +591,12 @@ func (s *Service) fetchTurn(callID string, afterIndex int) (turnFetchResult, boo
 	if s == nil || s.db == nil {
 		return turnFetchResult{}, false
 	}
-	var row models.SIPCall
-	if err := s.db.Select("id", "call_id", "turns", "turn_count").Where("call_id = ?", callID).Order("id DESC").First(&row).Error; err != nil {
+	row, err := models.SelectSIPCallTurnsByCallID(s.db, callID)
+	if err != nil {
 		return turnFetchResult{}, false
 	}
-	raw := strings.TrimSpace(string(row.Turns))
-	if raw == "" {
-		return turnFetchResult{}, false
-	}
-	var turns []models.SIPCallDialogTurn
-	if err := json.Unmarshal([]byte(raw), &turns); err != nil {
+	turns, err := models.UnmarshalSIPCallTurns(row.Turns)
+	if err != nil || len(turns) == 0 {
 		return turnFetchResult{}, false
 	}
 	if len(turns) <= afterIndex {

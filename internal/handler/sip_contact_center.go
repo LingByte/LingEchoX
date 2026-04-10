@@ -6,7 +6,6 @@ package handlers
 import (
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/response"
@@ -110,21 +109,8 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 
 func (h *Handlers) listSIPCalls(c *gin.Context) {
 	page, size := parsePageSize(c)
-	q := h.db.Model(&models.SIPCall{}).Where("is_deleted = ?", models.SoftDeleteStatusActive)
-	if callID := strings.TrimSpace(c.Query("callId")); callID != "" {
-		q = q.Where("call_id = ?", callID)
-	}
-	if state := strings.TrimSpace(c.Query("state")); state != "" {
-		q = q.Where("state = ?", state)
-	}
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	offset := (page - 1) * size
-	var list []models.SIPCall
-	if err := q.Order("id DESC").Offset(offset).Limit(size).Omit("turns").Find(&list).Error; err != nil {
+	list, total, err := models.ListSIPCallsPage(h.db, page, size, c.Query("callId"), c.Query("state"))
+	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -137,8 +123,8 @@ func (h *Handlers) getSIPCall(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	var row models.SIPCall
-	if err := h.db.Where("id = ? AND is_deleted = ?", id, models.SoftDeleteStatusActive).First(&row).Error; err != nil {
+	row, err := models.GetActiveSIPCallByID(h.db, uint(id))
+	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}

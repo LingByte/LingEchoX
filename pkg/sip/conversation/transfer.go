@@ -58,7 +58,7 @@ func SetTransferDialer(d TransferDialer) {
 }
 
 // SetTransferDialTargetResolver sets an optional resolver (e.g. DB lookup by SIP_TRANSFER_NUMBER).
-// When it returns ok=false, TransferDialTargetFromEnv is used.
+// When it returns ok=false, outbound.TransferDialTargetFromEnv is used.
 func SetTransferDialTargetResolver(fn func(context.Context) (outbound.DialTarget, bool)) {
 	transferMu.Lock()
 	defer transferMu.Unlock()

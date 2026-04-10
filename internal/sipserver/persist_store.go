@@ -2,7 +2,6 @@ package sipserver
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,11 +9,10 @@ import (
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
-	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
+	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
 	"github.com/LingByte/lingstorage-sdk-go"
 	"go.uber.org/zap"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -41,26 +39,14 @@ func (s *Store) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
 	now := time.Now()
 	dir := p.Direction
 	if dir == "" {
-		dir = "inbound"
+		dir = models.SIPCallDirectionInbound
 	}
-	var row models.SIPCall
-	err := s.db.WithContext(ctx).Where("call_id = ?", p.CallID).First(&row).Error
-	if err == gorm.ErrRecordNotFound {
-		row = models.SIPCall{
-			CallID:        p.CallID,
-			FromHeader:    p.From,
-			ToHeader:      p.To,
-			CSeqInvite:    p.CSeqInvite,
-			RemoteAddr:    p.RemoteSig,
-			Direction:     dir,
-			RemoteRTPAddr: p.RemoteRTP,
-			LocalRTPAddr:  p.LocalRTP,
-			PayloadType:   p.PayloadType,
-			Codec:         p.Codec,
-			ClockRate:     p.ClockRate,
-			State:         "ringing",
-			InviteAt:      &now,
-		}
+	row, err := models.FindSIPCallByCallID(ctx, s.db, p.CallID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		row = models.NewSIPCallRinging(
+			p.CallID, p.From, p.To, p.CSeqInvite, p.RemoteSig, dir,
+			p.RemoteRTP, p.LocalRTP, p.PayloadType, p.Codec, p.ClockRate, now,
+		)
 		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 			s.lg.Warn("sippersist invite create", zap.String("call_id", p.CallID), zap.Error(err))
 		}
@@ -70,33 +56,9 @@ func (s *Store) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
 		s.lg.Warn("sippersist invite lookup", zap.String("call_id", p.CallID), zap.Error(err))
 		return
 	}
-	_ = s.db.WithContext(ctx).Model(&row).Updates(map[string]interface{}{
-		"from_header":     p.From,
-		"to_header":       p.To,
-		"remote_addr":     p.RemoteSig,
-		"remote_rtp_addr": p.RemoteRTP,
-		"local_rtp_addr":  p.LocalRTP,
-		"codec":           p.Codec,
-		"payload_type":    p.PayloadType,
-		"clock_rate":      p.ClockRate,
-		"state":           "ringing",
-		"updated_at":      now,
-	}).Error
-}
-
-func endStatusForBye(initiator string, hadSIPAgentTransfer, hadWebSeat bool) string {
-	hadXfer := hadSIPAgentTransfer || hadWebSeat
-	local := strings.EqualFold(strings.TrimSpace(initiator), "local")
-	if hadXfer {
-		if local {
-			return models.SIPCallEndAfterTransferLocal
-		}
-		return models.SIPCallEndAfterTransferRemote
-	}
-	if local {
-		return models.SIPCallEndCompletedLocal
-	}
-	return models.SIPCallEndCompletedRemote
+	_ = s.db.WithContext(ctx).Model(&row).Updates(models.SIPCallInviteRefreshUpdateMap(
+		p.From, p.To, p.RemoteSig, p.RemoteRTP, p.LocalRTP, p.Codec, p.PayloadType, p.ClockRate, now,
+	)).Error
 }
 
 // OnEstablished marks call established (ACK / media start).
@@ -105,11 +67,7 @@ func (s *Store) OnEstablished(ctx context.Context, callID string) {
 		return
 	}
 	now := time.Now()
-	_ = s.db.WithContext(ctx).Model(&models.SIPCall{}).Where("call_id = ?", callID).Updates(map[string]interface{}{
-		"state":      "established",
-		"ack_at":     now,
-		"updated_at": now,
-	}).Error
+	_ = s.db.WithContext(ctx).Model(&models.SIPCall{}).Where("call_id = ?", callID).Updates(models.SIPCallEstablishedUpdateMap(now)).Error
 }
 
 // OnBye finalizes SIPCall, optionally uploads PCMU/PCMA or Opus (length-prefixed RTP payloads) as WAV via config.GlobalStore.
@@ -126,35 +84,15 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	}
 
 	sipAgent, webSeat := conversation.TakeInboundTransferFlags(callID)
-	endStatus := endStatusForBye(initiator, sipAgent, webSeat)
+	endStatus := models.SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
 
 	now := time.Now()
-	updates := map[string]interface{}{
-		"state":            "ended",
-		"bye_at":           now,
-		"ended_at":         now,
-		"updated_at":       now,
-		"end_status":       endStatus,
-		"had_sip_transfer": sipAgent,
-		"had_web_seat":     webSeat,
-	}
-
+	durationSec := 0
 	var call models.SIPCall
 	if err := s.db.WithContext(ctx).Where("call_id = ?", callID).First(&call).Error; err == nil {
-		var start time.Time
-		if call.AckAt != nil {
-			start = *call.AckAt
-		} else if call.InviteAt != nil {
-			start = *call.InviteAt
-		}
-		if !start.IsZero() {
-			sec := int(now.Sub(start).Seconds())
-			if sec < 0 {
-				sec = 0
-			}
-			updates["duration_sec"] = sec
-		}
+		durationSec = models.SIPCallDurationSince(call.AckAt, call.InviteAt, now)
 	}
+	updates := models.SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
 
 	c := strings.ToLower(codecName)
 	bucketOK := config.GlobalStore != nil && config.GlobalConfig != nil &&
@@ -240,28 +178,17 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID, userText, assi
 		At:          now,
 	}
 
-	var row models.SIPCall
-	err := s.db.WithContext(ctx).
-		Where("call_id = ? AND is_deleted = ?", callID, models.SoftDeleteStatusActive).
-		First(&row).Error
+	row, err := models.FindActiveSIPCallByCallID(ctx, s.db, callID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		turnsBytes, jErr := json.Marshal([]models.SIPCallDialogTurn{turn})
+		turnsBytes, jErr := models.MarshalSIPCallTurns([]models.SIPCallDialogTurn{turn})
 		if jErr != nil {
 			s.lg.Warn("sippersist call turns marshal failed", zap.String("call_id", callID), zap.Error(jErr))
 			return
 		}
-		row = models.SIPCall{
-			CallID:      callID,
-			State:       "established",
-			Turns:       datatypes.JSON(turnsBytes),
-			TurnCount:   1,
-			FirstTurnAt: &now,
-			LastTurnAt:  &now,
-		}
+		row = models.NewSIPCallMinimalEstablishedWithFirstTurn(callID, turnsBytes, now)
 		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-			if err := s.db.WithContext(ctx).
-				Where("call_id = ? AND is_deleted = ?", callID, models.SoftDeleteStatusActive).
-				First(&row).Error; err != nil {
+			row, err = models.FindActiveSIPCallByCallID(ctx, s.db, callID)
+			if err != nil {
 				s.lg.Warn("sippersist call create/first for turn", zap.String("call_id", callID), zap.Error(err))
 				return
 			}
@@ -276,27 +203,10 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID, userText, assi
 		return
 	}
 
-	var turnList []models.SIPCallDialogTurn
-	if len(row.Turns) > 0 {
-		if uErr := json.Unmarshal(row.Turns, &turnList); uErr != nil {
-			s.lg.Warn("sippersist call turns unmarshal failed", zap.String("call_id", callID), zap.Error(uErr))
-			turnList = nil
-		}
-	}
-	turnList = append(turnList, turn)
-	turnsBytes, jErr := json.Marshal(turnList)
-	if jErr != nil {
-		s.lg.Warn("sippersist call turns marshal failed", zap.String("call_id", callID), zap.Error(jErr))
+	upd, turnCount, uErr := models.SIPCallAppendTurnUpdateMap(row, turn, now)
+	if uErr != nil {
+		s.lg.Warn("sippersist call turns merge failed", zap.String("call_id", callID), zap.Error(uErr))
 		return
-	}
-	upd := map[string]interface{}{
-		"turns":        datatypes.JSON(turnsBytes),
-		"turn_count":   len(turnList),
-		"last_turn_at": now,
-		"updated_at":   now,
-	}
-	if row.FirstTurnAt == nil || row.FirstTurnAt.IsZero() {
-		upd["first_turn_at"] = now
 	}
 	if err := s.db.WithContext(ctx).Model(&row).Updates(upd).Error; err != nil {
 		s.lg.Warn("sippersist call turn update failed", zap.String("call_id", callID), zap.Error(err))
@@ -305,7 +215,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID, userText, assi
 	if s.lg != nil {
 		s.lg.Info("sippersist call turn appended",
 			zap.String("call_id", callID),
-			zap.Int("turn_count", len(turnList)),
+			zap.Int("turn_count", turnCount),
 		)
 	}
 }
@@ -330,4 +240,3 @@ func sanitizeKey(s string) string {
 	}
 	return out
 }
-

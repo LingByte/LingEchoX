@@ -4,7 +4,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 )
 
@@ -31,7 +31,7 @@ func effectiveDialDomain(preferredDomain, signalingIP string) string {
 	if preferredDomain != "" && !isPrivateOrLocalHost(preferredDomain) {
 		return preferredDomain
 	}
-	if envDomain := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPDefaultDomain)); envDomain != "" {
+	if envDomain := strings.TrimSpace(utils.GetEnv(constants.EnvSIPDefaultDomain)); envDomain != "" {
 		return envDomain
 	}
 	signalingIP = strings.TrimSpace(signalingIP)
@@ -43,4 +43,3 @@ func effectiveDialDomain(preferredDomain, signalingIP string) string {
 	}
 	return "localhost"
 }
-
