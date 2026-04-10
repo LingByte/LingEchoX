@@ -17,7 +17,6 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/bridge"
 	siprtp "github.com/LingByte/SoulNexus/pkg/sip/rtp"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	sipwebrtc "github.com/LingByte/SoulNexus/pkg/sip/webrtc"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
@@ -675,7 +674,7 @@ func (h *Hub) waitRemoteTrackAndBridge(
 	h.mu.Unlock()
 
 	webCodec := mediaFromRemoteTrack(remoteTrack)
-	wt := sipwebrtc.NewTransport(remoteTrack, txLocal, webCodec)
+	wt := NewTransport(remoteTrack, txLocal, webCodec)
 
 	// Keep caller media alive during "awaiting join" so transfer ringing can be played.
 	// Stop MediaSession right before building bridge transports to avoid dual RTP readers.

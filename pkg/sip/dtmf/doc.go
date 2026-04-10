@@ -8,5 +8,5 @@
 // SIP INFO: many clients (e.g. Linphone) send DTMF via INFO + application/dtmf-relay; use
 // dtmf.DigitFromSIPINFO — handled in pkg/sip/server handleInfo → conversation.HandleSIPINFODTMF.
 //
-// Env: SIP_TRANSFER_TO_AGENT_DIGIT (default 0), SIP_TRANSFER_* for agent URI, SetTransferDialer in cmd/sip.
+// Env: SIP_TRANSFER_* for agent URI, SetTransferDialer in cmd/sip.
 package dtmf

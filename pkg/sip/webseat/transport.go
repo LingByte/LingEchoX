@@ -1,4 +1,4 @@
-package webrtc
+package webseat
 
 import (
 	"context"
@@ -12,11 +12,6 @@ import (
 )
 
 // Transport is a minimal WebRTC audio transport that implements media.MediaTransport.
-//
-// Design goals:
-// - Keep it clean and isolated under pkg/sip for SIP<->WebRTC interoperability.
-// - Treat payload bytes as "encoded audio frames" for the negotiated codec.
-// - Use TrackRemote.ReadRTP() for input, TrackLocalStaticSample.WriteSample() for output.
 //
 // Notes:
 // - This does not expose ICE/SDP signaling; it's a media transport only.
@@ -85,9 +80,6 @@ func (t *Transport) Send(ctx context.Context, packet media.MediaPacket) (int, er
 		return 0, nil
 	}
 
-	// WriteSample Duration drives RTP timestamp steps. For PCMU/PCMA the payload size maps to
-	// sample counts at SampleRate; for Opus (and other compressed RTP) payload bytes are NOT PCM
-	// samples — using BitDepth here produced sub-millisecond durations and silent/broken playout.
 	dur := 20 * time.Millisecond
 	if fd := strings.TrimSpace(t.codec.FrameDuration); fd != "" {
 		if d, err := time.ParseDuration(fd); err == nil && d > 0 {
@@ -113,7 +105,6 @@ func (t *Transport) Send(ctx context.Context, packet media.MediaPacket) (int, er
 }
 
 func (t *Transport) Close() error {
-	// Tracks are owned by PeerConnection; no-op here.
 	return nil
 }
 

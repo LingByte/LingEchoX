@@ -10,7 +10,6 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -31,24 +30,9 @@ var (
 	// If nil and WebSeat is requested, transfer logs a warning and releases the dedupe slot.
 	webSeatTransfer func(ctx context.Context, inboundCallID string, lg *zap.Logger)
 	transferStarted sync.Map // inbound Call-ID -> bool (dedupe)
-	// RFC2833 often emits several events per keypress; ignore repeats within this window.
-	transferDTMFLast sync.Map // inbound Call-ID -> time.Time
 	transferRingMu   sync.Mutex
 	transferRingStop map[string]context.CancelFunc
 )
-
-const transferDTMFDebounce = 450 * time.Millisecond
-
-func transferDTMFAllow(inboundCallID string) bool {
-	now := time.Now()
-	if t, ok := transferDTMFLast.Load(inboundCallID); ok {
-		if now.Sub(t.(time.Time)) < transferDTMFDebounce {
-			return false
-		}
-	}
-	transferDTMFLast.Store(inboundCallID, now)
-	return true
-}
 
 // SetTransferDialer wires the outbound module (call from cmd/sip after creating outbound.Manager).
 func SetTransferDialer(d TransferDialer) {
@@ -72,34 +56,25 @@ func SetWebSeatTransfer(fn func(ctx context.Context, inboundCallID string, lg *z
 	webSeatTransfer = fn
 }
 
-// HandleSIPINFODTMF parses SIP INFO (application/dtmf-relay) and triggers transfer when digit matches.
+// HandleSIPINFODTMF parses SIP INFO (application/dtmf-relay) for observability only.
+// Transfer is no longer triggered by keypad digits.
 func HandleSIPINFODTMF(ctx context.Context, inboundCallID string, contentType, body string, lg *zap.Logger) {
+	_ = ctx
 	if lg == nil && logger.Lg != nil {
 		lg = logger.Lg
 	}
 	if lg == nil {
 		lg = zap.NewNop()
 	}
-	digit, ok := dtmf.DigitFromSIPINFO(contentType, body)
-	if !ok {
-		return
-	}
-	lg.Info("sip info dtmf", zap.String("call_id", inboundCallID), zap.String("digit", digit))
-	tryTransferToAgent(ctx, inboundCallID, digit, lg)
+	lg.Info("sip info received (dtmf transfer disabled)",
+		zap.String("call_id", inboundCallID),
+		zap.String("content_type", strings.TrimSpace(contentType)),
+		zap.Int("body_len", len(strings.TrimSpace(body))),
+	)
 }
 
-func tryTransferToAgent(ctx context.Context, inboundCallID, digit string, lg *zap.Logger) {
-	want := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_TO_AGENT_DIGIT"))
-	if want == "" {
-		want = "0"
-	}
-	if digit != want {
-		return
-	}
-	if !transferDTMFAllow(inboundCallID) {
-		return
-	}
-
+// TriggerTransferToAgent starts transfer for an inbound call (AI/tool/fallback text).
+func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.Logger) {
 	transferMu.Lock()
 	d := transferDialer
 	resolveTgt := transferDialTarget

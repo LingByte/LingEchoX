@@ -21,7 +21,7 @@ const (
 	EnvSIPDefaultDomain  = "SIP_DEFAULT_DOMAIN"
 	EnvSIPDefaultURIPort = "SIP_DEFAULT_URI_PORT"
 
-	// Transfer-to-agent (press 0): separate from campaign outbound.
+	// Transfer-to-agent route config: separate from campaign outbound.
 	EnvSIPTransferReqURI  = "SIP_TRANSFER_REQUEST_URI"
 	EnvSIPTransferSigAddr = "SIP_TRANSFER_SIGNALING_ADDR"
 	// SIP_TRANSFER_NUMBER: extension for sip:user@SIP_TRANSFER_HOST, or literal "web" → browser WebRTC agent.
