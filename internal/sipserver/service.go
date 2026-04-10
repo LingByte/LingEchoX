@@ -497,6 +497,25 @@ func (s *Service) RunScriptIfConfigured(ctx context.Context, leg outbound.Establ
 		OnListen: func(runCtx context.Context, runLeg outbound.EstablishedLeg, timeout time.Duration) (outbound.ListenResult, error) {
 			res, err := s.waitNextTurn(runCtx, runLeg.CallID, lastTurnIndex, timeout)
 			if err != nil {
+				if logger.Lg != nil && runLeg.Session != nil && strings.Contains(strings.ToLower(err.Error()), "timeout") {
+					if rtpSess := runLeg.Session.RTPSession(); rtpSess != nil {
+						st := rtpSess.StatsSnapshot()
+						logger.Lg.Warn("script listen timeout with rtp diagnostics",
+							zap.String("call_id", runLeg.CallID),
+							zap.String("correlation_id", runLeg.CorrelationID),
+							zap.Duration("listen_timeout", timeout),
+							zap.String("local_socket", st.LocalSocket),
+							zap.String("remote_sdp", st.RemoteSDP),
+							zap.String("remote_now", st.RemoteNow),
+							zap.Uint64("tx_packets", st.TXPackets),
+							zap.Uint64("tx_bytes", st.TXBytes),
+							zap.Uint64("rx_packets", st.RXPackets),
+							zap.Uint64("rx_bytes", st.RXBytes),
+							zap.Int64("first_tx_ms_ago", st.FirstTXAgo),
+							zap.Int64("first_rx_ms_ago", st.FirstRXAgo),
+						)
+					}
+				}
 				return outbound.ListenResult{}, err
 			}
 			lastTurnIndex = res.Index
@@ -639,12 +658,6 @@ func nonEmptyOr(v, fallback string) string {
 		return fallback
 	}
 	return v
-}
-
-func (s *Service) logInfo(msg string, fields ...zap.Field) {
-	if logger.Lg != nil {
-		logger.Lg.Info(msg, fields...)
-	}
 }
 
 func (s *Service) SnapshotMetrics() map[string]int64 {

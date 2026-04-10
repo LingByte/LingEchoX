@@ -329,5 +329,3 @@ func sanitizeKey(s string) string {
 	return out
 }
 
-// MaxRecordingBytes exported for session package cap alignment.
-func MaxRecordingBytes() int { return maxRecordingBytes }

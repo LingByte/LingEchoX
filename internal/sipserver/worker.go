@@ -177,10 +177,11 @@ func (s *Service) processContact(ctx context.Context, dialer Dialer, campaign mo
 	}
 	targetSource := "campaign_static"
 	targetResolveNote := "build_dial_target"
+	resolveFromRegister := shouldResolveFromRegister(contact.Phone)
 	// Prefer latest REGISTER binding for extension-like phone values (e.g. "tide"),
 	// so campaign dialing follows current Contact IP:port instead of stale static signaling_addr.
 	// For extension calls, do NOT fallback to static signaling when no registration is found.
-	if shouldResolveFromRegister(contact.Phone) {
+	if resolveFromRegister {
 		if rt, ok := s.resolveRegisteredDialTarget(ctx, contact.Phone); ok {
 			target = rt
 			targetSource = "register_resolved"
@@ -204,15 +205,13 @@ func (s *Service) processContact(ctx context.Context, dialer Dialer, campaign mo
 				Message:       fmt.Sprintf("dial target resolved from register uri=%s signaling=%s", target.RequestURI, target.SignalingAddr),
 			})
 		} else {
-			targetSource = "campaign_static_fallback"
-			targetResolveNote = "register_miss"
+			targetSource = "register_miss"
+			targetResolveNote = "register_missing_or_stale"
 			if logger.Lg != nil {
-				logger.Lg.Warn("campaign dial target register miss, fallback static",
+				logger.Lg.Warn("campaign dial target register miss, fail fast for extension",
 					zap.Uint("campaign_id", campaign.ID),
 					zap.Uint("contact_id", contact.ID),
 					zap.String("phone", strings.TrimSpace(contact.Phone)),
-					zap.String("request_uri", target.RequestURI),
-					zap.String("signaling", target.SignalingAddr),
 				)
 			}
 			s.appendEvent(ctx, models.SIPCampaignEvent{
@@ -222,8 +221,19 @@ func (s *Service) processContact(ctx context.Context, dialer Dialer, campaign mo
 				CorrelationID: correlationID,
 				Type:          "dispatch",
 				Level:         "warn",
-				Message:       "register target not found; fallback to campaign static dial target",
+				Message:       "register target not found/stale; extension call aborted (no static fallback)",
 			})
+			s.HandleDialEvent(context.Background(), outbound.DialEvent{
+				CallID:        "",
+				CorrelationID: correlationID,
+				Scenario:      outbound.Scenario(strings.TrimSpace(campaign.Scenario)),
+				MediaProfile:  outbound.MediaProfile(strings.TrimSpace(campaign.MediaProfile)),
+				State:         outbound.DialEventFailed,
+				StatusCode:    480,
+				Reason:        "register_missing_or_stale",
+				At:            time.Now(),
+			})
+			return
 		}
 	}
 	req := outbound.DialRequest{
@@ -325,10 +335,10 @@ func (s *Service) resolveRegisteredDialTarget(ctx context.Context, phone string)
 	if err != nil || row.RemoteIP == "" || row.RemotePort <= 0 {
 		return outbound.DialTarget{}, false
 	}
-	domain := strings.TrimSpace(row.Domain)
-	if domain == "" {
-		domain = "localhost"
+	if !isSIPRegisterFresh(row.LastSeenAt) {
+		return outbound.DialTarget{}, false
 	}
+	domain := effectiveDialDomain(row.Domain, row.RemoteIP)
 	reqURI := fmt.Sprintf("sip:%s@%s:5060", row.Username, domain)
 	sig := row.RemoteIP + ":" + strconv.Itoa(row.RemotePort)
 	return outbound.DialTarget{RequestURI: reqURI, SignalingAddr: sig}, true
@@ -343,10 +353,6 @@ func shouldResolveFromRegister(phone string) bool {
 		return false
 	}
 	return true
-}
-
-func reqScenario(v string) outbound.Scenario {
-	return outbound.Scenario(strings.TrimSpace(v))
 }
 
 func normalizeDialUsername(phone string) string {

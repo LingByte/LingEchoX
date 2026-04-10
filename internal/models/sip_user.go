@@ -2,11 +2,11 @@ package models
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm"
 )
 
@@ -111,26 +111,26 @@ func UpsertSIPUserRegister(ctx context.Context, db *gorm.DB, user SIPUser) error
 	if user.LastSeenAt == nil {
 		user.LastSeenAt = &now
 	}
-	var row SIPUser
-	err := ActiveSIPUsers(db.WithContext(ctx)).
-		Where("username = ? AND domain = ?", user.Username, user.Domain).
-		First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return db.WithContext(ctx).Create(&user).Error
-	}
-	if err != nil {
-		return err
-	}
+	user.IsDeleted = SoftDeleteStatusActive
 	updates := map[string]any{
 		"contact_uri":  user.ContactURI,
 		"remote_ip":    user.RemoteIP,
 		"remote_port":  user.RemotePort,
 		"user_agent":   user.UserAgent,
+		"via":          user.Via,
 		"online":       user.Online,
 		"expires_at":   user.ExpiresAt,
 		"last_seen_at": user.LastSeenAt,
+		"is_deleted":   SoftDeleteStatusActive,
+		"updated_at":   now,
 	}
-	return db.WithContext(ctx).Model(&row).Updates(updates).Error
+	return db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "username"},
+			{Name: "domain"},
+		},
+		DoUpdates: clause.Assignments(updates),
+	}).Create(&user).Error
 }
 
 func MarkSIPUserOffline(ctx context.Context, db *gorm.DB, username, domain string) error {
