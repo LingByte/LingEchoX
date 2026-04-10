@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 	"strings"
 	"time"
 )
@@ -137,6 +138,7 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 	}
 	lastInput := ""
 	lastReply := ""
+	lastSayPrompt := ""
 	for i := 0; i < maxSteps; i++ {
 		select {
 		case <-ctx.Done():
@@ -178,6 +180,7 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 					})
 					return err
 				}
+				lastSayPrompt = p
 			}
 		case ScriptStepListen:
 			timeoutMS := step.ListenTimeoutMS
@@ -186,6 +189,11 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 			}
 			if timeoutMS <= 0 {
 				timeoutMS = 8000
+			}
+			// Script flow may advance to listen before remote playout fully ends on some media paths.
+			// Add a prompt-length-based tail so listen timeout starts "after AI finishes speaking" in practice.
+			if lastSayPrompt != "" {
+				timeoutMS += estimatePromptTailMS(lastSayPrompt)
 			}
 			if r.Hooks.OnListen != nil {
 				res, err := r.Hooks.OnListen(ctx, leg, time.Duration(timeoutMS)*time.Millisecond)
@@ -215,6 +223,7 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 					lastReply = strings.TrimSpace(res.ReplyText)
 				}
 			}
+			lastSayPrompt = ""
 			if r.hitEndIntent(lastInput) {
 				nextID = ""
 				_ = r.record(ctx, ScriptRunEvent{
@@ -279,6 +288,23 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 		current = nextID
 	}
 	return fmt.Errorf("hybrid script reached max steps")
+}
+
+func estimatePromptTailMS(prompt string) int {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return 0
+	}
+	n := utf8.RuneCountInString(prompt)
+	// ~7 chars/sec for mixed zh text, clamped to avoid over-waiting.
+	ms := n * 140
+	if ms < 800 {
+		return 800
+	}
+	if ms > 6000 {
+		return 6000
+	}
+	return ms
 }
 
 func (r *HybridScriptRunner) record(ctx context.Context, event ScriptRunEvent) error {

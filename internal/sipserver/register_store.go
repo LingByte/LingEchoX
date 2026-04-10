@@ -106,10 +106,10 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 	if row.RemoteIP == "" || row.RemotePort <= 0 {
 		return zero, false
 	}
-	d := row.Domain
-	if d == "" {
-		d = "localhost"
+	if !isSIPRegisterFresh(row.LastSeenAt) {
+		return zero, false
 	}
+	d := effectiveDialDomain(row.Domain, row.RemoteIP)
 	port := 5060
 	if ps := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPDefaultURIPort)); ps != "" {
 		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {

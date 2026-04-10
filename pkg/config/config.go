@@ -157,7 +157,7 @@ func Load() error {
 			URL:           getStringOrDefault("SERVER_URL", ""),
 			Logo:          getStringOrDefault("SERVER_LOGO", ""),
 			TermsURL:      getStringOrDefault("SERVER_TERMS_URL", ""),
-			Addr:          getStringOrDefault("ADDR", ":7072"),
+			Addr:          getStringOrDefault("ADDR", ":8082"),
 			Mode:          getStringOrDefault("MODE", "development"),
 			DocsPrefix:    getStringOrDefault("DOCS_PREFIX", "/api/docs"),
 			APIPrefix:     getStringOrDefault("API_PREFIX", "/api"),

@@ -99,7 +99,7 @@ func main() {
 	// 8. Load Base Configs
 	var addr = config.GlobalConfig.Server.Addr
 	if addr == "" {
-		addr = ":7072"
+		addr = ":8082"
 	}
 
 	var DBDriver = config.GlobalConfig.Database.Driver

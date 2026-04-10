@@ -3,7 +3,9 @@ package rtp
 import (
 	"fmt"
 	"net"
+	"sync/atomic"
 	"sync"
+	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"go.uber.org/zap"
@@ -33,6 +35,38 @@ type Session struct {
 
 	logFirstUDP sync.Once
 	logFirstTX  sync.Once
+	logStatsOnce sync.Once
+	closeOnce    sync.Once
+	statsStopCh  chan struct{}
+
+	txPackets uint64
+	txBytes   uint64
+	rxPackets uint64
+	rxBytes   uint64
+
+	firstTxUnixNano int64
+	firstRxUnixNano int64
+	natWarned       uint32
+
+	mirrorMu      sync.RWMutex
+	mirrorRemotes []mirrorRemote
+}
+
+type mirrorRemote struct {
+	addr      *net.UDPAddr
+	expiresAt time.Time
+}
+
+type SessionStats struct {
+	LocalSocket string
+	RemoteSDP   string
+	RemoteNow   string
+	TXPackets   uint64
+	TXBytes     uint64
+	RXPackets   uint64
+	RXBytes     uint64
+	FirstTXAgo  int64
+	FirstRXAgo  int64
 }
 
 // NewSession creates a RTP UDP session.
@@ -55,6 +89,7 @@ func NewSession(localPort int) (*Session, error) {
 		SeqNum:        0,
 		Timestamp:     0,
 		firstPacketCh: make(chan struct{}),
+		statsStopCh:   make(chan struct{}),
 	}, nil
 }
 
@@ -63,12 +98,53 @@ func (s *Session) FirstPacket() <-chan struct{} {
 	return s.firstPacketCh
 }
 
+func (s *Session) StatsSnapshot() SessionStats {
+	if s == nil {
+		return SessionStats{}
+	}
+	return SessionStats{
+		LocalSocket: addrStringOrEmpty(s.LocalAddr),
+		RemoteSDP:   addrStringOrEmpty(s.sdpRemote),
+		RemoteNow:   addrStringOrEmpty(s.RemoteAddr),
+		TXPackets:   atomic.LoadUint64(&s.txPackets),
+		TXBytes:     atomic.LoadUint64(&s.txBytes),
+		RXPackets:   atomic.LoadUint64(&s.rxPackets),
+		RXBytes:     atomic.LoadUint64(&s.rxBytes),
+		FirstTXAgo:  sinceMillis(atomic.LoadInt64(&s.firstTxUnixNano)),
+		FirstRXAgo:  sinceMillis(atomic.LoadInt64(&s.firstRxUnixNano)),
+	}
+}
+
 // SetRemoteAddr sets the remote RTP address for outgoing packets.
 func (s *Session) SetRemoteAddr(addr *net.UDPAddr) {
 	s.RemoteAddr = addr
 	if s.sdpRemote == nil && addr != nil {
 		s.sdpRemote = cloneUDPAddr(addr)
 	}
+}
+
+// AddMirrorRemote adds a temporary extra RTP destination for outbound packets.
+// Useful for NAT/ALG scenarios where real media port differs from SDP offer.
+func (s *Session) AddMirrorRemote(addr *net.UDPAddr, ttl time.Duration) {
+	if s == nil || addr == nil || addr.IP == nil || addr.Port <= 0 || ttl <= 0 {
+		return
+	}
+	exp := time.Now().Add(ttl)
+	cp := cloneUDPAddr(addr)
+	s.mirrorMu.Lock()
+	defer s.mirrorMu.Unlock()
+	// refresh existing mirror target if present
+	for i := range s.mirrorRemotes {
+		m := s.mirrorRemotes[i]
+		if m.addr != nil && m.addr.IP.Equal(cp.IP) && m.addr.Port == cp.Port {
+			s.mirrorRemotes[i].expiresAt = exp
+			return
+		}
+	}
+	s.mirrorRemotes = append(s.mirrorRemotes, mirrorRemote{
+		addr:      cp,
+		expiresAt: exp,
+	})
 }
 
 func cloneUDPAddr(a *net.UDPAddr) *net.UDPAddr {
@@ -126,6 +202,12 @@ func (s *Session) SendRTP(payload []byte, payloadType uint8, samples uint32) err
 	if _, err := s.Conn.WriteToUDP(data, s.RemoteAddr); err != nil {
 		return fmt.Errorf("rtp: send: %w", err)
 	}
+	s.sendMirrorRTP(data, s.RemoteAddr)
+	atomic.AddUint64(&s.txPackets, 1)
+	atomic.AddUint64(&s.txBytes, uint64(len(payload)))
+	nowUnix := time.Now().UnixNano()
+	_ = atomic.CompareAndSwapInt64(&s.firstTxUnixNano, 0, nowUnix)
+	s.startStatsLoop()
 
 	s.logFirstTX.Do(func() {
 		if logger.Lg != nil {
@@ -157,6 +239,10 @@ func (s *Session) ReceiveRTP(buffer []byte) (n int, from *net.UDPAddr, packet *R
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("rtp: read udp: %w", err)
 	}
+	atomic.AddUint64(&s.rxPackets, 1)
+	atomic.AddUint64(&s.rxBytes, uint64(n))
+	_ = atomic.CompareAndSwapInt64(&s.firstRxUnixNano, 0, time.Now().UnixNano())
+	s.startStatsLoop()
 
 	s.logFirstUDP.Do(func() {
 		if logger.Lg != nil {
@@ -202,9 +288,119 @@ func (s *Session) Close() error {
 	if s == nil {
 		return nil
 	}
-	if s.Conn != nil {
-		return s.Conn.Close()
+	var err error
+	s.closeOnce.Do(func() {
+		if s.statsStopCh != nil {
+			close(s.statsStopCh)
+		}
+		if s.Conn != nil {
+			err = s.Conn.Close()
+		}
+	})
+	return err
+}
+
+func (s *Session) sendMirrorRTP(data []byte, primary *net.UDPAddr) {
+	if s == nil || s.Conn == nil || len(data) == 0 {
+		return
 	}
-	return nil
+	now := time.Now()
+	s.mirrorMu.Lock()
+	if len(s.mirrorRemotes) == 0 {
+		s.mirrorMu.Unlock()
+		return
+	}
+	live := s.mirrorRemotes[:0]
+	for _, m := range s.mirrorRemotes {
+		if m.addr == nil || m.addr.IP == nil || m.addr.Port <= 0 || !m.expiresAt.After(now) {
+			continue
+		}
+		live = append(live, m)
+	}
+	s.mirrorRemotes = live
+	remotes := make([]*net.UDPAddr, 0, len(live))
+	for _, m := range live {
+		remotes = append(remotes, cloneUDPAddr(m.addr))
+	}
+	s.mirrorMu.Unlock()
+
+	for _, r := range remotes {
+		if r == nil {
+			continue
+		}
+		if primary != nil && primary.IP != nil && primary.IP.Equal(r.IP) && primary.Port == r.Port {
+			continue
+		}
+		_, _ = s.Conn.WriteToUDP(data, r)
+	}
+}
+
+func (s *Session) startStatsLoop() {
+	if s == nil {
+		return
+	}
+	s.logStatsOnce.Do(func() {
+		go s.statsLoop()
+	})
+}
+
+func (s *Session) statsLoop() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.statsStopCh:
+			return
+		case <-ticker.C:
+			if logger.Lg == nil {
+				continue
+			}
+			txP := atomic.LoadUint64(&s.txPackets)
+			rxP := atomic.LoadUint64(&s.rxPackets)
+			if txP == 0 && rxP == 0 {
+				continue
+			}
+			txB := atomic.LoadUint64(&s.txBytes)
+			rxB := atomic.LoadUint64(&s.rxBytes)
+			logger.Lg.Info("rtp session stats",
+				zap.String("local_socket", addrStringOrEmpty(s.LocalAddr)),
+				zap.String("remote_target", addrStringOrEmpty(s.RemoteAddr)),
+				zap.Uint64("tx_packets", txP),
+				zap.Uint64("tx_bytes", txB),
+				zap.Uint64("rx_packets", rxP),
+				zap.Uint64("rx_bytes", rxB),
+				zap.Int64("first_tx_ms_ago", sinceMillis(atomic.LoadInt64(&s.firstTxUnixNano))),
+				zap.Int64("first_rx_ms_ago", sinceMillis(atomic.LoadInt64(&s.firstRxUnixNano))),
+			)
+			firstTx := atomic.LoadInt64(&s.firstTxUnixNano)
+			if txP > 0 && rxP == 0 && firstTx > 0 && time.Since(time.Unix(0, firstTx)) >= 10*time.Second {
+				if atomic.CompareAndSwapUint32(&s.natWarned, 0, 1) {
+					logger.Lg.Warn("rtp nat suspected: outbound active but inbound silent",
+						zap.String("local_socket", addrStringOrEmpty(s.LocalAddr)),
+						zap.String("remote_target", addrStringOrEmpty(s.RemoteAddr)),
+						zap.Uint64("tx_packets", txP),
+						zap.Uint64("tx_bytes", txB),
+						zap.Uint64("rx_packets", rxP),
+						zap.Uint64("rx_bytes", rxB),
+						zap.Int64("first_tx_ms_ago", sinceMillis(firstTx)),
+					)
+				}
+			}
+		}
+	}
+}
+
+func sinceMillis(unixNano int64) int64 {
+	if unixNano <= 0 {
+		return -1
+	}
+	return time.Since(time.Unix(0, unixNano)).Milliseconds()
+}
+
+func addrStringOrEmpty(a *net.UDPAddr) string {
+	if a == nil {
+		return ""
+	}
+	return a.String()
 }
 

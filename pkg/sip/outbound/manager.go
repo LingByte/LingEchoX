@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +18,88 @@ import (
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"go.uber.org/zap"
 )
+
+var (
+	outboundRTPPortAllocMu sync.Mutex
+	outboundRTPPortNext    int
+)
+
+func isPrivateIPv4(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+	switch {
+	case v4[0] == 10:
+		return true
+	case v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31:
+		return true
+	case v4[0] == 192 && v4[1] == 168:
+		return true
+	default:
+		return false
+	}
+}
+
+// newOutboundRTPSession allocates RTP UDP port based on env:
+// - SIP_RTP_PORT: fixed single port
+// - SIP_RTP_PORT_START/SIP_RTP_PORT_END: rotating range
+// - fallback: ephemeral (port 0)
+func newOutboundRTPSession() (*rtp.Session, error) {
+	if fixed, ok := envInt("SIP_RTP_PORT"); ok && fixed > 0 {
+		logger.Info("sip outbound rtp port policy: fixed", zap.Int("port", fixed))
+		return rtp.NewSession(fixed)
+	}
+	start, hasStart := envInt("SIP_RTP_PORT_START")
+	end, hasEnd := envInt("SIP_RTP_PORT_END")
+	if hasStart && hasEnd && start > 0 && end >= start {
+		logger.Info("sip outbound rtp port policy: range", zap.Int("start", start), zap.Int("end", end))
+		return newOutboundRTPSessionFromRange(start, end)
+	}
+	logger.Info("sip outbound rtp port policy: ephemeral")
+	return rtp.NewSession(0)
+}
+
+func envInt(name string) (int, bool) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func newOutboundRTPSessionFromRange(start, end int) (*rtp.Session, error) {
+	outboundRTPPortAllocMu.Lock()
+	defer outboundRTPPortAllocMu.Unlock()
+	span := end - start + 1
+	if span <= 0 {
+		return nil, fmt.Errorf("invalid outbound RTP port range: %d-%d", start, end)
+	}
+	if outboundRTPPortNext < start || outboundRTPPortNext > end {
+		outboundRTPPortNext = start
+	}
+	var lastErr error
+	for i := 0; i < span; i++ {
+		p := outboundRTPPortNext
+		outboundRTPPortNext++
+		if outboundRTPPortNext > end {
+			outboundRTPPortNext = start
+		}
+		sess, err := rtp.NewSession(p)
+		if err == nil {
+			return sess, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("outbound rtp range exhausted %d-%d: %w", start, end, lastErr)
+}
 
 // SignalingSender sends SIP on the shared UDP socket (typically *server.SIPServer).
 type SignalingSender interface {
@@ -59,8 +143,9 @@ type Manager struct {
 	cfg  ManagerConfig
 	send func(*protocol.Message, *net.UDPAddr) error
 
-	mu   sync.Mutex
-	legs map[string]*outLeg
+	mu       sync.Mutex
+	legs     map[string]*outLeg // keyed by local outbound Call-ID
+	legsByTx map[string]*outLeg // keyed by INVITE transaction (Via branch + CSeq)
 }
 
 // NewManager constructs a manager; call BindSender before Dial.
@@ -69,8 +154,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 		cfg.FromUser = "soulnexus"
 	}
 	return &Manager{
-		cfg:  cfg,
-		legs: make(map[string]*outLeg),
+		cfg:     cfg,
+		legs:    make(map[string]*outLeg),
+		legsByTx: make(map[string]*outLeg),
 	}
 }
 
@@ -89,14 +175,26 @@ func (m *Manager) HandleSIPResponse(resp *protocol.Message, addr *net.UDPAddr) {
 	if m == nil || resp == nil {
 		return
 	}
-	callID := resp.GetHeader("Call-ID")
-	if callID == "" {
-		return
-	}
+	txKey := txKeyFromResponse(resp)
+	callID := strings.TrimSpace(resp.GetHeader("Call-ID"))
 	m.mu.Lock()
-	leg := m.legs[callID]
+	leg := (*outLeg)(nil)
+	if txKey != "" {
+		leg = m.legsByTx[txKey]
+	}
+	if leg == nil && callID != "" {
+		leg = m.legs[callID]
+	}
 	m.mu.Unlock()
 	if leg == nil {
+		logger.Warn("sip outbound unmatched response",
+			zap.String("call_id", callID),
+			zap.String("tx_key", txKey),
+			zap.String("cseq", strings.TrimSpace(resp.GetHeader("CSeq"))),
+			zap.String("via", strings.TrimSpace(resp.GetHeader("Via"))),
+			zap.Int("status", resp.StatusCode),
+			zap.String("remote", udpAddrString(addr)),
+		)
 		return
 	}
 	leg.handleResponse(context.Background(), resp, addr)
@@ -141,7 +239,7 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		localSDP = "127.0.0.1"
 	}
 
-	rtpSess, err := rtp.NewSession(0)
+	rtpSess, err := newOutboundRTPSession()
 	if err != nil {
 		return "", fmt.Errorf("sip/outbound: rtp session: %w", err)
 	}
@@ -198,10 +296,14 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		req:     req,
 		rtpSess: rtpSess,
 		dst:     addr,
+		txKey:   inviteTxKey(params.Branch, params.CSeq),
 	}
 
 	m.mu.Lock()
 	m.legs[callID] = leg
+	if leg.txKey != "" {
+		m.legsByTx[leg.txKey] = leg
+	}
 	m.mu.Unlock()
 
 	if err := m.send(invite, addr); err != nil {
@@ -250,6 +352,7 @@ type outLeg struct {
 	byeRequestURI string // in-dialog Request-URI (Contact)
 	byeRemote     *net.UDPAddr
 	byeCSeqNext   int
+	txKey         string
 }
 
 func (leg *outLeg) handleResponse(ctx context.Context, resp *protocol.Message, from *net.UDPAddr) {
@@ -345,7 +448,20 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *protocol.Message, f
 		leg.cleanupLeg()
 		return
 	}
-	leg.rtpSess.SetRemoteAddr(&net.UDPAddr{IP: remoteIP, Port: sdp.Port})
+	remoteRTP := &net.UDPAddr{IP: remoteIP, Port: sdp.Port}
+	// NAT fallback for outbound UAC legs: when answer SDP has a private media IP but
+	// response source is public/reachable, use response source IP + SDP port.
+	if from != nil && isPrivateIPv4(remoteIP) && from.IP != nil && from.IP.To4() != nil && !isPrivateIPv4(from.IP) {
+		remoteRTP = &net.UDPAddr{IP: from.IP, Port: sdp.Port}
+		logger.Info("sip outbound media target overridden (private SDP IP fallback)",
+			zap.String("call_id", leg.params.CallID),
+			zap.String("sdp_remote_ip", remoteIP.String()),
+			zap.String("sip_source_ip", from.IP.String()),
+			zap.Int("media_port", sdp.Port),
+			zap.String("chosen_remote_rtp", remoteRTP.String()),
+		)
+	}
+	leg.rtpSess.SetRemoteAddr(remoteRTP)
 
 	cs, err := sipSession.NewCallSession(leg.params.CallID, leg.rtpSess, sdp.Codecs)
 	if err != nil {
@@ -509,6 +625,9 @@ func (leg *outLeg) cleanupLeg() {
 	m := leg.m
 	m.mu.Lock()
 	delete(m.legs, callID)
+	if leg.txKey != "" {
+		delete(m.legsByTx, leg.txKey)
+	}
 	m.mu.Unlock()
 	if leg.rtpSess != nil {
 		_ = leg.rtpSess.Close()
@@ -521,4 +640,37 @@ func randomHex(nBytes int) string {
 		return fmt.Sprintf("%d", nBytes)
 	}
 	return hex.EncodeToString(b)
+}
+
+func inviteTxKey(branch string, cseq int) string {
+	branch = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(branch), "z9hG4bK"))
+	if branch == "" || cseq <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s|%d", branch, cseq)
+}
+
+func txKeyFromResponse(resp *protocol.Message) string {
+	if resp == nil {
+		return ""
+	}
+	cseqNum := parseCSeqNum(strings.TrimSpace(resp.GetHeader("CSeq")))
+	if cseqNum <= 0 {
+		return ""
+	}
+	via := strings.TrimSpace(resp.GetHeader("Via"))
+	if via == "" {
+		return ""
+	}
+	lower := strings.ToLower(via)
+	idx := strings.Index(lower, "branch=")
+	if idx < 0 {
+		return ""
+	}
+	val := via[idx+len("branch="):]
+	if semi := strings.Index(val, ";"); semi >= 0 {
+		val = val[:semi]
+	}
+	val = strings.TrimSpace(strings.Trim(val, "\""))
+	return inviteTxKey(val, cseqNum)
 }
