@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
@@ -349,4 +350,52 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 	if e.sipServer != nil {
 		_ = e.sipServer.Stop()
 	}
+}
+
+// PickTransferDialTarget selects one row from acd_pool_targets for blind transfer (DTMF).
+// Eligible: not deleted, weight > 0, work_state = available, route_type sip or web.
+// Ordering: weight DESC, id ASC (highest weight wins; tie-break lower id first).
+//   - web → WebSeat (browser agent leg).
+//   - sip trunk → DialTargetFromACDTrunk; sip internal → reg.DialTargetForUsername.
+//
+// SIP rows: sipCallerId / sipCallerDisplayName copied onto DialTarget when set.
+func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *GormStore) (outbound.DialTarget, bool) {
+	if db == nil {
+		return outbound.DialTarget{}, false
+	}
+	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db)
+	if err != nil {
+		return outbound.DialTarget{}, false
+	}
+
+	if row.RouteType == models.ACDPoolRouteTypeWeb {
+		return outbound.DialTarget{WebSeat: true}, true
+	}
+
+	var dt outbound.DialTarget
+	src := strings.ToLower(strings.TrimSpace(row.SipSource))
+	switch src {
+	case models.ACDSipSourceTrunk:
+		t, ok := outbound.DialTargetFromACDTrunk(row.TargetValue, row.SipTrunkHost, row.SipTrunkSignalingAddr, row.SipTrunkPort)
+		if !ok {
+			return outbound.DialTarget{}, false
+		}
+		dt = t
+	default:
+		if reg == nil {
+			return outbound.DialTarget{}, false
+		}
+		u := strings.TrimSpace(row.TargetValue)
+		if u == "" {
+			return outbound.DialTarget{}, false
+		}
+		t, ok := reg.DialTargetForUsername(ctx, u)
+		if !ok {
+			return outbound.DialTarget{}, false
+		}
+		dt = t
+	}
+	dt.CallerUser = strings.TrimSpace(row.SipCallerID)
+	dt.CallerDisplayName = strings.TrimSpace(row.SipCallerDisplayName)
+	return dt, true
 }

@@ -78,10 +78,6 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 	if len(sdpCodecs) == 0 {
 		return nil, fmt.Errorf("sip: empty sdp codecs")
 	}
-
-	// Prefer higher quality codecs instead of blindly following offer order.
-	// Many SIP UAs advertise PCMU/PCMA first for compatibility, which would lock
-	// us to 8k narrowband and sound "muffled" even when Opus/G.722 is available.
 	preferredCodecs := map[string]int{
 		"opus": 0,
 		"g722": 1,
@@ -117,11 +113,11 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 			negotiatedSDP = c
 			negotiatedSDP.Channels = 1
 			src = media.CodecConfig{
-				Codec:         c.Name, // "pcmu" or "pcma"
-				SampleRate:    c.ClockRate,
-				Channels:      1,
-				BitDepth:      8, // PCMU/PCMA payload is 8-bit
-				PayloadType:   negotiatedPayloadType,
+				Codec:       c.Name, // "pcmu" or "pcma"
+				SampleRate:  c.ClockRate,
+				Channels:    1,
+				BitDepth:    8, // PCMU/PCMA payload is 8-bit
+				PayloadType: negotiatedPayloadType,
 				// Use 20ms frames for RTP audio so encoder/decoder match
 				// typical SIP/RTP expectations and keep payload sizes bounded.
 				FrameDuration: "20ms",
@@ -453,4 +449,3 @@ func sipMediaMaxSecondsFromEnv() int {
 	}
 	return n
 }
-
