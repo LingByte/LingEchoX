@@ -137,11 +137,14 @@ func nonZero(n, def int) int {
 	return n
 }
 
-// defaultOfferCodecs mirrors typical softphone offers (PCMU + Opus).
+// defaultOfferCodecs orders wideband first so many carriers answer with Opus or G.722 instead of
+// locking to 8 kHz PCMU (muffled recordings). PCMU remains as a narrowband fallback.
 func defaultOfferCodecs() []protocol.SDPCodec {
 	return []protocol.SDPCodec{
-		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
 		{PayloadType: 111, Name: "opus", ClockRate: 48000, Channels: 1},
+		{PayloadType: 9, Name: "g722", ClockRate: 8000, Channels: 1},
+		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
+		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000, Channels: 1},
 	}
 }
 

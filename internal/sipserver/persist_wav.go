@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"strings"
+
+	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 )
 
 // G711TaggedRecordingToWav decodes tagged SIP recordings:
@@ -95,6 +97,107 @@ func G711PayloadsToWav(payloads []byte, codec string) []byte {
 		pcm = decodeMuLaw(payloads)
 	}
 	return pcm16MonoToWav(pcm, 8000)
+}
+
+// G722TaggedRecordingToWav decodes SN2/SN1-tagged G.722 RTP payloads to 16 kHz mono WAV (wideband).
+func G722TaggedRecordingToWav(b []byte) []byte {
+	if len(b) >= 3 && b[0] == 'S' && b[1] == 'N' && b[2] == '2' {
+		return g722TaggedFramesV2ToPcmWav(b[3:])
+	}
+	if len(b) >= 3 && b[0] == 'S' && b[1] == 'N' && b[2] == '1' {
+		return g722TaggedFramesV1ToPcmWav(b[3:])
+	}
+	return g722RawPayloadsToWav(b)
+}
+
+func g722PCMBytesToMono16(pcmBytes []byte) []int16 {
+	out := make([]int16, 0, len(pcmBytes)/4)
+	for i := 0; i+3 < len(pcmBytes); i += 4 {
+		s1 := int16(binary.LittleEndian.Uint16(pcmBytes[i:]))
+		s2 := int16(binary.LittleEndian.Uint16(pcmBytes[i+2:]))
+		out = append(out, int16((int32(s1)+int32(s2))/2))
+	}
+	return out
+}
+
+func g722TaggedFramesV2ToPcmWav(b []byte) []byte {
+	decUser := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
+	decAI := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
+	var pcm []int16
+	const aiPriorityHoldFrames = 8
+	aiPriorityLeft := 0
+	for len(b) >= 9 {
+		dir := b[0]
+		n := int(binary.LittleEndian.Uint16(b[7:9]))
+		b = b[9:]
+		if n <= 0 || n > 2000 || len(b) < n {
+			break
+		}
+		chunk := b[:n]
+		b = b[n:]
+		if dir == recTagAILeg {
+			aiPriorityLeft = aiPriorityHoldFrames
+		} else if aiPriorityLeft > 0 {
+			aiPriorityLeft--
+			continue
+		}
+		dec := decUser
+		switch dir {
+		case recTagUserLeg:
+			dec = decUser
+		case recTagAILeg:
+			dec = decAI
+		default:
+			continue
+		}
+		pcmBytes := dec.Decode(chunk)
+		pcm = append(pcm, g722PCMBytesToMono16(pcmBytes)...)
+	}
+	return pcm16MonoToWav(pcm, 16000)
+}
+
+func g722TaggedFramesV1ToPcmWav(b []byte) []byte {
+	decUser := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
+	decAI := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
+	var pcm []int16
+	const aiPriorityHoldFrames = 8
+	aiPriorityLeft := 0
+	for len(b) >= 3 {
+		dir := b[0]
+		n := int(binary.LittleEndian.Uint16(b[1:3]))
+		b = b[3:]
+		if n <= 0 || n > 2000 || len(b) < n {
+			break
+		}
+		chunk := b[:n]
+		b = b[n:]
+		if dir == recTagAILeg {
+			aiPriorityLeft = aiPriorityHoldFrames
+		} else if aiPriorityLeft > 0 {
+			aiPriorityLeft--
+			continue
+		}
+		dec := decUser
+		switch dir {
+		case recTagUserLeg:
+			dec = decUser
+		case recTagAILeg:
+			dec = decAI
+		default:
+			continue
+		}
+		pcmBytes := dec.Decode(chunk)
+		pcm = append(pcm, g722PCMBytesToMono16(pcmBytes)...)
+	}
+	return pcm16MonoToWav(pcm, 16000)
+}
+
+func g722RawPayloadsToWav(payloads []byte) []byte {
+	if len(payloads) == 0 {
+		return nil
+	}
+	dec := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
+	return pcm16MonoToWav(g722PCMBytesToMono16(dec.Decode(payloads)), 16000)
 }
 
 func decodeMuLaw(in []byte) []int16 {

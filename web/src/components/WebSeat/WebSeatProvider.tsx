@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
-import { useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { clearWebSeatAcdPoolAnchor, ensureWebSeatAcdPoolRowOnline, postWebSeatAcdHeartbeat, setWebSeatAcdPoolRowOffline } from '@/api/sipContactCenter'
 import { showAlert } from '@/utils/notification'
@@ -7,7 +6,6 @@ import { WebSeatContext, type WebSeatContextValue, type WebSeatWsState } from '.
 import { getUserMediaAudioOnly } from './getUserMediaCompat'
 import { buildWebSeatWebSocketURL, webSeatHttpBase, webSeatWsBase, webSeatWsToken } from './webseatEnv'
 import { WebSeatIncomingCallCard } from './WebSeatIncomingCallCard'
-import { WebSeatWsIndicator } from './WebSeatWsIndicator'
 
 const WEBSEAT_ACD_HEARTBEAT_MS = 30_000
 const MAX_SIGNAL_LINES = 400
@@ -35,7 +33,6 @@ function waitForWebSocketOpen(wsRef: MutableRefObject<WebSocket | null>, timeout
 }
 
 export function WebSeatProvider({ children }: { children: ReactNode }) {
-  const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const httpBase = useMemo(() => webSeatHttpBase(), [])
   const wsBase = useMemo(() => webSeatWsBase(), [])
@@ -184,6 +181,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     const pc = pcRef.current
     const ls = localStreamRef.current
     const ra = remoteAudioRef.current
+    const stayOnline = acdHeartbeatTimerRef.current != null
     if (cid && httpBase) {
       void fetch(`${httpBase}/webseat/v1/hangup`, {
         method: 'POST',
@@ -216,7 +214,18 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     setInCall(false)
     setHangupDisabled(true)
     logSignal('manual hangup sent', cid)
-  }, [httpBase, logSignal])
+    // 仅挂断通话：保持 ACD 在线与 WS 订阅来电；若链路异常断开则自动重连
+    if (stayOnline) {
+      const w = wsRef.current
+      if (w && w.readyState === WebSocket.OPEN) {
+        setWsState('open')
+        setWsStatusText('WS：已上线（等待来电）')
+      } else {
+        logSignal('hangup: WS not open while staying online, reconnecting')
+        connectWebSocket()
+      }
+    }
+  }, [connectWebSocket, httpBase, logSignal])
 
   const answerIncoming = useCallback(async () => {
     const cid = pendingIncomingCallId
@@ -374,24 +383,16 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     goOffline,
   }), [configured, goOffline, goOnline, hangup, hangupDisabled, inCall, pendingIncomingCallId, presenceOnline, presenceWsClients, reconnectWebSocket, rxLog, signalLog, wsState, wsStatusText])
 
-  const showOverlay = location.pathname.startsWith('/web-agents')
-
   return (
     <WebSeatContext.Provider value={ctxValue}>
       {children}
-      {configured && showOverlay && (
-        <div className="pointer-events-none fixed right-2 z-[200] flex flex-col items-end gap-3 top-[66px] lg:top-2">
-          {pendingIncomingCallId && (
-            <WebSeatIncomingCallCard className="pointer-events-auto" callId={pendingIncomingCallId} onAnswer={() => void answerIncoming()} onReject={() => void rejectIncoming()} />
-          )}
-          <WebSeatWsIndicator
+      {configured && pendingIncomingCallId && (
+        <div className="pointer-events-none fixed bottom-4 right-4 z-[300] flex max-w-[calc(100vw-2rem)] justify-end sm:bottom-6 sm:right-6">
+          <WebSeatIncomingCallCard
             className="pointer-events-auto"
-            wsState={wsState}
-            wsStatusText={wsStatusText}
-            presenceWsClients={presenceWsClients}
-            onGoOnline={() => void goOnline()}
-            onGoOffline={() => void goOffline()}
-            onReconnect={reconnectWebSocket}
+            callId={pendingIncomingCallId}
+            onAnswer={() => void answerIncoming()}
+            onReject={() => void rejectIncoming()}
           />
         </div>
       )}

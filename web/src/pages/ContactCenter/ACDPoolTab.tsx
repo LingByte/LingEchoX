@@ -38,6 +38,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   const [sipUsersPick, setSipUsersPick] = useState<SIPUserRow[]>([])
   const [acdDeleteOpen, setAcdDeleteOpen] = useState(false)
   const [acdDeleteId, setAcdDeleteId] = useState<number | null>(null)
+  const [acdDeleteLoading, setAcdDeleteLoading] = useState(false)
   const pageSize = 20
   const load = useCallback(async () => {
     if (!active) return
@@ -82,10 +83,22 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   }
   const confirmAcdDelete = async () => {
     if (acdDeleteId == null) return
-    const res = await deleteACDPoolTarget(acdDeleteId)
-    if (res.code !== 200) throw new Error(res.msg || '删除失败')
-    showAlert('删除成功', 'success')
-    void load()
+    setAcdDeleteLoading(true)
+    try {
+      const res = await deleteACDPoolTarget(acdDeleteId)
+      if (res.code !== 200) {
+        showAlert(res.msg || '删除失败', 'error')
+        return
+      }
+      showAlert('删除成功', 'success')
+      setAcdDeleteOpen(false)
+      setAcdDeleteId(null)
+      void load()
+    } catch (e: unknown) {
+      showAlert(e instanceof Error ? e.message : '删除失败', 'error')
+    } finally {
+      setAcdDeleteLoading(false)
+    }
   }
   const workStateLabel = (s: string) => ({ offline: '离线', available: '可用', ringing: '振铃中', busy: '忙碌', acw: '话后整理', break: '休息' } as Record<string, string>)[s] || s
   return (
@@ -153,13 +166,14 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
       )}
       <ConfirmDialog
         isOpen={acdDeleteOpen}
-        onClose={() => { setAcdDeleteOpen(false); setAcdDeleteId(null) }}
-        onConfirm={confirmAcdDelete}
+        onClose={() => { if (!acdDeleteLoading) { setAcdDeleteOpen(false); setAcdDeleteId(null) } }}
+        onConfirm={() => { void confirmAcdDelete() }}
         title="确认删除号码池目标"
         message="删除后不可恢复，确认继续吗？"
         confirmText="确认删除"
         cancelText="取消"
         variant="danger"
+        loading={acdDeleteLoading}
       />
     </div>
   )
