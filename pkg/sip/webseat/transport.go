@@ -20,7 +20,6 @@ type Transport struct {
 	rxTrack  *webrtc.TrackRemote
 	txTrack  *webrtc.TrackLocalStaticSample
 	codec    media.CodecConfig
-	attached *media.MediaSession
 }
 
 func NewTransport(rx *webrtc.TrackRemote, tx *webrtc.TrackLocalStaticSample, codec media.CodecConfig) *Transport {
@@ -36,7 +35,7 @@ func (t *Transport) String() string {
 }
 
 func (t *Transport) Attach(s *media.MediaSession) {
-	t.attached = s
+	_ = s
 }
 
 func (t *Transport) Codec() media.CodecConfig {

@@ -358,15 +358,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		llmModel = "qwen-plus"
 	}
 	systemPrompt := popSIPCallSystemPrompt(cs.CallID)
-	//	if systemPrompt == "" {
-	//		systemPrompt = `你是七牛云语音通话助手。只用中文，简短直接（1-2句）。
-	//规则：
-	//1) 知道就直接说知道并给结论；不要说“我帮您查一下/稍等我查下/我为您查询”。
-	//2) 不知道就明确说“不知道/无法确定”，并给一个最小可执行建议。
-	//3) 不得捏造事实，不得假装已经查询过。
-	//4) 不反问，不让用户澄清，不说空话套话。
-	//5) 用户明确要求转人工时，必须触发 transfer_to_agent 动作，并给一句简短确认。`
-	//	}
 	llmEndpointOrAppID := env.LLMBaseURL
 	if strings.EqualFold(env.LLMProvider, "alibaba") {
 		llmEndpointOrAppID = strings.TrimSpace(env.LLMAppID)

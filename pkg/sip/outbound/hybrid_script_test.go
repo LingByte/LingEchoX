@@ -58,7 +58,7 @@ func TestRunner_ListenTimeoutFallback(t *testing.T) {
 	}
 	rec := &inMemoryRecorder{}
 	r := NewHybridScriptRunner(script, rec).WithHooks(RuntimeHooks{
-		OnListen: func(_ context.Context, _ EstablishedLeg, _ time.Duration) (ListenResult, error) {
+		OnListen: func(_ context.Context, _ EstablishedLeg, _ time.Duration, _ time.Time) (ListenResult, error) {
 			return ListenResult{}, context.DeadlineExceeded
 		},
 	})

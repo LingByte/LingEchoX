@@ -692,7 +692,7 @@ func (s *SIPServer) handleInfo(msg *protocol.Message, _ *net.UDPAddr) *protocol.
 	if logger.Lg != nil {
 		voiceLog = logger.Lg.Named("sip-voice")
 	}
-	conversation.HandleSIPINFODTMF(context.Background(), callID, msg.GetHeader("Content-Type"), msg.Body, voiceLog)
+	conversation.HandleSIPINFODTMF(callID, msg.GetHeader("Content-Type"), msg.Body, voiceLog)
 
 	resp := s.makeResponse(msg, 200, "OK", "", "")
 	resp.SetHeader("Content-Length", "0")

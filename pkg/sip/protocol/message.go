@@ -8,20 +8,15 @@ import (
 
 // Message represents a parsed SIP message.
 type Message struct {
-	Method     string
-	RequestURI string
-
-	StatusCode int
-	StatusText string
-
-	Version string
-	// Headers stores the first value for each header name (case-insensitive).
-	Headers map[string]string
-	// HeadersMulti stores all values for each header name (case-insensitive).
-	HeadersMulti map[string][]string
-	Body    string
-
-	IsRequest bool
+	Method       string
+	RequestURI   string
+	StatusCode   int
+	StatusText   string
+	Version      string
+	Headers      map[string]string   // Headers stores the first value for each header name (case-insensitive).
+	HeadersMulti map[string][]string // HeadersMulti stores all values for each header name (case-insensitive).
+	Body         string
+	IsRequest    bool
 }
 
 func canonicalHeaderKey(name string) string {
@@ -314,4 +309,3 @@ func (m *Message) AddHeader(name, value string) {
 	}
 	m.HeadersMulti[ck] = append(m.HeadersMulti[ck], value)
 }
-
