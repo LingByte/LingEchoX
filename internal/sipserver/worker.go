@@ -67,10 +67,8 @@ func (s *Service) StopWorker() {
 func (s *Service) tick(dialer Dialer, sem chan struct{}) {
 	ctx := context.Background()
 	now := time.Now()
-	var campaigns []models.SIPCampaign
-	if err := s.db.WithContext(ctx).
-		Where("status = ?", models.SIPCampaignStatusRunning).
-		Find(&campaigns).Error; err != nil {
+	campaigns, err := models.ListRunningSIPCampaigns(ctx, s.db)
+	if err != nil {
 		return
 	}
 	for _, c := range campaigns {
@@ -78,12 +76,8 @@ func (s *Service) tick(dialer Dialer, sem chan struct{}) {
 		if limit <= 0 {
 			limit = 1
 		}
-		var contacts []models.SIPCampaignContact
-		if err := s.db.WithContext(ctx).
-			Where("campaign_id = ? AND status IN ? AND (next_run_at IS NULL OR next_run_at <= ?)", c.ID, []string{models.SIPCampaignContactReady, models.SIPCampaignContactRetrying}, now).
-			Order("priority desc, id asc").
-			Limit(limit).
-			Find(&contacts).Error; err != nil {
+		contacts, err := models.ListCampaignContactsReadyToDial(ctx, s.db, c.ID, limit, now)
+		if err != nil {
 			continue
 		}
 		for _, contact := range contacts {
@@ -102,10 +96,7 @@ func (s *Service) tick(dialer Dialer, sem chan struct{}) {
 }
 
 func (s *Service) tryClaim(ctx context.Context, contactID uint) bool {
-	tx := s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).
-		Where("id = ? AND status IN ?", contactID, []string{models.SIPCampaignContactReady, models.SIPCampaignContactRetrying}).
-		Updates(map[string]any{"status": models.SIPCampaignContactDialing})
-	return tx.Error == nil && tx.RowsAffected == 1
+	return models.TryClaimSIPCampaignContactDialing(ctx, s.db, contactID)
 }
 
 func (s *Service) processContact(ctx context.Context, dialer Dialer, campaign models.SIPCampaign, contact models.SIPCampaignContact) {
@@ -153,7 +144,7 @@ func (s *Service) processContact(ctx context.Context, dialer Dialer, campaign mo
 	}
 	_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).Where("id = ?", contact.ID).Updates(map[string]any{
 		"attempt_count": attemptNo,
-		"last_dial_at": &now,
+		"last_dial_at":  &now,
 	}).Error
 	target, err := buildDialTarget(campaign, contact)
 	if err != nil {
@@ -473,4 +464,3 @@ func buildDialTarget(c models.SIPCampaign, ct models.SIPCampaignContact) (outbou
 		SignalingAddr: sig,
 	}, nil
 }
-

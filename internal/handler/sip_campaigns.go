@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -46,21 +47,8 @@ type sipCampaignContactReq struct {
 
 func (h *Handlers) listSIPCampaigns(c *gin.Context) {
 	page, size := parsePageSize(c)
-	q := h.db.Model(&models.SIPCampaign{}).Where("is_deleted = ?", models.SoftDeleteStatusActive)
-	if s := strings.TrimSpace(c.Query("status")); s != "" {
-		q = q.Where("status = ?", s)
-	}
-	if name := strings.TrimSpace(c.Query("name")); name != "" {
-		q = q.Where("name LIKE ?", "%"+name+"%")
-	}
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	var list []models.SIPCampaign
-	offset := (page - 1) * size
-	if err := q.Order("id DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+	list, total, err := models.ListSIPCampaignsPage(h.db, page, size, c.Query("status"), c.Query("name"))
+	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -137,8 +125,8 @@ func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	var campaign models.SIPCampaign
-	if err := h.db.Where("id = ? AND is_deleted = ?", id, models.SoftDeleteStatusActive).First(&campaign).Error; err != nil {
+	campaign, err := models.GetActiveSIPCampaignByID(h.db, uint(id))
+	if err != nil {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
@@ -148,27 +136,24 @@ func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 		return
 	}
 	now := time.Now()
-	rows := make([]models.SIPCampaignContact, 0, len(req))
+	items := make([]models.SIPCampaignContactBatchItem, 0, len(req))
 	for _, it := range req {
 		phone := strings.TrimSpace(it.Phone)
 		if phone == "" {
 			continue
 		}
 		b, _ := jsonMarshal(it.Variables)
-		rows = append(rows, models.SIPCampaignContact{
-			CampaignID:  uint(id),
-			Phone:       phone,
-			Display:     strings.TrimSpace(it.Display),
-			CallerUser:  strings.TrimSpace(it.CallerUser),
-			CallerName:  strings.TrimSpace(it.CallerName),
-			RequestURI:  strings.TrimSpace(it.RequestURI),
-			Priority:    it.Priority,
-			Status:      models.SIPCampaignContactReady,
-			MaxAttempts: campaign.MaxAttempts,
-			NextRunAt:   &now,
-			Variables:   datatypes.JSON(b),
+		items = append(items, models.SIPCampaignContactBatchItem{
+			Phone:         phone,
+			Display:       it.Display,
+			CallerUser:    it.CallerUser,
+			CallerName:    it.CallerName,
+			RequestURI:    it.RequestURI,
+			Priority:      it.Priority,
+			VariablesJSON: datatypes.JSON(b),
 		})
 	}
+	rows := models.BuildSIPCampaignContactsBatch(uint(id), campaign.MaxAttempts, items, now)
 	if len(rows) == 0 {
 		response.Success(c, "success", gin.H{"accepted": 0})
 		return
@@ -188,15 +173,8 @@ func (h *Handlers) listSIPCampaignContacts(c *gin.Context) {
 		return
 	}
 	page, size := parsePageSize(c)
-	q := h.db.Model(&models.SIPCampaignContact{}).Where("campaign_id = ? AND is_deleted = ?", id, models.SoftDeleteStatusActive)
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	var list []models.SIPCampaignContact
-	offset := (page - 1) * size
-	if err := q.Order("id DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+	list, total, err := models.ListSIPCampaignContactsPage(h.db, uint(id), page, size)
+	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -210,21 +188,13 @@ func (h *Handlers) resetSIPCampaignSuppressedContacts(c *gin.Context) {
 		return
 	}
 	now := time.Now()
-	updates := map[string]interface{}{
-		"status":         models.SIPCampaignContactReady,
-		"failure_reason": "",
-		"next_run_at":    &now,
-		"last_dial_at":   nil,
-	}
-	res := h.db.Model(&models.SIPCampaignContact{}).
-		Where("campaign_id = ? AND status = ? AND is_deleted = ?", id, models.SIPCampaignContactSuppressed, models.SoftDeleteStatusActive).
-		Updates(updates)
-	if res.Error != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, res.Error)
+	n, err := models.ResetSuppressedSIPCampaignContacts(h.db, uint(id), now)
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	h.appendCampaignEvent(uint(id), 0, 0, "", "", "contact", "warn", fmt.Sprintf("reset suppressed contacts: %d", res.RowsAffected))
-	response.Success(c, "success", gin.H{"updated": res.RowsAffected})
+	h.appendCampaignEvent(uint(id), 0, 0, "", "", "contact", "warn", fmt.Sprintf("reset suppressed contacts: %d", n))
+	response.Success(c, "success", gin.H{"updated": n})
 }
 
 func (h *Handlers) setSIPCampaignStatus(c *gin.Context, status string) {
@@ -233,23 +203,12 @@ func (h *Handlers) setSIPCampaignStatus(c *gin.Context, status string) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	updates := map[string]interface{}{"status": status}
-	now := time.Now()
-	if status == models.SIPCampaignStatusRunning {
-		updates["started_at"] = &now
-	}
-	if status == models.SIPCampaignStatusDone {
-		updates["ended_at"] = &now
-	}
-	if op := acdOperator(c); op != "" {
-		updates["update_by"] = op
-	}
-	res := h.db.Model(&models.SIPCampaign{}).Where("id = ? AND is_deleted = ?", id, models.SoftDeleteStatusActive).Updates(updates)
-	if res.Error != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, res.Error)
+	n, err := models.UpdateActiveSIPCampaignStatus(h.db, uint(id), status, acdOperator(c))
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	if res.RowsAffected == 0 {
+	if n == 0 {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
@@ -257,10 +216,18 @@ func (h *Handlers) setSIPCampaignStatus(c *gin.Context, status string) {
 	response.Success(c, "success", nil)
 }
 
-func (h *Handlers) startSIPCampaign(c *gin.Context)  { h.setSIPCampaignStatus(c, models.SIPCampaignStatusRunning) }
-func (h *Handlers) pauseSIPCampaign(c *gin.Context)  { h.setSIPCampaignStatus(c, models.SIPCampaignStatusPaused) }
-func (h *Handlers) resumeSIPCampaign(c *gin.Context) { h.setSIPCampaignStatus(c, models.SIPCampaignStatusRunning) }
-func (h *Handlers) stopSIPCampaign(c *gin.Context)   { h.setSIPCampaignStatus(c, models.SIPCampaignStatusDone) }
+func (h *Handlers) startSIPCampaign(c *gin.Context) {
+	h.setSIPCampaignStatus(c, models.SIPCampaignStatusRunning)
+}
+func (h *Handlers) pauseSIPCampaign(c *gin.Context) {
+	h.setSIPCampaignStatus(c, models.SIPCampaignStatusPaused)
+}
+func (h *Handlers) resumeSIPCampaign(c *gin.Context) {
+	h.setSIPCampaignStatus(c, models.SIPCampaignStatusRunning)
+}
+func (h *Handlers) stopSIPCampaign(c *gin.Context) {
+	h.setSIPCampaignStatus(c, models.SIPCampaignStatusDone)
+}
 
 func (h *Handlers) deleteSIPCampaign(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -268,8 +235,8 @@ func (h *Handlers) deleteSIPCampaign(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	var row models.SIPCampaign
-	if err := h.db.Where("id = ? AND is_deleted = ?", id, models.SoftDeleteStatusActive).First(&row).Error; err != nil {
+	row, err := models.GetActiveSIPCampaignByID(h.db, uint(id))
+	if err != nil {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
@@ -277,18 +244,12 @@ func (h *Handlers) deleteSIPCampaign(c *gin.Context) {
 		response.Fail(c, "running campaign cannot be deleted", nil)
 		return
 	}
-	updates := map[string]interface{}{
-		"is_deleted": models.SoftDeleteStatusDeleted,
-	}
-	if op := acdOperator(c); op != "" {
-		updates["update_by"] = op
-	}
-	res := h.db.Model(&models.SIPCampaign{}).Where("id = ?", id).Updates(updates)
-	if res.Error != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, res.Error)
+	n, err := models.SoftDeleteSIPCampaignByID(h.db, uint(id), acdOperator(c))
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	if res.RowsAffected == 0 {
+	if n == 0 {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
@@ -297,12 +258,11 @@ func (h *Handlers) deleteSIPCampaign(c *gin.Context) {
 }
 
 func (h *Handlers) getSIPCampaignMetrics(c *gin.Context) {
-	var invited, answered, failed, retrying, suppressed int64
-	_ = h.db.Model(&models.SIPCallAttempt{}).Count(&invited).Error
-	_ = h.db.Model(&models.SIPCampaignContact{}).Where("status = ?", models.SIPCampaignContactAnswered).Count(&answered).Error
-	_ = h.db.Model(&models.SIPCampaignContact{}).Where("status IN ?", []string{models.SIPCampaignContactFailed, models.SIPCampaignContactExhausted}).Count(&failed).Error
-	_ = h.db.Model(&models.SIPCampaignContact{}).Where("status = ?", models.SIPCampaignContactRetrying).Count(&retrying).Error
-	_ = h.db.Model(&models.SIPCampaignContact{}).Where("status = ?", models.SIPCampaignContactSuppressed).Count(&suppressed).Error
+	invited, _ := models.CountAllSIPCallAttempts(h.db)
+	answered, _ := models.CountSIPCampaignContactsWithStatus(h.db, models.SIPCampaignContactAnswered)
+	failed, _ := models.CountSIPCampaignContactsWithStatuses(h.db, []string{models.SIPCampaignContactFailed, models.SIPCampaignContactExhausted})
+	retrying, _ := models.CountSIPCampaignContactsWithStatus(h.db, models.SIPCampaignContactRetrying)
+	suppressed, _ := models.CountSIPCampaignContactsWithStatus(h.db, models.SIPCampaignContactSuppressed)
 	response.Success(c, "success", gin.H{
 		"invited_total":    invited,
 		"answered_total":   answered,
@@ -325,8 +285,8 @@ func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 	if limit > 300 {
 		limit = 300
 	}
-	var campaign models.SIPCampaign
-	if err := h.db.Where("id = ? AND is_deleted = ?", id, models.SoftDeleteStatusActive).First(&campaign).Error; err != nil {
+	campaign, err := models.GetActiveSIPCampaignByID(h.db, uint(id))
+	if err != nil {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
@@ -346,8 +306,7 @@ func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 	}
 	logs := make([]campaignLogRow, 0, limit*3)
 
-	var events []models.SIPCampaignEvent
-	_ = h.db.Where("campaign_id = ?", id).Order("id DESC").Limit(limit).Find(&events).Error
+	events, _ := models.ListSIPCampaignEventsDesc(h.db, uint(id), limit)
 	for _, e := range events {
 		logs = append(logs, campaignLogRow{
 			ID:            e.ID,
@@ -363,14 +322,12 @@ func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 		})
 	}
 
-	var attempts []models.SIPCallAttempt
-	_ = h.db.Where("campaign_id = ?", id).Order("id DESC").Limit(limit).Find(&attempts).Error
+	attempts, _ := models.ListSIPCallAttemptsDesc(h.db, uint(id), limit)
 	for _, a := range attempts {
 		var phone string
 		if a.ContactID > 0 {
-			var contact models.SIPCampaignContact
-			if err := h.db.Select("id, phone").Where("id = ?", a.ContactID).First(&contact).Error; err == nil {
-				phone = contact.Phone
+			if p, err := models.GetSIPCampaignContactPhone(h.db, a.ContactID); err == nil {
+				phone = p
 			}
 		}
 		at := a.CreatedAt
@@ -403,8 +360,7 @@ func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 		})
 	}
 
-	var steps []models.SIPScriptRun
-	_ = h.db.Where("campaign_id = ?", id).Order("id DESC").Limit(limit).Find(&steps).Error
+	steps, _ := models.ListSIPScriptRunsDesc(h.db, uint(id), limit)
 	for _, s := range steps {
 		msg := fmt.Sprintf("script step=%s type=%s result=%s", strings.TrimSpace(s.StepID), strings.TrimSpace(s.StepType), strings.TrimSpace(s.Result))
 		if out := strings.TrimSpace(s.OutputText); out != "" {
@@ -458,7 +414,7 @@ func (h *Handlers) appendCampaignEvent(campaignID, contactID, attemptID uint, ca
 	if h == nil || h.db == nil || campaignID == 0 {
 		return
 	}
-	_ = h.db.Create(&models.SIPCampaignEvent{
+	evt := &models.SIPCampaignEvent{
 		CampaignID:    campaignID,
 		ContactID:     contactID,
 		AttemptID:     attemptID,
@@ -467,7 +423,8 @@ func (h *Handlers) appendCampaignEvent(campaignID, contactID, attemptID uint, ca
 		Type:          nonEmptyOr(strings.TrimSpace(typ), "campaign"),
 		Level:         nonEmptyOr(strings.TrimSpace(level), "info"),
 		Message:       nonEmptyOr(strings.TrimSpace(message), "event"),
-	}).Error
+	}
+	_ = models.InsertSIPCampaignEvent(context.Background(), h.db, evt)
 }
 
 func nonEmptyOr(v, fallback string) string {
@@ -484,4 +441,3 @@ func jsonMarshal(v interface{}) ([]byte, error) {
 	}
 	return b, nil
 }
-

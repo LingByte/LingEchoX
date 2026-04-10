@@ -6,7 +6,6 @@ package sipserver
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
@@ -18,21 +17,13 @@ import (
 // Ordering: weight DESC, id ASC (highest weight wins; tie-break lower id first).
 //   - web → WebSeat (browser agent leg).
 //   - sip trunk → DialTargetFromACDTrunk; sip internal → reg.DialTargetForUsername.
+//
 // SIP rows: sipCallerId / sipCallerDisplayName copied onto DialTarget when set.
 func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *GormStore) (outbound.DialTarget, bool) {
 	if db == nil {
 		return outbound.DialTarget{}, false
 	}
-	freshWebSince := time.Now().Add(-models.WebSeatStaleAfter)
-	var row models.ACDPoolTarget
-	err := db.WithContext(ctx).
-		Where("is_deleted = ? AND weight > ? AND work_state = ? AND route_type IN ?",
-			models.SoftDeleteStatusActive, 0, models.ACDWorkStateAvailable,
-			[]string{models.ACDPoolRouteTypeSIP, models.ACDPoolRouteTypeWeb}).
-		Where("(route_type != ? OR (web_seat_last_seen_at IS NOT NULL AND web_seat_last_seen_at > ?))",
-			models.ACDPoolRouteTypeWeb, freshWebSince).
-		Order("weight DESC").Order("id ASC").
-		First(&row).Error
+	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db)
 	if err != nil {
 		return outbound.DialTarget{}, false
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 
@@ -98,7 +99,7 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 	if username == "" {
 		return zero, false
 	}
-	domain := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPDefaultDomain))
+	domain := strings.TrimSpace(utils.GetEnv(constants.EnvSIPDefaultDomain))
 	row, err := models.FindOnlineSIPUserByAOR(ctx, s.db, username, domain)
 	if err != nil {
 		return zero, false
@@ -111,7 +112,7 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 	}
 	d := effectiveDialDomain(row.Domain, row.RemoteIP)
 	port := 5060
-	if ps := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPDefaultURIPort)); ps != "" {
+	if ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPDefaultURIPort)); ps != "" {
 		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
 			port = p
 		}

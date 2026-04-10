@@ -17,7 +17,6 @@ import (
 	"github.com/LingByte/SoulNexus/cmd/bootstrap"
 	handlers "github.com/LingByte/SoulNexus/internal/handler"
 	"github.com/LingByte/SoulNexus/internal/listeners"
-	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/internal/sipserver"
 	"github.com/LingByte/SoulNexus/internal/tasks"
 	"github.com/LingByte/SoulNexus/pkg/config"
@@ -198,7 +197,7 @@ func main() {
 		searchEnabled = config.GlobalConfig.Features.SearchEnabled
 	}
 	// 21. Emit system initialization signal
-	utils.Sig().Emit(models.SigInitSystemConfig, nil)
+	utils.Sig().Emit(constants.SigInitSystemConfig, nil)
 
 	var sipEmbedded *sipserver.Embedded
 	var sipCampaignHTTP *handlers.HTTPServer
@@ -214,10 +213,10 @@ func main() {
 		}
 		sipEmbedded = se
 		if svc := sipEmbedded.CampaignService(); svc != nil {
-			if campaignAddr := strings.TrimSpace(utils.GetEnv(sipserver.EnvCampaignHTTPAddr)); campaignAddr != "" {
+			if campaignAddr := strings.TrimSpace(utils.GetEnv(constants.EnvCampaignHTTPAddr)); campaignAddr != "" {
 				campaignHTTP, err := handlers.StartSIPCampaignHTTPServer(
 					campaignAddr,
-					strings.TrimSpace(utils.GetEnv(sipserver.EnvCampaignHTTPToken)),
+					strings.TrimSpace(utils.GetEnv(constants.EnvCampaignHTTPToken)),
 					svc,
 				)
 				if err != nil {

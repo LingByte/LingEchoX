@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/config"
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
@@ -48,7 +49,7 @@ func (e *Embedded) CampaignService() *Service {
 
 func resolveOutboundDialTarget(store *GormStore) (outbound.DialTarget, bool) {
 	if store != nil {
-		n := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPTargetNumber))
+		n := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTargetNumber))
 		if n != "" {
 			if dt, ok := store.DialTargetForUsername(context.Background(), n); ok {
 				return dt, true
@@ -90,7 +91,7 @@ func Start(cfg Config) (*Embedded, error) {
 	var campaignSvc *Service
 	var acdDB *gorm.DB
 
-	callerUser, callerDisplay := outbound.CallerIdentityFromEnv()
+	callerUser, callerDisplay := config.CallerIdentityFromEnv()
 	outMgr := outbound.NewManager(outbound.ManagerConfig{
 		LocalIP:         localIP,
 		SIPHost:         sipHost,
@@ -173,7 +174,6 @@ func Start(cfg Config) (*Embedded, error) {
 	if cfg.DB != nil {
 		acdDB = cfg.DB
 		campaignSvc = NewService(cfg.DB)
-		_ = campaignSvc.AutoMigrate()
 		sipRegStore = NewGormStore(cfg.DB)
 		campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
 			return sipRegStore.DialTargetForUsername(ctx, phone)
@@ -210,7 +210,6 @@ func Start(cfg Config) (*Embedded, error) {
 			} else {
 				acdDB = db
 				campaignSvc = NewService(db)
-				_ = campaignSvc.AutoMigrate()
 				sipRegStore = NewGormStore(db)
 				campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
 					return sipRegStore.DialTargetForUsername(ctx, phone)
@@ -288,10 +287,10 @@ func Start(cfg Config) (*Embedded, error) {
 			logger.Lg.Warn("webseat: http server failed", zap.String("addr", wsAddr), zap.Error(err))
 		}
 	}
-	if outHTTPAddr := strings.TrimSpace(utils.GetEnv(outbound.EnvSIPOutboundHTTPAddr)); outHTTPAddr != "" {
+	if outHTTPAddr := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundHTTPAddr)); outHTTPAddr != "" {
 		srv, err := outbound.StartDialHTTPServer(
 			outHTTPAddr,
-			strings.TrimSpace(utils.GetEnv(outbound.EnvSIPOutboundHTTPToken)),
+			strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundHTTPToken)),
 			outMgr,
 		)
 		if err != nil && logger.Lg != nil {
@@ -325,7 +324,7 @@ func Start(cfg Config) (*Embedded, error) {
 		} else {
 			_, _ = fmt.Fprintf(os.Stdout, "sipapp: outbound target from env: uri=%s signaling=%s\n", dt.RequestURI, dt.SignalingAddr)
 		}
-		if outbound.AutoDialFromEnv() {
+		if config.AutoDialFromEnv() {
 			go func() {
 				cid, err := outMgr.Dial(context.Background(), outbound.DialRequest{
 					Scenario:     outbound.ScenarioCampaign,
@@ -348,7 +347,7 @@ func Start(cfg Config) (*Embedded, error) {
 			}()
 		}
 	} else {
-		if strings.TrimSpace(utils.GetEnv(outbound.EnvSIPTargetNumber)) != "" {
+		if strings.TrimSpace(utils.GetEnv(constants.EnvSIPTargetNumber)) != "" {
 			_, _ = fmt.Fprintf(os.Stderr, "sipapp: SIP_TARGET_NUMBER is set but outbound target is incomplete; set SIP_OUTBOUND_HOST (or SIP_OUTBOUND_REQUEST_URI + SIP_SIGNALING_ADDR). See docs/SIP_OUTBOUND_MODULE.md\n")
 		}
 	}

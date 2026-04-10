@@ -22,11 +22,9 @@ import (
 // - This does not expose ICE/SDP signaling; it's a media transport only.
 // - Duration calculation is approximate and depends on codec + payload framing.
 type Transport struct {
-	rxTrack *webrtc.TrackRemote
-	txTrack *webrtc.TrackLocalStaticSample
-
-	codec media.CodecConfig
-
+	rxTrack  *webrtc.TrackRemote
+	txTrack  *webrtc.TrackLocalStaticSample
+	codec    media.CodecConfig
 	attached *media.MediaSession
 }
 
@@ -121,4 +119,3 @@ func (t *Transport) Close() error {
 
 // WakeupRead is a no-op; closing the PeerConnection unblocks ReadRTP in Next.
 func (t *Transport) WakeupRead() {}
-
