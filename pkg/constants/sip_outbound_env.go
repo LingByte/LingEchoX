@@ -28,8 +28,4 @@ const (
 	EnvSIPTransferNumber = "SIP_TRANSFER_NUMBER"
 	EnvSIPTransferHost   = "SIP_TRANSFER_HOST"
 	EnvSIPTransferPort   = "SIP_TRANSFER_PORT"
-
-	// Optional HTTP endpoint for manual/proactive outbound dialing (cmd/sip process).
-	EnvSIPOutboundHTTPAddr  = "SIP_OUTBOUND_HTTP_ADDR"  // e.g. ":9081"
-	EnvSIPOutboundHTTPToken = "SIP_OUTBOUND_HTTP_TOKEN" // optional bearer token; empty = no auth
 )

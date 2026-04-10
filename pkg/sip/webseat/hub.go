@@ -7,26 +7,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/sip/bridge"
-	sipwebrtc "github.com/LingByte/SoulNexus/pkg/sip/webrtc"
 	siprtp "github.com/LingByte/SoulNexus/pkg/sip/rtp"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	sipwebrtc "github.com/LingByte/SoulNexus/pkg/sip/webrtc"
 	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
 	"go.uber.org/zap"
 )
 
 const (
-	// EnvHTTPAddr is the listen address for WebRTC signaling (e.g. ":9080"). Empty disables the server.
+	// EnvHTTPAddr is deprecated: WebSeat HTTP/WebSocket is served on the main Gin app under
+	// {APIPrefix}/lingecho/webseat/v1 (see constants.LingechoWebSeatPathPrefix). This env is ignored.
 	EnvHTTPAddr = "SIP_WEBSEAT_HTTP_ADDR"
 	// EnvTrackWait is max wait after returning the SDP answer for the browser to connect and send the first audio track (e.g. "90s").
 	EnvTrackWait = "SIP_WEBSEAT_TRACK_WAIT"
@@ -61,13 +61,11 @@ type Hub struct {
 	cfg Config
 
 	mu       sync.Mutex
-	awaiting map[string]*awaitEntry // inbound Call-ID
+	awaiting map[string]*awaitEntry   // inbound Call-ID
 	active   map[string]*activeBridge // inbound Call-ID
 
 	wsMu    sync.Mutex
 	wsConns map[*websocket.Conn]struct{}
-
-	httpServer *http.Server
 }
 
 type awaitEntry struct {
@@ -95,51 +93,40 @@ func InitDefault(cfg Config) {
 	}
 }
 
-// StartHTTPServer starts JSON signaling on addr (e.g. ":9080"). No-op if addr empty or hub nil.
-func StartHTTPServer(addr string) error {
-	if strings.TrimSpace(addr) == "" || defaultHub == nil {
-		return nil
+// JoinHTTP serves POST join (browser WebRTC offer). Mount on Gin as WrapF(JoinHTTP).
+func JoinHTTP(w http.ResponseWriter, r *http.Request) {
+	if defaultHub == nil {
+		http.Error(w, "webseat not initialized", http.StatusServiceUnavailable)
+		return
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/webseat/v1/join", defaultHub.handleJoin)
-	mux.HandleFunc("/webseat/v1/hangup", defaultHub.handleAgentHangup)
-	mux.HandleFunc("/webseat/v1/reject", defaultHub.handleAgentReject)
-	mux.HandleFunc("/webseat/v1/ws", defaultHub.handleWebSocket)
-	mux.HandleFunc("/webseat/v1/status/", defaultHub.handleStatus)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" && r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/plain")
-			_, _ = w.Write([]byte("SoulNexus web seat: WS /webseat/v1/ws?token=... (JSON push: incoming, presence) | POST /webseat/v1/join | hangup | reject\n"))
-			return
-		}
-		http.NotFound(w, r)
-	})
-
-	defaultHub.httpServer = &http.Server{Addr: addr, Handler: corsMiddleware(mux)}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("webseat: listen %s: %w", addr, err)
-	}
-	go func() {
-		if logger.Lg != nil {
-			logger.Lg.Info("webseat http listening", zap.String("addr", addr))
-		}
-		_ = defaultHub.httpServer.Serve(ln)
-	}()
-	return nil
+	defaultHub.handleJoin(w, r)
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// HangupHTTP serves POST hangup (JSON body call_id).
+func HangupHTTP(w http.ResponseWriter, r *http.Request) {
+	if defaultHub == nil {
+		http.Error(w, "webseat not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	defaultHub.handleAgentHangup(w, r)
+}
+
+// RejectHTTP serves POST reject (JSON body call_id).
+func RejectHTTP(w http.ResponseWriter, r *http.Request) {
+	if defaultHub == nil {
+		http.Error(w, "webseat not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	defaultHub.handleAgentReject(w, r)
+}
+
+// WebSocketHTTP serves GET WebSocket upgrade (?token=...).
+func WebSocketHTTP(w http.ResponseWriter, r *http.Request) {
+	if defaultHub == nil {
+		http.Error(w, "webseat not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	defaultHub.handleWebSocket(w, r)
 }
 
 // RegisterAwaiting marks inbound as waiting for browser WebRTC join (after AI media stopped).
@@ -451,9 +438,9 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 }
 
 type joinBody struct {
-	CallID     string                     `json:"call_id"`
-	SDP        string                     `json:"sdp"`
-	Type       string                     `json:"type"`
+	CallID     string                    `json:"call_id"`
+	SDP        string                    `json:"sdp"`
+	Type       string                    `json:"type"`
 	Candidates []webrtc.ICECandidateInit `json:"candidates"`
 }
 
@@ -724,18 +711,6 @@ func (h *Hub) waitRemoteTrackAndBridge(
 	if lg != nil {
 		lg.Info("webseat: bridge started", zap.String("call_id", callID), zap.String("web_codec", webCodec.Codec))
 	}
-}
-
-func (h *Hub) handleStatus(w http.ResponseWriter, r *http.Request) {
-	callID := strings.TrimPrefix(r.URL.Path, "/webseat/v1/status/")
-	callID = strings.TrimSpace(callID)
-	if callID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	pending := PendingOrActive(callID)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"call_id": callID, "pending_or_active": pending})
 }
 
 func newMediaEngine() *webrtc.MediaEngine {

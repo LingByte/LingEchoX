@@ -19,7 +19,7 @@ type Dialer interface {
 	Dial(ctx context.Context, req outbound.DialRequest) (callID string, err error)
 }
 
-func (s *Service) StartWorker(dialer Dialer) {
+func (s *CampaignService) StartWorker(dialer Dialer) {
 	if s == nil || s.db == nil || dialer == nil {
 		return
 	}
@@ -49,7 +49,7 @@ func (s *Service) StartWorker(dialer Dialer) {
 	}()
 }
 
-func (s *Service) StopWorker() {
+func (s *CampaignService) StopWorker() {
 	if s == nil {
 		return
 	}
@@ -64,7 +64,7 @@ func (s *Service) StopWorker() {
 	s.wg.Wait()
 }
 
-func (s *Service) tick(dialer Dialer, sem chan struct{}) {
+func (s *CampaignService) tick(dialer Dialer, sem chan struct{}) {
 	ctx := context.Background()
 	now := time.Now()
 	campaigns, err := models.ListRunningSIPCampaigns(ctx, s.db)
@@ -95,11 +95,11 @@ func (s *Service) tick(dialer Dialer, sem chan struct{}) {
 	}
 }
 
-func (s *Service) tryClaim(ctx context.Context, contactID uint) bool {
+func (s *CampaignService) tryClaim(ctx context.Context, contactID uint) bool {
 	return models.TryClaimSIPCampaignContactDialing(ctx, s.db, contactID)
 }
 
-func (s *Service) processContact(ctx context.Context, dialer Dialer, campaign models.SIPCampaign, contact models.SIPCampaignContact) {
+func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, campaign models.SIPCampaign, contact models.SIPCampaignContact) {
 	if s.isDuplicateWithinWindow(ctx, contact.ID, contact.Phone, campaign.ID) {
 		s.metrics.Suppressed.Add(1)
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).
@@ -296,7 +296,7 @@ func (s *Service) processContact(ctx context.Context, dialer Dialer, campaign mo
 	}
 }
 
-func (s *Service) resolveRegisteredDialTarget(ctx context.Context, phone string) (outbound.DialTarget, bool) {
+func (s *CampaignService) resolveRegisteredDialTarget(ctx context.Context, phone string) (outbound.DialTarget, bool) {
 	if s == nil {
 		return outbound.DialTarget{}, false
 	}
@@ -382,7 +382,7 @@ func isDigits(v string) bool {
 	return true
 }
 
-func (s *Service) watchDialAttemptTimeout(campaign models.SIPCampaign, contactID, attemptID uint, attemptNo int, callID, correlationID string) {
+func (s *CampaignService) watchDialAttemptTimeout(campaign models.SIPCampaign, contactID, attemptID uint, attemptNo int, callID, correlationID string) {
 	const timeout = 45 * time.Second
 	<-time.After(timeout)
 	ctx := context.Background()
@@ -417,7 +417,7 @@ func (s *Service) watchDialAttemptTimeout(campaign models.SIPCampaign, contactID
 	})
 }
 
-func (s *Service) isDuplicateWithinWindow(ctx context.Context, contactID uint, phone string, campaignID uint) bool {
+func (s *CampaignService) isDuplicateWithinWindow(ctx context.Context, contactID uint, phone string, campaignID uint) bool {
 	if strings.TrimSpace(phone) == "" {
 		return false
 	}

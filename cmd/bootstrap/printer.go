@@ -30,16 +30,12 @@ func LogConfigInfo() {
 		zap.String("addr", config.GlobalConfig.Server.Addr),
 		zap.String("db_driver", config.GlobalConfig.Database.Driver),
 		zap.String("dsn", config.GlobalConfig.Database.DSN),
-		zap.String("monitor_prefix", config.GlobalConfig.Server.MonitorPrefix),
-		zap.Bool("language_enabled", config.GlobalConfig.Features.LanguageEnabled),
 		zap.String("api_secret_key", config.GlobalConfig.Auth.APISecretKey),
 	)
 
 	logger.Info("api config",
 		zap.String("api_prefix", config.GlobalConfig.Server.APIPrefix),
 		zap.String("docs_prefix", config.GlobalConfig.Server.DocsPrefix),
-		zap.String("admin_prefix", config.GlobalConfig.Server.AdminPrefix),
-		zap.String("auth_prefix", config.GlobalConfig.Server.AuthPrefix),
 		zap.String("secret_expire_days", config.GlobalConfig.Auth.SecretExpireDays),
 		zap.String("session_secret", config.GlobalConfig.Auth.SessionSecret),
 	)
@@ -52,11 +48,6 @@ func LogConfigInfo() {
 		zap.Int("log_max_backups", config.GlobalConfig.Log.MaxBackups),
 	)
 
-	logger.Info("search config",
-		zap.Bool("search_enabled", config.GlobalConfig.Features.SearchEnabled),
-		zap.String("search_path", config.GlobalConfig.Features.SearchPath),
-		zap.Int("search_batch_size", config.GlobalConfig.Features.SearchBatchSize),
-	)
 	logger.Info("backup config",
 		zap.Bool("backup_enabled", config.GlobalConfig.Features.BackupEnabled),
 		zap.String("backup_path", config.GlobalConfig.Features.BackupPath),

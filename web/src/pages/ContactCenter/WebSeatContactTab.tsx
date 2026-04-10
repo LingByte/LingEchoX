@@ -21,7 +21,9 @@ export default function WebSeatContactTab() {
     return (
       <div className="rounded-lg border border-amber-500/40 bg-amber-50/80 dark:bg-amber-950/30 p-4 text-sm text-foreground">
         <p className="font-medium">未配置 Web 坐席网关</p>
-        <p className="mt-2 text-muted-foreground whitespace-pre-wrap">请在 `.env` 中设置 `VITE_SIP_WEBSEAT_HTTP_BASE` 后刷新页面。</p>
+        <p className="mt-2 text-muted-foreground whitespace-pre-wrap">
+          请检查 `VITE_API_BASE_URL`（默认 `/api`）。WebSocket 与 `VITE_WS_BASE_URL` 的配置方式与本站其它接口一致。可选：`VITE_SIP_WEBSEAT_WS_TOKEN`（与后端 `SIP_WEBSEAT_WS_TOKEN` 一致）。
+        </p>
       </div>
     )
   }

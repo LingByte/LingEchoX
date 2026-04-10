@@ -4,26 +4,31 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"github.com/LingByte/SoulNexus/internal/sipserver"
 	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
-	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type Handlers struct {
-	db                *gorm.DB
-	ipLocationService *utils.IPLocationService
+	db          *gorm.DB
+	campaignSvc *sipserver.CampaignService
 }
 
 func NewHandlers(db *gorm.DB) *Handlers {
-	// Initialize IP geolocation service
-	ipLocationService := utils.NewIPLocationService(logger.Lg)
 	return &Handlers{
-		db:                db,
-		ipLocationService: ipLocationService,
+		db: db,
 	}
+}
+
+// SetCampaignService wires the embedded SIP outbound worker (optional). Call after sipserver.Start
+// so Gin routes can expose dial-side counters (e.g. GET .../sip-center/campaigns/worker-metrics).
+func (h *Handlers) SetCampaignService(svc *sipserver.CampaignService) {
+	if h == nil {
+		return
+	}
+	h.campaignSvc = svc
 }
 
 func (h *Handlers) Register(engine *gin.Engine) {
@@ -33,4 +38,5 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	// Register Global Singleton DB
 	r.Use(middleware.InjectDB(h.db))
 	h.registerSIPContactCenterRoutes(r)
+	h.registerLingechoWebSeatRoutes(r)
 }

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -54,22 +53,18 @@ func main() {
 	}
 
 	// 2. Parse Command Line Parameters
-	// Deprecated: parsed for backward compatibility; bootstrap always runs GORM AutoMigrate when connecting.
 	init := flag.Bool("init", false, "deprecated: ignored; schema migration always runs at startup")
 	seed := flag.Bool("seed", false, "seed database")
 	mode := flag.String("mode", "", "running environment (development, test, production)")
 	initSQL := flag.String("init-sql", "", "path to database init .sql script (optional)")
-	noSIP := flag.Bool("no-sip", false, "disable embedded SIP UDP + WebSeat/outbound HTTP (env-based sidecars)")
 	sipHost := flag.String("sip-host", "0.0.0.0", "embedded SIP UDP listen host")
 	sipPort := flag.Int("sip-port", 5060, "embedded SIP UDP listen port")
 	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "SDP c= line IP (RTP reachable from SIP peers)")
 	flag.Parse()
-
 	// 3. Set Environment Variables
 	if *mode != "" {
-		os.Setenv("APP_ENV", *mode)
+		os.Setenv("MODE", *mode)
 	}
-
 	// 4. Load Global Configuration
 	if err := config.Load(); err != nil {
 		panic("config load failed: " + err.Error())
@@ -90,6 +85,7 @@ func main() {
 		AutoMigrate: *init,
 		SeedNonProd: *seed,
 	})
+
 	if err != nil {
 		logger.Error("database setup failed", zap.Error(err))
 		return
@@ -113,44 +109,10 @@ func main() {
 	flag.StringVar(&addr, "addr", addr, "HTTP Serve address")
 	flag.StringVar(&DBDriver, "db-driver", DBDriver, "database driver")
 	flag.StringVar(&DSN, "dsn", DSN, "database source name")
-
-	logger.Info("checked config -- addr: ", zap.String("addr", addr))
-	logger.Info("checked config -- db-driver: ", zap.String("db-driver", DBDriver), zap.String("dsn", DSN))
-	logger.Info("checked config -- mode: ", zap.String("mode", config.GlobalConfig.Server.Mode))
-	utils.InitGlobalCache(1024, 5*time.Minute)
 	//// 11. New App
 	app := NewLingEchoApp(db)
 	sipUserCleaner := tasks.NewSIPUserOnlineCleaner(db, time.Duration(utils.GetIntEnv("SIP_USER_ONLINE_SWEEP_SECONDS"))*time.Second)
 	sipUserCleaner.Start()
-
-	// 12. Initialize Monitoring System
-	// Can be overridden via environment variables, default values suitable for 2GB memory servers
-	maxSpansEnv := utils.GetIntEnv("METRICS_MAX_SPANS")
-	maxQueriesEnv := utils.GetIntEnv("METRICS_MAX_QUERIES")
-	maxStatsEnv := utils.GetIntEnv("METRICS_MAX_STATS")
-
-	maxSpans := int(maxSpansEnv)
-	if maxSpans == 0 {
-		maxSpans = 500 // Default 500 (originally 10000), reducing 95% memory usage
-	}
-
-	maxQueries := int(maxQueriesEnv)
-	if maxQueries == 0 {
-		maxQueries = 500 // Default 500 (originally 10000), reducing 95% memory usage
-	}
-
-	maxStats := int(maxStatsEnv)
-	if maxStats == 0 {
-		maxStats = 100 // Default 100 (originally 1000), reducing 90% memory usage
-	}
-	enableSQLAnalysis := utils.GetBoolEnv("METRICS_ENABLE_SQL_ANALYSIS")
-	if !enableSQLAnalysis && utils.GetEnv("METRICS_ENABLE_SQL_ANALYSIS") == "" {
-		enableSQLAnalysis = true // Enable SQL analysis by default
-	}
-	enableSystemMonitor := utils.GetBoolEnv("METRICS_ENABLE_SYSTEM_MONITOR")
-	if !enableSystemMonitor && utils.GetEnv("METRICS_ENABLE_SYSTEM_MONITOR") == "" {
-		enableSystemMonitor = true // Enable system monitoring by default
-	}
 	if config.GlobalConfig.Features.BackupEnabled {
 		backup.StartBackupScheduler(db)
 	}
@@ -183,55 +145,27 @@ func main() {
 
 	// 18. Register Routes
 	app.RegisterRoutes(r)
-	// Get monitor prefix from config (default: /metrics)
-	monitorPrefix := config.GlobalConfig.Server.MonitorPrefix
-	if monitorPrefix == "" {
-		monitorPrefix = "/metrics"
-	}
 	// 19. Initialize System Listener
 	listeners.InitSystemListeners()
-
-	// 20. Start Search Indexer (if enabled)
-	searchEnabled := utils.GetBoolValue(db, constants.KEY_SEARCH_ENABLED)
-	if !searchEnabled && config.GlobalConfig != nil {
-		searchEnabled = config.GlobalConfig.Features.SearchEnabled
-	}
 	// 21. Emit system initialization signal
 	utils.Sig().Emit(constants.SigInitSystemConfig, nil)
 
 	var sipEmbedded *sipserver.Embedded
-	var sipCampaignHTTP *handlers.HTTPServer
-	if !*noSIP {
-		se, err := sipserver.Start(sipserver.Config{
-			Host:    *sipHost,
-			Port:    *sipPort,
-			LocalIP: *sipLocalIP,
-			DB:      db,
-		})
-		if err != nil {
-			logger.Fatal("embedded SIP stack failed to start", zap.Error(err))
-		}
-		sipEmbedded = se
-		if svc := sipEmbedded.CampaignService(); svc != nil {
-			if campaignAddr := strings.TrimSpace(utils.GetEnv(constants.EnvCampaignHTTPAddr)); campaignAddr != "" {
-				campaignHTTP, err := handlers.StartSIPCampaignHTTPServer(
-					campaignAddr,
-					strings.TrimSpace(utils.GetEnv(constants.EnvCampaignHTTPToken)),
-					svc,
-				)
-				if err != nil {
-					logger.Warn("sip campaign http: start failed", zap.String("addr", campaignAddr), zap.Error(err))
-				} else {
-					sipCampaignHTTP = campaignHTTP
-				}
-			}
-		}
-		logger.Info("embedded SIP stack started",
-			zap.String("sip_host", *sipHost),
-			zap.Int("sip_port", *sipPort),
-			zap.String("sip_local_ip", *sipLocalIP))
+	se, err := sipserver.Start(sipserver.Config{
+		Host:    *sipHost,
+		Port:    *sipPort,
+		LocalIP: *sipLocalIP,
+		DB:      db,
+	})
+	if err != nil {
+		logger.Fatal("embedded SIP stack failed to start", zap.Error(err))
 	}
-
+	sipEmbedded = se
+	app.handlers.SetCampaignService(sipEmbedded.CampaignService())
+	logger.Info("embedded SIP stack started",
+		zap.String("sip_host", *sipHost),
+		zap.Int("sip_port", *sipPort),
+		zap.String("sip_local_ip", *sipLocalIP))
 	// 22. Start HTTP/HTTPS Server
 	httpServer := &http.Server{
 		Addr:           addr,
@@ -246,9 +180,6 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 		sipUserCleaner.Stop()
-		if sipCampaignHTTP != nil {
-			_ = sipCampaignHTTP.Shutdown(ctx)
-		}
 		if sipEmbedded != nil {
 			sipEmbedded.Shutdown(ctx)
 		}

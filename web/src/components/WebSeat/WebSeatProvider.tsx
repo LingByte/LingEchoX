@@ -4,7 +4,7 @@ import { clearWebSeatAcdPoolAnchor, ensureWebSeatAcdPoolRowOnline, postWebSeatAc
 import { showAlert } from '@/utils/notification'
 import { WebSeatContext, type WebSeatContextValue, type WebSeatWsState } from './WebSeatContext'
 import { getUserMediaAudioOnly } from './getUserMediaCompat'
-import { buildWebSeatWebSocketURL, webSeatHttpBase, webSeatWsBase, webSeatWsToken } from './webseatEnv'
+import { buildWebSeatWebSocketURL, webSeatHttpBase, webSeatV1URL, webSeatWsToken } from './webseatEnv'
 import { WebSeatIncomingCallCard } from './WebSeatIncomingCallCard'
 
 const WEBSEAT_ACD_HEARTBEAT_MS = 30_000
@@ -35,11 +35,10 @@ function waitForWebSocketOpen(wsRef: MutableRefObject<WebSocket | null>, timeout
 export function WebSeatProvider({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user)
   const httpBase = useMemo(() => webSeatHttpBase(), [])
-  const wsBase = useMemo(() => webSeatWsBase(), [])
   const wsToken = useMemo(() => webSeatWsToken(), [])
   const configured = httpBase.length > 0
   const [wsState, setWsState] = useState<WebSeatWsState>(configured ? 'idle' : 'disabled')
-  const [wsStatusText, setWsStatusText] = useState(configured ? 'WS：未上线（请点击「上线」建立连接）' : 'WS：未配置')
+  const [wsStatusText, setWsStatusText] = useState(configured ? 'WS：未上线（请点击「上线」建立连接）' : 'WS：无法解析 API 地址')
   const [presenceWsClients, setPresenceWsClients] = useState(0)
   const [presenceOnline, setPresenceOnline] = useState(false)
   const [signalLog, setSignalLog] = useState('')
@@ -88,7 +87,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
   const connectWebSocket = useCallback(() => {
     if (!configured) return
     closeWsConnection()
-    const url = buildWebSeatWebSocketURL(httpBase, wsToken, wsBase)
+    const url = buildWebSeatWebSocketURL(wsToken)
     setWsState('connecting')
     setWsStatusText('WS：连接中...')
     try {
@@ -133,7 +132,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       setWsStatusText('WS：连接失败')
       logSignal('WS create failed')
     }
-  }, [closeWsConnection, configured, httpBase, logRx, logSignal, stopAcdHeartbeat, wsBase, wsToken])
+  }, [closeWsConnection, configured, logRx, logSignal, stopAcdHeartbeat, wsToken])
 
   const goOnline = useCallback(async () => {
     if (!configured) return
@@ -183,7 +182,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     const ra = remoteAudioRef.current
     const stayOnline = acdHeartbeatTimerRef.current != null
     if (cid && httpBase) {
-      void fetch(`${httpBase}/webseat/v1/hangup`, {
+      void fetch(webSeatV1URL(httpBase, 'hangup'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ call_id: cid }),
@@ -299,12 +298,12 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       logSignal('setLocalDescription offer')
       const ld = pc.localDescription
       if (!ld) throw new Error('no localDescription')
-      const res = await fetch(`${httpBase}/webseat/v1/join`, {
+      const res = await fetch(webSeatV1URL(httpBase, 'join'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ call_id: cid, sdp: ld.sdp, type: ld.type, candidates: [] }),
       })
-      logSignal('POST /webseat/v1/join', res.status)
+      logSignal('POST .../lingecho/webseat/v1/join', res.status)
       const ans = await res.json()
       if (!ans.sdp || !ans.type) throw new Error('bad answer')
       await pc.setRemoteDescription({ type: ans.type, sdp: ans.sdp })
@@ -325,7 +324,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     if (!cid || !httpBase) return
     setPendingIncomingCallId(null)
     try {
-      const res = await fetch(`${httpBase}/webseat/v1/reject`, {
+      const res = await fetch(webSeatV1URL(httpBase, 'reject'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ call_id: cid }),

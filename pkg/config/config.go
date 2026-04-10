@@ -29,21 +29,18 @@ type Config struct {
 
 // ServerConfig server configuration
 type ServerConfig struct {
-	Name          string `env:"SERVER_NAME"`
-	Desc          string `env:"SERVER_DESC"`
-	URL           string `env:"SERVER_URL"`
-	Logo          string `env:"SERVER_LOGO"`
-	TermsURL      string `env:"SERVER_TERMS_URL"`
-	Addr          string `env:"ADDR"`
-	Mode          string `env:"MODE"`
-	DocsPrefix    string `env:"DOCS_PREFIX"`
-	APIPrefix     string `env:"API_PREFIX"`
-	AdminPrefix   string `env:"ADMIN_PREFIX"`
-	AuthPrefix    string `env:"AUTH_PREFIX"`
-	MonitorPrefix string `env:"MONITOR_PREFIX"`
-	SSLEnabled    bool   `env:"SSL_ENABLED"`
-	SSLCertFile   string `env:"SSL_CERT_FILE"`
-	SSLKeyFile    string `env:"SSL_KEY_FILE"`
+	Name        string `env:"SERVER_NAME"`
+	Desc        string `env:"SERVER_DESC"`
+	URL         string `env:"SERVER_URL"`
+	Logo        string `env:"SERVER_LOGO"`
+	TermsURL    string `env:"SERVER_TERMS_URL"`
+	Addr        string `env:"ADDR"`
+	Mode        string `env:"MODE"`
+	DocsPrefix  string `env:"DOCS_PREFIX"`
+	APIPrefix   string `env:"API_PREFIX"`
+	SSLEnabled  bool   `env:"SSL_ENABLED"`
+	SSLCertFile string `env:"SSL_CERT_FILE"`
+	SSLKeyFile  string `env:"SSL_KEY_FILE"`
 }
 
 // DatabaseConfig database configuration
@@ -83,13 +80,9 @@ type StorageConfig struct {
 
 // FeaturesConfig feature flags configuration
 type FeaturesConfig struct {
-	SearchEnabled   bool   `env:"SEARCH_ENABLED"`
-	SearchPath      string `env:"SEARCH_PATH"`
-	SearchBatchSize int    `env:"SEARCH_BATCH_SIZE"`
-	LanguageEnabled bool   `env:"LANGUAGE_ENABLED"`
-	BackupEnabled   bool   `env:"BACKUP_ENABLED"`
-	BackupPath      string `env:"BACKUP_PATH"`
-	BackupSchedule  string `env:"BACKUP_SCHEDULE"`
+	BackupEnabled  bool   `env:"BACKUP_ENABLED"`
+	BackupPath     string `env:"BACKUP_PATH"`
+	BackupSchedule string `env:"BACKUP_SCHEDULE"`
 }
 
 // MiddlewareConfig middleware configuration
@@ -141,7 +134,7 @@ var GlobalStore *lingstorage.Client
 
 func Load() error {
 	// 1. Load .env file based on environment (don't error if it doesn't exist, use default values)
-	env := os.Getenv("APP_ENV")
+	env := os.Getenv("MODE")
 	err := utils.LoadEnv(env)
 	if err != nil {
 		// Only log when .env file doesn't exist, don't affect startup
@@ -152,21 +145,18 @@ func Load() error {
 	GlobalConfig = &Config{
 		MachineID: utils.GetIntEnv("MACHINE_ID"),
 		Server: ServerConfig{
-			Name:          getStringOrDefault("SERVER_NAME", ""),
-			Desc:          getStringOrDefault("SERVER_DESC", ""),
-			URL:           getStringOrDefault("SERVER_URL", ""),
-			Logo:          getStringOrDefault("SERVER_LOGO", ""),
-			TermsURL:      getStringOrDefault("SERVER_TERMS_URL", ""),
-			Addr:          getStringOrDefault("ADDR", ":8082"),
-			Mode:          getStringOrDefault("MODE", "development"),
-			DocsPrefix:    getStringOrDefault("DOCS_PREFIX", "/api/docs"),
-			APIPrefix:     getStringOrDefault("API_PREFIX", "/api"),
-			AdminPrefix:   getStringOrDefault("ADMIN_PREFIX", "/admin"),
-			AuthPrefix:    getStringOrDefault("AUTH_PREFIX", "/auth"),
-			MonitorPrefix: getStringOrDefault("MONITOR_PREFIX", "/metrics"),
-			SSLEnabled:    getBoolOrDefault("SSL_ENABLED", false),
-			SSLCertFile:   getStringOrDefault("SSL_CERT_FILE", ""),
-			SSLKeyFile:    getStringOrDefault("SSL_KEY_FILE", ""),
+			Name:        getStringOrDefault("SERVER_NAME", ""),
+			Desc:        getStringOrDefault("SERVER_DESC", ""),
+			URL:         getStringOrDefault("SERVER_URL", ""),
+			Logo:        getStringOrDefault("SERVER_LOGO", ""),
+			TermsURL:    getStringOrDefault("SERVER_TERMS_URL", ""),
+			Addr:        getStringOrDefault("ADDR", ":8082"),
+			Mode:        getStringOrDefault("MODE", "development"),
+			DocsPrefix:  getStringOrDefault("DOCS_PREFIX", "/api/docs"),
+			APIPrefix:   getStringOrDefault("API_PREFIX", "/api"),
+			SSLEnabled:  getBoolOrDefault("SSL_ENABLED", false),
+			SSLCertFile: getStringOrDefault("SSL_CERT_FILE", ""),
+			SSLKeyFile:  getStringOrDefault("SSL_KEY_FILE", ""),
 		},
 		Database: DatabaseConfig{
 			Driver: getStringOrDefault("DB_DRIVER", "sqlite"),
@@ -200,13 +190,9 @@ func Load() error {
 			},
 		},
 		Features: FeaturesConfig{
-			SearchEnabled:   getBoolOrDefault("SEARCH_ENABLED", false),
-			SearchPath:      getStringOrDefault("SEARCH_PATH", "./search"),
-			SearchBatchSize: getIntOrDefault("SEARCH_BATCH_SIZE", 100),
-			LanguageEnabled: getBoolOrDefault("LANGUAGE_ENABLED", true),
-			BackupEnabled:   getBoolOrDefault("BACKUP_ENABLED", false),
-			BackupPath:      getStringOrDefault("BACKUP_PATH", "./backups"),
-			BackupSchedule:  getStringOrDefault("BACKUP_SCHEDULE", "0 2 * * *"),
+			BackupEnabled:  getBoolOrDefault("BACKUP_ENABLED", false),
+			BackupPath:     getStringOrDefault("BACKUP_PATH", "./backups"),
+			BackupSchedule: getStringOrDefault("BACKUP_SCHEDULE", "0 2 * * *"),
 		},
 		Middleware: loadMiddlewareConfig(),
 	}

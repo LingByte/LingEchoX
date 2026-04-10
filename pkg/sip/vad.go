@@ -21,10 +21,9 @@ type VADDetector struct {
 	frameCounter            int     // 当前连续帧计数
 	logger                  *zap.Logger
 	lastLogTime             time.Time // 上次日志时间（用于限流）
-	// 自适应阈值相关
-	noiseLevel      float64   // 环境噪音水平（滑动平均）
-	noiseSamples    []float64 // 最近的噪音样本（用于计算滑动平均）
-	maxNoiseSamples int       // 最大噪音样本数
+	noiseLevel              float64   // 环境噪音水平（滑动平均）
+	noiseSamples            []float64 // 最近的噪音样本（用于计算滑动平均）
+	maxNoiseSamples         int       // 最大噪音样本数
 }
 
 // NewVADDetector 创建新的 VAD 检测器

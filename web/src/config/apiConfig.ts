@@ -27,6 +27,109 @@ function convertToWebSocketURL(httpUrl: string): string {
 }
 
 /**
+ * Normalized path: leading slash, no trailing slash, or '' when URL path is empty/root.
+ */
+function normalizeMountPath(p: string): string {
+  let s = (p || '').trim()
+  if (!s || s === '/') return ''
+  s = s.replace(/\/+$/, '')
+  if (!s.startsWith('/')) s = `/${s}`
+  return s
+}
+
+/**
+ * HTTP API mount path (e.g. /api) derived from VITE_API_BASE_URL.
+ * If the value is an origin-only URL (https://host with no path), default to /api to match backend API_PREFIX.
+ */
+export function apiMountPathFromApiBase(apiBaseURL: string): string {
+  const t = (apiBaseURL || '').trim() || '/api'
+  if (t.startsWith('https://') || t.startsWith('http://')) {
+    try {
+      const norm = normalizeMountPath(new URL(t).pathname)
+      return norm || '/api'
+    } catch {
+      return '/api'
+    }
+  }
+  if (t.startsWith('/')) {
+    const norm = normalizeMountPath(t)
+    return norm || '/api'
+  }
+  if (t === 'api' || t.startsWith('api/')) {
+    const norm = normalizeMountPath(`/${t}`)
+    return norm || '/api'
+  }
+  return '/api'
+}
+
+/** Exported mount for callers that build paths under the same prefix as Gin (e.g. WebSeat). */
+export function getApiMountPath(): string {
+  return apiMountPathFromApiBase(getApiBaseURL())
+}
+
+/** Strip one leading mount prefix from a full API path (e.g. /api/lingecho/... → /lingecho/...). */
+function stripLeadingMount(path: string, mount: string): string {
+  const m = normalizeMountPath(mount) || '/api'
+  const p = path.startsWith('/') ? path : `/${path}`
+  if (p === m) return '/'
+  const sep = m.endsWith('/') ? m : `${m}/`
+  if (p.startsWith(sep)) {
+    return p.slice(m.length)
+  }
+  if (p.startsWith('/api/')) {
+    return p.slice('/api'.length)
+  }
+  if (p === '/api') return '/'
+  return p
+}
+
+/** True only when ws URL pathname equals the API mount (e.g. wss://host/api), not longer paths like .../api/lingecho. */
+function wsBasePathEqualsApiMount(wsBase: string, apiMount: string): boolean {
+  try {
+    const u = new URL(wsBase)
+    return normalizeMountPath(u.pathname) === normalizeMountPath(apiMount)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Derive WebSocket origin (no path) from VITE_API_BASE_URL when VITE_WS_BASE_URL is unset.
+ * Relative /api must use the page origin so HTTPS pages get wss://same-host, not ws://api.
+ */
+function deriveWsBaseFromApi(apiBaseURL: string): string {
+  const trimmed = (apiBaseURL || '').trim()
+  if (trimmed.startsWith('https://')) {
+    const u = new URL(trimmed)
+    const port = u.port ? `:${u.port}` : ''
+    return `wss://${u.hostname}${port}`
+  }
+  if (trimmed.startsWith('http://')) {
+    const u = new URL(trimmed)
+    const port = u.port ? `:${u.port}` : ''
+    return `ws://${u.hostname}${port}`
+  }
+  if (trimmed.startsWith('//') && typeof window !== 'undefined' && window.location?.protocol) {
+    return convertToWebSocketURL(`${window.location.protocol}${trimmed}`)
+  }
+  // Path-only prefix (/api) or common typo "api" without leading slash
+  if (trimmed.startsWith('/') || trimmed === 'api' || trimmed.startsWith('api/')) {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return convertToWebSocketURL(window.location.origin)
+    }
+    return 'ws://localhost'
+  }
+  // Bare host[:port][/path] (legacy)
+  try {
+    const u = new URL(`http://${trimmed}`)
+    const port = u.port ? `:${u.port}` : ''
+    return convertToWebSocketURL(`${u.protocol}//${u.hostname}${port}`)
+  } catch {
+    return convertToWebSocketURL(trimmed)
+  }
+}
+
+/**
  * 获取API配置
  */
 function getApiConfig(): ApiConfig {
@@ -37,9 +140,7 @@ function getApiConfig(): ApiConfig {
   // 如果环境变量中有WebSocket URL，使用它；否则从API URL转换
   let wsBaseURL = import.meta.env.VITE_WS_BASE_URL
   if (!wsBaseURL) {
-    // 从API URL提取host部分，转换为WebSocket URL
-    const apiHost = apiBaseURL.replace(/^https?:\/\//, '').replace(/\/api.*$/, '')
-    wsBaseURL = convertToWebSocketURL(apiBaseURL.split('/api')[0] || `http://${apiHost}`)
+    wsBaseURL = deriveWsBaseFromApi(apiBaseURL)
   }
   
   const uploadsBaseURL = import.meta.env.VITE_UPLOADS_BASE_URL || apiBaseURL.replace('/api', '/uploads')
@@ -85,15 +186,16 @@ export function getWebSocketBaseURL(): string {
 export function buildWebSocketURL(path: string): string {
   const wsBaseURL = getWebSocketBaseURL()
   const apiBaseURL = getApiBaseURL()
-  
-  // 如果wsBaseURL已经包含完整路径，直接使用
-  if (wsBaseURL.includes('/api')) {
-    return wsBaseURL + path.replace(/^\/api/, '')
+  const mount = apiMountPathFromApiBase(apiBaseURL)
+  const suffix = stripLeadingMount(path, mount)
+
+  // 仅当 WS 基址的 path 与 API 挂载点完全一致（如 wss://host/api）时才去掉 path 里的 mount，避免
+  // wss://host/api/lingecho/... 被误判后只剥一层 /api，拼成 .../lingecho/... 落在静态站（握手 200）。
+  if (wsBasePathEqualsApiMount(wsBaseURL, mount)) {
+    return `${wsBaseURL.replace(/\/$/, '')}${suffix}`
   }
-  
-  // 否则从apiBaseURL提取路径部分
-  const apiPath = apiBaseURL.replace(/^https?:\/\/[^\/]+/, '')
-  return wsBaseURL + apiPath + path.replace(/^\/api/, '')
+
+  return `${wsBaseURL.replace(/\/$/, '')}${mount}${suffix}`
 }
 
 /**

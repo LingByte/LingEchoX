@@ -1,14 +1,11 @@
-// Package sipserver starts the SIP UDP stack, WebSeat WebSocket/HTTP, outbound dial HTTP,
-// and campaign HTTP — shared by cmd/server (embedded) and cmd/sip (standalone).
+// Package sipserver starts the SIP UDP stack and wires WebSeat / outbound / campaign workers with the main HTTP app.
 package sipserver
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
@@ -28,19 +25,17 @@ type Config struct {
 	Host    string
 	Port    int
 	LocalIP string
-	// DB when non-nil is reused (e.g. same pool as the web app). When nil, a connection is opened from GlobalConfig if DSN is set.
-	DB *gorm.DB
+	DB      *gorm.DB // DB when non-nil is reused (e.g. same pool as the web app). When nil, a connection is opened from GlobalConfig if DSN is set.
 }
 
 // Embedded holds started subsystems for graceful shutdown.
 type Embedded struct {
-	sipServer       *server.SIPServer
-	outboundHTTPSrv *http.Server
-	campaignSvc     *Service
-	outMgr          *outbound.Manager
+	sipServer   *server.SIPServer
+	campaignSvc *CampaignService
+	outMgr      *outbound.Manager
 }
 
-func (e *Embedded) CampaignService() *Service {
+func (e *Embedded) CampaignService() *CampaignService {
 	if e == nil {
 		return nil
 	}
@@ -71,7 +66,7 @@ func sipDSNForLog(dsn string) string {
 	return dsn
 }
 
-// Start wires outbound manager, SIP server, persistence, WebSeat, optional HTTP APIs, and starts UDP.
+// Start wires outbound manager, SIP server, DB persistence, WebSeat hub, and starts UDP.
 func Start(cfg Config) (*Embedded, error) {
 	// SDP c=/Call-ID host: CLI (cfg.LocalIP) first; empty → SIP_LOCAL_IP (.env / process env).
 	// If both miss, outbound/server still default to 127.0.0.1 inside their packages.
@@ -88,7 +83,7 @@ func Start(cfg Config) (*Embedded, error) {
 	var sipServerPtr *server.SIPServer
 	var sipRegStore *GormStore
 	var sipCallPersist *Store
-	var campaignSvc *Service
+	var campaignSvc *CampaignService
 	var acdDB *gorm.DB
 
 	callerUser, callerDisplay := config.CallerIdentityFromEnv()
@@ -173,7 +168,7 @@ func Start(cfg Config) (*Embedded, error) {
 
 	if cfg.DB != nil {
 		acdDB = cfg.DB
-		campaignSvc = NewService(cfg.DB)
+		campaignSvc = NewCampaignService(cfg.DB)
 		sipRegStore = NewGormStore(cfg.DB)
 		campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
 			return sipRegStore.DialTargetForUsername(ctx, phone)
@@ -209,7 +204,7 @@ func Start(cfg Config) (*Embedded, error) {
 				}
 			} else {
 				acdDB = db
-				campaignSvc = NewService(db)
+				campaignSvc = NewCampaignService(db)
 				sipRegStore = NewGormStore(db)
 				campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
 					return sipRegStore.DialTargetForUsername(ctx, phone)
@@ -282,23 +277,6 @@ func Start(cfg Config) (*Embedded, error) {
 			})
 		},
 	})
-	if wsAddr := strings.TrimSpace(utils.GetEnv(webseat.EnvHTTPAddr)); wsAddr != "" {
-		if err := webseat.StartHTTPServer(wsAddr); err != nil && logger.Lg != nil {
-			logger.Lg.Warn("webseat: http server failed", zap.String("addr", wsAddr), zap.Error(err))
-		}
-	}
-	if outHTTPAddr := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundHTTPAddr)); outHTTPAddr != "" {
-		srv, err := outbound.StartDialHTTPServer(
-			outHTTPAddr,
-			strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundHTTPToken)),
-			outMgr,
-		)
-		if err != nil && logger.Lg != nil {
-			logger.Lg.Warn("sip outbound http: start failed", zap.String("addr", outHTTPAddr), zap.Error(err))
-		} else {
-			em.outboundHTTPSrv = srv
-		}
-	}
 	conversation.SetWebSeatTransfer(conversation.StartWebSeatHandoff)
 
 	if err := sipServerPtr.Start(); err != nil {
@@ -355,7 +333,7 @@ func Start(cfg Config) (*Embedded, error) {
 	return em, nil
 }
 
-// Shutdown stops outbound/campaign HTTP servers, campaign worker, and SIP UDP.
+// Shutdown stops the campaign worker and SIP UDP.
 func (e *Embedded) Shutdown(ctx context.Context) {
 	if e == nil {
 		return
@@ -364,11 +342,6 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 		logger.Lg.Info("sipapp: shutting down")
 	} else {
 		_, _ = fmt.Fprintln(os.Stdout, "sipapp: shutting down...")
-	}
-	if e.outboundHTTPSrv != nil {
-		shCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_ = e.outboundHTTPSrv.Shutdown(shCtx)
-		cancel()
 	}
 	if e.campaignSvc != nil {
 		e.campaignSvc.StopWorker()
