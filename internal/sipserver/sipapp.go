@@ -72,9 +72,16 @@ func sipDSNForLog(dsn string) string {
 
 // Start wires outbound manager, SIP server, persistence, WebSeat, optional HTTP APIs, and starts UDP.
 func Start(cfg Config) (*Embedded, error) {
+	// SDP c=/Call-ID host: CLI (cfg.LocalIP) first; empty → SIP_LOCAL_IP (.env / process env).
+	// If both miss, outbound/server still default to 127.0.0.1 inside their packages.
+	localIP := strings.TrimSpace(cfg.LocalIP)
+	if localIP == "" {
+		localIP = strings.TrimSpace(utils.GetEnv("SIP_LOCAL_IP"))
+	}
+
 	sipHost := cfg.Host
 	if sipHost == "0.0.0.0" {
-		sipHost = cfg.LocalIP
+		sipHost = localIP
 	}
 
 	var sipServerPtr *server.SIPServer
@@ -85,7 +92,7 @@ func Start(cfg Config) (*Embedded, error) {
 
 	callerUser, callerDisplay := outbound.CallerIdentityFromEnv()
 	outMgr := outbound.NewManager(outbound.ManagerConfig{
-		LocalIP:         cfg.LocalIP,
+		LocalIP:         localIP,
 		SIPHost:         sipHost,
 		SIPPort:         cfg.Port,
 		FromUser:        callerUser,
@@ -154,7 +161,7 @@ func Start(cfg Config) (*Embedded, error) {
 	sipServerPtr = server.New(server.Config{
 		Host:          cfg.Host,
 		Port:          cfg.Port,
-		LocalIP:       cfg.LocalIP,
+		LocalIP:       localIP,
 		OnSIPResponse: outMgr.HandleSIPResponse,
 	})
 
@@ -302,10 +309,11 @@ func Start(cfg Config) (*Embedded, error) {
 		logger.Lg.Info("sipapp: SIP UDP listening",
 			zap.String("host", cfg.Host),
 			zap.Int("port", cfg.Port),
-			zap.String("local_ip", cfg.LocalIP),
+			zap.String("local_ip_effective", localIP),
+			zap.String("local_ip_from_cli", strings.TrimSpace(cfg.LocalIP)),
 		)
 	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "sipapp: listening on udp %s:%d (SDP local-ip=%s)\n", cfg.Host, cfg.Port, cfg.LocalIP)
+		_, _ = fmt.Fprintf(os.Stdout, "sipapp: listening on udp %s:%d (SDP local-ip effective=%q cli=%q)\n", cfg.Host, cfg.Port, localIP, strings.TrimSpace(cfg.LocalIP))
 	}
 
 	if dt, ok := resolveOutboundDialTarget(sipRegStore); ok {

@@ -164,6 +164,8 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 		switch {
 		case strings.Contains(c, "pcmu") || strings.Contains(c, "pcma"):
 			wav = G711TaggedRecordingToWav(raw, codecName)
+		case strings.Contains(c, "g722"):
+			wav = G722TaggedRecordingToWav(raw)
 		case strings.Contains(c, "opus"):
 			sr := p.RecordSampleRate
 			if sr <= 0 {
