@@ -13,7 +13,7 @@ type Scenario string
 const (
 	// ScenarioCampaign is a proactive outbound call (manual trigger or job queue) with an optional script.
 	ScenarioCampaign Scenario = "campaign"
-	// ScenarioTransferAgent is the agent leg after inbound user requests human (e.g. DTMF 0).
+	// ScenarioTransferAgent is the agent leg after inbound user requests human support.
 	ScenarioTransferAgent Scenario = "transfer_agent"
 	// ScenarioCallback is a scheduled return call (same runtime as campaign, distinct for analytics).
 	ScenarioCallback Scenario = "callback"

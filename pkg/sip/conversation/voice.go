@@ -539,28 +539,18 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			if ap, ok := llmProvider.(*llm.AlibabaProvider); ok {
 				if action := ap.ConsumePendingAction(); action == "transfer_to_agent" {
 					if ms != nil && ms.GetContext().Err() == nil {
-						wantDigit := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_TO_AGENT_DIGIT"))
-						if wantDigit == "" {
-							wantDigit = "0"
-						}
 						lg.Info("sip voice: transfer after ai tts confirmation",
 							zap.String("call_id", cs.CallID),
-							zap.String("digit", wantDigit),
 						)
-						tryTransferToAgent(context.Background(), cs.CallID, wantDigit, lg)
+						TriggerTransferToAgent(context.Background(), cs.CallID, lg)
 					}
 				}
 			} else if consumeSIPTransferPending(cs.CallID) || shouldFallbackTransferByText(userText) {
 				if ms != nil && ms.GetContext().Err() == nil {
-					wantDigit := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_TO_AGENT_DIGIT"))
-					if wantDigit == "" {
-						wantDigit = "0"
-					}
 					lg.Info("sip voice: transfer after ai tts confirmation (tool/fallback)",
 						zap.String("call_id", cs.CallID),
-						zap.String("digit", wantDigit),
 					)
-					tryTransferToAgent(context.Background(), cs.CallID, wantDigit, lg)
+					TriggerTransferToAgent(context.Background(), cs.CallID, lg)
 				}
 			}
 			if scriptMode {
@@ -716,7 +706,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 
 	sipdtmf.AttachProcessor(ms, "sip-dtmf", func(_ context.Context, digit string) {
 		lg.Info("sip dtmf", zap.String("digit", digit), zap.String("call_id", cs.CallID))
-		tryTransferToAgent(context.Background(), cs.CallID, digit, lg)
 	})
 
 	// Start RTP read/write before welcome so the first inbound packet can update symmetric RTP
@@ -912,14 +901,9 @@ func registerSIPTransferTool(provider llm.LLMProvider, callID string, lg *zap.Lo
 		"当且仅当用户明确要求转人工客服时调用该工具。调用后系统会执行转人工，不要让用户重复确认。",
 		params,
 		func(args map[string]interface{}, _ interface{}) (string, error) {
-			wantDigit := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_TO_AGENT_DIGIT"))
-			if wantDigit == "" {
-				wantDigit = "0"
-			}
 			if lg != nil {
 				lg.Info("sip voice: transfer tool invoked",
 					zap.String("call_id", callID),
-					zap.String("digit", wantDigit),
 					zap.Any("args", args),
 				)
 			}
