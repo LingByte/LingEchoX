@@ -22,4 +22,3 @@ func isSIPRegisterFresh(lastSeenAt *time.Time) bool {
 	}
 	return time.Since(*lastSeenAt) <= sipRegisterFreshWindow()
 }
-

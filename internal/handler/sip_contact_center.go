@@ -61,6 +61,7 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		g.POST("/campaigns/:id/stop", h.stopSIPCampaign)
 		g.DELETE("/campaigns/:id", h.deleteSIPCampaign)
 		g.GET("/campaigns/metrics", h.getSIPCampaignMetrics)
+		g.GET("/campaigns/worker-metrics", h.getSIPCampaignWorkerMetrics)
 		g.GET("/campaigns/:id/logs", h.getSIPCampaignLogs)
 	}
 }

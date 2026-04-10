@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// StartWebSeatHandoff stops AI media and waits for the browser to POST /webseat/v1/join with this Call-ID.
+// StartWebSeatHandoff stops AI media and waits for the browser to POST {APIPrefix}/lingecho/webseat/v1/join with this Call-ID.
 func StartWebSeatHandoff(ctx context.Context, inboundCallID string, lg *zap.Logger) {
 	if lg == nil && logger.Lg != nil {
 		lg = logger.Lg

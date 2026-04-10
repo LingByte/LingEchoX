@@ -4,8 +4,6 @@ package bootstrap
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"strconv"
-
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -66,25 +64,6 @@ func (s *SeedService) seedConfigs() error {
 		{Key: constants.KEY_SITE_RESET_PASSWORD_DONE_API, Desc: "Reset Password API", Autoload: true, Public: true, Format: "text", Value: apiPrefix + "/auth/reset-password-done"},
 		{Key: constants.KEY_SITE_LOGIN_NEXT, Desc: "Login Redirect Page", Autoload: true, Public: true, Format: "text", Value: apiPrefix + "/admin/"},
 		{Key: constants.KEY_SITE_USER_ID_TYPE, Desc: "User ID Type", Autoload: true, Public: true, Format: "text", Value: "email"},
-		{Key: constants.KEY_SEARCH_ENABLED, Desc: "Search Feature Enabled", Autoload: true, Public: true, Format: "bool", Value: func() string {
-			if config.GlobalConfig.Features.SearchEnabled {
-				return "true"
-			}
-			return "false"
-		}()},
-		{Key: constants.KEY_SEARCH_PATH, Desc: "Search Index Path", Autoload: true, Public: false, Format: "text", Value: func() string {
-			if config.GlobalConfig.Features.SearchPath != "" {
-				return config.GlobalConfig.Features.SearchPath
-			}
-			return "./search"
-		}()},
-		{Key: constants.KEY_SEARCH_BATCH_SIZE, Desc: "Search Batch Size", Autoload: true, Public: false, Format: "int", Value: func() string {
-			if config.GlobalConfig.Features.SearchBatchSize > 0 {
-				return strconv.Itoa(config.GlobalConfig.Features.SearchBatchSize)
-			}
-			return "100"
-		}()},
-		{Key: constants.KEY_SEARCH_INDEX_SCHEDULE, Desc: "Search Index Schedule (Cron)", Autoload: true, Public: false, Format: "text", Value: "0 */6 * * *"}, // Execute every 6 hours
 	}
 	for _, cfg := range defaults {
 		var count int64

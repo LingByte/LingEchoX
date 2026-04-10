@@ -9,13 +9,6 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// GlobalCache is a global cache instance that supports generic key-value pairs
-var GlobalCache *ExpiredLRUCache[string, any]
-
-func InitGlobalCache(maxSize int, expiration time.Duration) {
-	GlobalCache = NewExpiredLRUCache[string, any](maxSize, expiration)
-}
-
 type expiredLRUCacheValue[V any] struct {
 	n   time.Time
 	val V

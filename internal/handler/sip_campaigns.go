@@ -272,6 +272,16 @@ func (h *Handlers) getSIPCampaignMetrics(c *gin.Context) {
 	})
 }
 
+// getSIPCampaignWorkerMetrics returns in-process dial counters from the embedded campaign worker
+// (same data as the former SIP_CAMPAIGN_HTTP server GET .../metrics).
+func (h *Handlers) getSIPCampaignWorkerMetrics(c *gin.Context) {
+	if h.campaignSvc == nil {
+		response.Fail(c, "campaign worker unavailable", nil)
+		return
+	}
+	response.Success(c, "success", h.campaignSvc.SnapshotMetrics())
+}
+
 func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {

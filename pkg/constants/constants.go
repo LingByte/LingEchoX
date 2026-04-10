@@ -51,17 +51,9 @@ const KEY_SITE_RESET_PASSWORD_DONE_API = "SITE_RESET_PASSWORD_DONE_API"
 const KEY_SITE_LOGIN_NEXT = "SITE_LOGIN_NEXT"
 const KEY_SITE_USER_ID_TYPE = "SITE_USER_ID_TYPE"
 
-// Search configuration keys
-const KEY_SEARCH_ENABLED = "SEARCH_ENABLED"
-const KEY_SEARCH_PATH = "SEARCH_PATH"
-const KEY_SEARCH_BATCH_SIZE = "SEARCH_BATCH_SIZE"
-const KEY_SEARCH_INDEX_SCHEDULE = "SEARCH_INDEX_SCHEDULE"
-
 const AUTHORIZATION_PREFIX = "Bearer "
 const CREDENTIAL_API_KEY = "X-API-KEY"
 const CREDENTIAL_API_SECRET = "X-API-SECRET"
 
-const (
-	EnvCampaignHTTPAddr  = "SIP_CAMPAIGN_HTTP_ADDR"  // e.g. :9082
-	EnvCampaignHTTPToken = "SIP_CAMPAIGN_HTTP_TOKEN" // optional
-)
+// LingechoWebSeatPathPrefix is registered under Server.APIPrefix (e.g. /api/lingecho/webseat/v1/ws).
+const LingechoWebSeatPathPrefix = "lingecho/webseat/v1"

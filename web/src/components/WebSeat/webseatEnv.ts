@@ -1,36 +1,45 @@
+import { buildWebSocketURL, getApiBaseURL, getApiMountPath } from '@/config/apiConfig'
+
+/** Path under API prefix, matches backend constants.LingechoWebSeatPathPrefix */
+export const lingechoWebSeatV1 = 'lingecho/webseat/v1'
+
+/**
+ * Absolute HTTP base for WebSeat REST (join/hangup/reject), same as main API (VITE_API_BASE_URL).
+ * No separate VITE_SIP_WEBSEAT_HTTP_BASE — WebSeat is always on the main Gin server.
+ */
 export function webSeatHttpBase(): string {
-  const v = import.meta.env.VITE_SIP_WEBSEAT_HTTP_BASE
-  const raw = typeof v === 'string' ? v.trim().replace(/\/$/, '') : ''
-  if (!raw) return ''
-  return normalizeLoopbackBase(normalizeBaseURL(raw))
+  return normalizeLoopbackBase(normalizeBaseURL(getApiBaseURL()))
 }
 
+/** e.g. POST .../lingecho/webseat/v1/join */
+export function webSeatV1URL(httpBase: string, segment: string): string {
+  const base = (httpBase || '').replace(/\/$/, '')
+  const s = segment.replace(/^\//, '')
+  return `${base}/${lingechoWebSeatV1}/${s}`
+}
+
+/** Shared secret for GET .../lingecho/webseat/v1/ws?token= — mirrors server SIP_WEBSEAT_WS_TOKEN */
 export function webSeatWsToken(): string {
   const v = import.meta.env.VITE_SIP_WEBSEAT_WS_TOKEN
   return typeof v === 'string' ? v.trim() : ''
 }
 
-export function webSeatWsBase(): string {
-  const v = import.meta.env.VITE_SIP_WEBSEAT_WS_BASE
-  const raw = typeof v === 'string' ? v.trim().replace(/\/$/, '') : ''
-  if (!raw) return ''
-  return normalizeLoopbackBase(normalizeBaseURL(raw))
+/** WebSocket URL for agent signaling; uses VITE_API_BASE_URL + VITE_WS_BASE_URL like other app WS. */
+export function buildWebSeatWebSocketURL(token: string): string {
+  const path = webSeatWsPathUnderApi()
+  let ws = buildWebSocketURL(path)
+  if (token) {
+    const u = new URL(ws)
+    u.searchParams.set('token', token)
+    ws = u.toString()
+  }
+  return ws
 }
 
-export function buildWebSeatWebSocketURL(httpBase: string, token: string, wsBase?: string): string {
-  const pickedBase = (wsBase || '').trim() || httpBase
-  const root = normalizeBaseURL(pickedBase).replace(/\/$/, '')
-  const base = root.endsWith('/') ? root : `${root}/`
-  let u: URL
-  try {
-    u = new URL('webseat/v1/ws', base)
-  } catch {
-    const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost'
-    u = new URL('webseat/v1/ws', `${origin}/`)
-  }
-  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-  if (token) u.searchParams.set('token', token)
-  return u.toString()
+/** Full path under API mount: /api/lingecho/webseat/v1/ws (mount from VITE_API_BASE_URL). */
+function webSeatWsPathUnderApi(): string {
+  const mount = getApiMountPath()
+  return `${mount}/${lingechoWebSeatV1}/ws`.replace(/\/+/g, '/')
 }
 
 function normalizeBaseURL(base: string): string {
