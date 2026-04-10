@@ -17,25 +17,20 @@ type HandlerFunc func(msg *Message, addr *net.UDPAddr) *Message
 // It does not implement SIP transactions (retransmissions, timers, digest auth, etc.).
 // It focuses on parsing and dispatching.
 type Server struct {
-	Host string
-	Port int
-
-	Conn *net.UDPConn
-
+	Host           string
+	Port           int
+	Conn           *net.UDPConn
 	Handlers       map[string]HandlerFunc
 	NoRouteHandler HandlerFunc
-
-	// Optional event hooks
-	OnDatagram func(raw []byte, addr *net.UDPAddr)
-	OnParseErr func(raw []byte, addr *net.UDPAddr, err error)
-	OnRequest  func(req *Message, addr *net.UDPAddr)
-	OnResponse func(req *Message, resp *Message, addr *net.UDPAddr)
+	OnDatagram     func(raw []byte, addr *net.UDPAddr) // Optional event hooks
+	OnParseErr     func(raw []byte, addr *net.UDPAddr, err error)
+	OnRequest      func(req *Message, addr *net.UDPAddr)
+	OnResponse     func(req *Message, resp *Message, addr *net.UDPAddr)
 	// OnSIPResponse is invoked for every SIP response received on the socket (UAC / outbound legs).
 	// If nil, responses are ignored (UAS-only mode).
 	OnSIPResponse func(resp *Message, addr *net.UDPAddr)
 	OnEvent       func(e Event)
-
-	readBufSize int
+	readBufSize   int
 }
 
 func NewServer(host string, port int) *Server {
@@ -43,7 +38,7 @@ func NewServer(host string, port int) *Server {
 		Host:           host,
 		Port:           port,
 		Handlers:       make(map[string]HandlerFunc),
-		readBufSize:   65535,
+		readBufSize:    65535,
 		NoRouteHandler: nil,
 	}
 }
@@ -202,4 +197,3 @@ func (s *Server) Send(msg *Message, addr *net.UDPAddr) error {
 	_, err := s.Conn.WriteToUDP([]byte(raw), addr)
 	return err
 }
-

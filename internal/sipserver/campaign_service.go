@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -356,13 +359,20 @@ func (s *CampaignService) RecordScriptStep(ctx context.Context, evt outbound.Scr
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return err
 	}
+	msg := fmt.Sprintf("step=%s type=%s result=%s input=%s output=%s", evt.StepID, evt.StepType, evt.Result, nonEmptyOr(evt.InputText, "-"), nonEmptyOr(evt.OutputText, "-"))
+	if evt.StepType == constants.SIPScriptStepListen && evt.Result == constants.SIPScriptRunStarted {
+		msg = "listen wait (asr pending): " + msg
+	}
+	if evt.StepType == constants.SIPScriptStepListen && evt.Result == constants.SIPScriptRunMatched {
+		msg = "listen got user text: " + msg
+	}
 	s.appendEvent(ctx, models.SIPCampaignEvent{
 		CampaignID: campaignID,
 		ContactID:  contactID,
 		CallID:     strings.TrimSpace(evt.CallID),
 		Type:       "script",
 		Level:      "info",
-		Message:    fmt.Sprintf("step=%s type=%s result=%s input=%s output=%s", evt.StepID, evt.StepType, evt.Result, nonEmptyOr(evt.InputText, "-"), nonEmptyOr(evt.OutputText, "-")),
+		Message:    msg,
 		Meta:       datatypes.JSON([]byte(`{}`)),
 	})
 	return nil
@@ -469,8 +479,8 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 			}
 			return conversation.SpeakTextOnce(runCtx, runLeg.Session, prompt, logger.Lg)
 		},
-		OnListen: func(runCtx context.Context, runLeg outbound.EstablishedLeg, timeout time.Duration) (outbound.ListenResult, error) {
-			res, err := s.waitNextTurn(runCtx, runLeg.CallID, lastTurnIndex, timeout)
+		OnListen: func(runCtx context.Context, runLeg outbound.EstablishedLeg, timeout time.Duration, notBefore time.Time) (outbound.ListenResult, error) {
+			res, err := s.waitNextTurn(runCtx, runLeg.CallID, lastTurnIndex, timeout, notBefore)
 			if err != nil {
 				if logger.Lg != nil && runLeg.Session != nil && strings.Contains(strings.ToLower(err.Error()), "timeout") {
 					if rtpSess := runLeg.Session.RTPSession(); rtpSess != nil {
@@ -553,7 +563,18 @@ type turnFetchResult struct {
 	Turn  models.SIPCallDialogTurn
 }
 
-func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, afterIndex int, timeout time.Duration) (turnFetchResult, error) {
+// scriptListenPollInterval is how often we poll DB for a new user turn during script listen (default 120ms).
+func scriptListenPollInterval() time.Duration {
+	ms := 120
+	if s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPScriptListenPollMS)); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 50 && n <= 500 {
+			ms = n
+		}
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, afterIndex int, timeout time.Duration, notBefore time.Time) (turnFetchResult, error) {
 	if s == nil || s.db == nil {
 		return turnFetchResult{}, fmt.Errorf("script listen: db unavailable")
 	}
@@ -564,11 +585,11 @@ func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, after
 		timeout = 8 * time.Second
 	}
 	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(350 * time.Millisecond)
+	ticker := time.NewTicker(scriptListenPollInterval())
 	defer ticker.Stop()
 
 	for {
-		res, ok := s.fetchTurn(callID, afterIndex)
+		res, ok := s.fetchTurn(callID, afterIndex, notBefore)
 		if ok {
 			return res, nil
 		}
@@ -583,7 +604,7 @@ func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, after
 	}
 }
 
-func (s *CampaignService) fetchTurn(callID string, afterIndex int) (turnFetchResult, bool) {
+func (s *CampaignService) fetchTurn(callID string, afterIndex int, notBefore time.Time) (turnFetchResult, bool) {
 	if s == nil || s.db == nil {
 		return turnFetchResult{}, false
 	}
@@ -602,6 +623,9 @@ func (s *CampaignService) fetchTurn(callID string, afterIndex int) (turnFetchRes
 	for i := afterIndex; i < len(turns); i++ {
 		t := turns[i]
 		if strings.TrimSpace(t.ASRText) == "" {
+			continue
+		}
+		if !notBefore.IsZero() && !t.At.IsZero() && t.At.Before(notBefore) {
 			continue
 		}
 		return turnFetchResult{

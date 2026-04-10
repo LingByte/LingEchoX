@@ -28,7 +28,7 @@ var (
 	transferDialTarget func(context.Context) (outbound.DialTarget, bool)
 	// WebSeatTransfer starts inbound ↔ browser WebRTC bridging when DialTarget.WebSeat (SIP_TRANSFER_NUMBER=web).
 	// If nil and WebSeat is requested, transfer logs a warning and releases the dedupe slot.
-	webSeatTransfer func(ctx context.Context, inboundCallID string, lg *zap.Logger)
+	webSeatTransfer func(inboundCallID string, lg *zap.Logger)
 	transferStarted sync.Map // inbound Call-ID -> bool (dedupe)
 	transferRingMu   sync.Mutex
 	transferRingStop map[string]context.CancelFunc
@@ -50,7 +50,7 @@ func SetTransferDialTargetResolver(fn func(context.Context) (outbound.DialTarget
 }
 
 // SetWebSeatTransfer registers the handler for SIP_TRANSFER_NUMBER=web (browser agent). Optional until WebRTC gateway ships.
-func SetWebSeatTransfer(fn func(ctx context.Context, inboundCallID string, lg *zap.Logger)) {
+func SetWebSeatTransfer(fn func(inboundCallID string, lg *zap.Logger)) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
 	webSeatTransfer = fn
@@ -58,8 +58,7 @@ func SetWebSeatTransfer(fn func(ctx context.Context, inboundCallID string, lg *z
 
 // HandleSIPINFODTMF parses SIP INFO (application/dtmf-relay) for observability only.
 // Transfer is no longer triggered by keypad digits.
-func HandleSIPINFODTMF(ctx context.Context, inboundCallID string, contentType, body string, lg *zap.Logger) {
-	_ = ctx
+func HandleSIPINFODTMF(inboundCallID string, contentType, body string, lg *zap.Logger) {
 	if lg == nil && logger.Lg != nil {
 		lg = logger.Lg
 	}
@@ -112,7 +111,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		}
 		lg.Info("sip transfer: web seat — handing off to WebRTC bridge", zap.String("inbound_call_id", inboundCallID))
 		startTransferRinging(ctx, inboundCallID, lg)
-		go func() { webFn(ctx, inboundCallID, lg) }()
+		go func() { webFn(inboundCallID, lg) }()
 		return
 	}
 

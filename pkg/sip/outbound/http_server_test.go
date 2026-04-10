@@ -1,3 +1,6 @@
+//go:build ignore
+
+// Tests for dialHTTPAPI; implementation was removed from the tree — re-enable when HTTP dial API returns.
 package outbound
 
 import (

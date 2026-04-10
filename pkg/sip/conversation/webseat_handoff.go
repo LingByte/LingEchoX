@@ -1,15 +1,13 @@
 package conversation
 
 import (
-	"context"
-
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
 	"go.uber.org/zap"
 )
 
 // StartWebSeatHandoff stops AI media and waits for the browser to POST {APIPrefix}/lingecho/webseat/v1/join with this Call-ID.
-func StartWebSeatHandoff(ctx context.Context, inboundCallID string, lg *zap.Logger) {
+func StartWebSeatHandoff(inboundCallID string, lg *zap.Logger) {
 	if lg == nil && logger.Lg != nil {
 		lg = logger.Lg
 	}
@@ -47,12 +45,12 @@ func HangupWebSeatBridgeFull(callID string) bool {
 
 // ActiveWebSeatSession is true while awaiting browser join or while the WebRTC bridge is up.
 func ActiveWebSeatSession(callID string) bool {
-	return webseat.PendingOrActive(callID)
+	return webseat.IsPendingOrActive(callID)
 }
 
 // ActiveWebSeatBridge is true only after browser join completed and bridge is running.
 func ActiveWebSeatBridge(callID string) bool {
-	return webseat.ActiveOnly(callID)
+	return webseat.IsActive(callID)
 }
 
 // ReleaseTransferStartDedupe clears the per-call transfer lock (join timeout, failed register).

@@ -24,9 +24,6 @@ import (
 )
 
 const (
-	// EnvHTTPAddr is deprecated: WebSeat HTTP/WebSocket is served on the main Gin app under
-	// {APIPrefix}/lingecho/webseat/v1 (see constants.LingechoWebSeatPathPrefix). This env is ignored.
-	EnvHTTPAddr = "SIP_WEBSEAT_HTTP_ADDR"
 	// EnvTrackWait is max wait after returning the SDP answer for the browser to connect and send the first audio track (e.g. "90s").
 	EnvTrackWait = "SIP_WEBSEAT_TRACK_WAIT"
 	// EnvWSToken is the shared secret for GET /webseat/v1/ws?token=... (empty = accept any client; not recommended for production).
@@ -299,8 +296,8 @@ func (h *Hub) awaitWatchdog(callID string) {
 	}
 }
 
-// PendingOrActive is true while waiting for WebRTC or while a bridge is running (suppress late ACK voice attach).
-func PendingOrActive(callID string) bool {
+// IsPendingOrActive is true while waiting for WebRTC or while a bridge is running (suppress late ACK voice attach).
+func IsPendingOrActive(callID string) bool {
 	if defaultHub == nil || callID == "" {
 		return false
 	}
@@ -312,8 +309,8 @@ func PendingOrActive(callID string) bool {
 	return p || a
 }
 
-// ActiveOnly is true only when WebRTC bridge is active (browser already joined).
-func ActiveOnly(callID string) bool {
+// IsActive is true only when WebRTC bridge is active (browser already joined).
+func IsActive(callID string) bool {
 	if defaultHub == nil || callID == "" {
 		return false
 	}

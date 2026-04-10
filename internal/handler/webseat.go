@@ -28,6 +28,6 @@ func (h *Handlers) lingechoWebSeatStatus(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"call_id":           callID,
-		"pending_or_active": webseat.PendingOrActive(callID),
+		"pending_or_active": webseat.IsPendingOrActive(callID),
 	})
 }
