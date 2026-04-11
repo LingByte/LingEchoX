@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/LingByte/SoulNexus/pkg/constants"
 )
 
 type inMemoryRecorder struct {
@@ -43,6 +45,46 @@ func TestParseHybridScript_ExtendedFields(t *testing.T) {
 	}
 }
 
+func TestListenRouteWithoutLLM_Apology(t *testing.T) {
+	t.Setenv(constants.EnvCHECKLLMAPIKey, "")
+	t.Setenv(constants.EnvCHECKLLMBaseURL, "")
+	t.Setenv(constants.EnvCHECKLLMModel, "")
+	raw := `{
+		"id":"route-fail",
+		"start_id":"l1",
+		"steps":[
+			{"id":"l1","type":"listen","next_id":"end","transitions":[
+				{"next_id":"a","description":"positive"},
+				{"next_id":"b","description":"negative"}
+			]},
+			{"id":"a","type":"end"},
+			{"id":"b","type":"end"},
+			{"id":"end","type":"end"}
+		]
+	}`
+	script, err := ParseHybridScript(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var said string
+	rec := &inMemoryRecorder{}
+	r := NewHybridScriptRunner(script, rec).WithHooks(RuntimeHooks{
+		OnListen: func(_ context.Context, _ EstablishedLeg, _ time.Duration, _ time.Time) (ListenResult, error) {
+			return ListenResult{InputText: "随便说说", ReplyText: ""}, nil
+		},
+		OnSay: func(_ context.Context, _ EstablishedLeg, prompt string) error {
+			said = prompt
+			return nil
+		},
+	})
+	if err := r.Run(context.Background(), EstablishedLeg{CallID: "c1"}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if said == "" {
+		t.Fatal("expected apology OnSay")
+	}
+}
+
 func TestRunner_ListenTimeoutFallback(t *testing.T) {
 	script, err := ParseHybridScript(`{
 		"id":"timeout-flow",
@@ -69,4 +111,3 @@ func TestRunner_ListenTimeoutFallback(t *testing.T) {
 		t.Fatalf("expected trace events")
 	}
 }
-

@@ -41,30 +41,22 @@ const defaultSIPMediaMaxSeconds = 3600
 // Downlink: only synthesized (TTS) PCM is encoded and sent as RTP; uplink is not echoed
 // (see media.KeySIPSuppressUplinkEcho).
 type CallSession struct {
-	CallID string
-
-	rtpSess *rtp.Session
-	media   *media.MediaSession
-	neg     sipprotocol.SDPCodec
-
-	// RTP transports and codec (same as used for MediaSession) for handoff to in-process PCM bridge.
-	rxTransport *rtp.SIPRTPTransport
-	txTransport *rtp.SIPRTPTransport
-	srcCodec    media.CodecConfig
-	dtmfPT      uint8
-
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	startOnce sync.Once
-	// For SIP: media starts on ACK, not on INVITE.
-	ackOnce sync.Once
-
+	CallID        string
+	rtpSess       *rtp.Session
+	media         *media.MediaSession
+	neg           sipprotocol.SDPCodec
+	rxTransport   *rtp.SIPRTPTransport // RTP transports and codec (same as used for MediaSession) for handoff to in-process PCM bridge.
+	txTransport   *rtp.SIPRTPTransport
+	srcCodec      media.CodecConfig
+	dtmfPT        uint8
+	ctx           context.Context
+	cancel        context.CancelFunc
+	startOnce     sync.Once
+	ackOnce       sync.Once // For SIP: media starts on ACK, not on INVITE.
 	voiceMu       sync.Mutex
 	voiceAttached bool
-
-	recMu  sync.Mutex
-	recBuf []byte
+	recMu         sync.Mutex
+	recBuf        []byte
 }
 
 // NewCallSession creates a call session with codec negotiation from SDP.
@@ -113,13 +105,11 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 			negotiatedSDP = c
 			negotiatedSDP.Channels = 1
 			src = media.CodecConfig{
-				Codec:       c.Name, // "pcmu" or "pcma"
-				SampleRate:  c.ClockRate,
-				Channels:    1,
-				BitDepth:    8, // PCMU/PCMA payload is 8-bit
-				PayloadType: negotiatedPayloadType,
-				// Use 20ms frames for RTP audio so encoder/decoder match
-				// typical SIP/RTP expectations and keep payload sizes bounded.
+				Codec:         c.Name, // "pcmu" or "pcma"
+				SampleRate:    c.ClockRate,
+				Channels:      1,
+				BitDepth:      8, // PCMU/PCMA payload is 8-bit
+				PayloadType:   negotiatedPayloadType,
 				FrameDuration: "20ms",
 			}
 			break
@@ -128,9 +118,6 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 			negotiatedPayloadType = c.PayloadType
 			negotiatedSDP = c
 			negotiatedSDP.Channels = 1
-			// SDP rtpmap uses 8000 Hz clock (RFC 3551) but G.722 decode/encode PCM is 16 kHz.
-			// SampleRate here is the PCM rate for encoder resamplers; RTP timestamp ticks use 8 kHz
-			// in pkg/sip/rtp SIPRTPTransport.Send.
 			src = media.CodecConfig{
 				Codec:         "g722",
 				SampleRate:    16000,

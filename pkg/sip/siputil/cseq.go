@@ -1,12 +1,12 @@
-package outbound
+package siputil
 
 import (
 	"strconv"
 	"strings"
 )
 
-// parseCSeqNum returns the integer from a CSeq header (e.g. "1 INVITE" -> 1).
-func parseCSeqNum(cseq string) int {
+// ParseCSeqNum returns the sequence number from a CSeq header (e.g. "1 INVITE" -> 1).
+func ParseCSeqNum(cseq string) int {
 	cseq = strings.TrimSpace(cseq)
 	if cseq == "" {
 		return 0
@@ -22,8 +22,8 @@ func parseCSeqNum(cseq string) int {
 	return n
 }
 
-// withCSeqACK returns CSeq value for ACK matching an INVITE CSeq number.
-func withCSeqACK(inviteCSeq int) string {
+// WithCSeqACK returns a CSeq header value for ACK matching an INVITE CSeq number.
+func WithCSeqACK(inviteCSeq int) string {
 	if inviteCSeq <= 0 {
 		return "1 ACK"
 	}

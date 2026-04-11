@@ -2,8 +2,6 @@ package conversation
 
 import (
 	"encoding/json"
-	"math"
-	"strconv"
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -85,33 +83,3 @@ func (c *SIPHotwordCorrector) Correct(text string) string {
 	}
 	return c.replacer.Replace(t)
 }
-
-// rmsPCM16LE computes RMS of signed 16-bit little-endian PCM.
-func rmsPCM16LE(pcm []byte) float64 {
-	if len(pcm) < 2 {
-		return 0
-	}
-	n := len(pcm) / 2
-	var sum float64
-	for i := 0; i+1 < len(pcm); i += 2 {
-		v := int16(uint16(pcm[i]) | (uint16(pcm[i+1]) << 8))
-		f := float64(v)
-		sum += f * f
-	}
-	return math.Sqrt(sum / float64(n))
-}
-
-// Welcome prompt barge-in RMS threshold. Default lower than general VAD threshold
-// to make "interrupt welcome prompt" more responsive.
-func sipWelcomeBargeInThresholdFromEnv() float64 {
-	s := strings.TrimSpace(utils.GetEnv("SIP_WELCOME_BARGE_IN_THRESHOLD"))
-	if s == "" {
-		return 1800.0
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || f <= 0 {
-		return 1800.0
-	}
-	return f
-}
-

@@ -15,6 +15,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
+	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"go.uber.org/zap"
 )
@@ -654,7 +655,7 @@ func txKeyFromResponse(resp *protocol.Message) string {
 	if resp == nil {
 		return ""
 	}
-	cseqNum := parseCSeqNum(strings.TrimSpace(resp.GetHeader("CSeq")))
+	cseqNum := siputil.ParseCSeqNum(strings.TrimSpace(resp.GetHeader("CSeq")))
 	if cseqNum <= 0 {
 		return ""
 	}
