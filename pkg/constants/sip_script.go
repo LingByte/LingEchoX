@@ -11,11 +11,12 @@ const (
 
 // SIP hybrid script runtime event results.
 const (
-	SIPScriptRunStarted = "started"
-	SIPScriptRunMatched = "matched" // listen step: ASR text received (after OnListen succeeds)
-	SIPScriptRunFailed  = "failed"
-	SIPScriptRunTimeout = "timeout"
-	SIPScriptRunEnded   = "ended"
+	SIPScriptRunStarted     = "started"
+	SIPScriptRunMatched     = "matched" // listen step: ASR text received (after OnListen succeeds)
+	SIPScriptRunFailed      = "failed"
+	SIPScriptRunTimeout     = "timeout"
+	SIPScriptRunEnded       = "ended"
+	SIPScriptRunRouteFailed = "route_failed" // listen: LLM branch routing failed or LLM not configured
 )
 
 // Env vars for campaign script listen latency (read via utils.GetEnv).
@@ -29,4 +30,14 @@ const (
 	EnvSIPScriptListenTailMSMin = "SIP_SCRIPT_LISTEN_TAIL_MS_MIN"
 	// SIP_SCRIPT_LISTEN_POLL_MS: DB poll interval while waiting for next user turn (default 120).
 	EnvSIPScriptListenPollMS = "SIP_SCRIPT_LISTEN_POLL_MS"
+
+	// CHECK_LLM_*: OpenAI-compatible API used to pick listen-step branches (DashScope, OpenAI, etc.).
+	EnvCHECKLLMProvider       = "CHECK_LLM_PROVIDER"
+	EnvCHECKLLMBaseURL        = "CHECK_LLM_BASEURL"
+	EnvCHECKLLMAPIKey         = "CHECK_LLM_APIKEY"
+	EnvCHECKLLMModel          = "CHECK_LLM_MODEL"
+	EnvCHECKLLMRouteTimeoutMS = "CHECK_LLM_ROUTE_TIMEOUT_MS"
+	EnvCHECKLLMRouteDisabled  = "CHECK_LLM_ROUTE_DISABLED" // "1" or "true" disables LLM listen routing (then listen+transitions is invalid at runtime)
+	// SIP_SCRIPT_LLM_FAIL_PROMPT: spoken when listen LLM routing is unavailable or fails (default below).
+	EnvSIPScriptLLMFailPrompt = "SIP_SCRIPT_LLM_FAIL_PROMPT"
 )

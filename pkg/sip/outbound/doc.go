@@ -1,6 +1,8 @@
 // Package outbound implements SIP UAC (outbound) signaling and call legs without
 // entangling with the UAS (inbound) code path in pkg/sip/server.
 //
+// Cross-cutting SIP helpers (CSeq parsing, PCM RMS, etc.) live in pkg/sip/siputil.
+//
 // Boundaries:
 //   - Uses the same UDP socket as SIPServer via SignalingSender (SendSIP).
 //   - Handles responses via Manager.HandleSIPResponse wired to protocol.Server.OnSIPResponse.

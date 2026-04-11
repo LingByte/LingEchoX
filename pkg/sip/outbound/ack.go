@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
 )
 
 // buildACK builds a SIP ACK for a completed INVITE transaction (200 OK with SDP answer).
@@ -36,7 +37,7 @@ func buildACK(inv inviteParams, resp200 *protocol.Message, requestURI string) *p
 		msg.SetHeader("To", inv.RequestURI)
 	}
 	msg.SetHeader("Call-ID", inv.CallID)
-	msg.SetHeader("CSeq", withCSeqACK(inv.CSeq))
+	msg.SetHeader("CSeq", siputil.WithCSeqACK(inv.CSeq))
 	msg.SetHeader("Content-Length", "0")
 	return msg
 }

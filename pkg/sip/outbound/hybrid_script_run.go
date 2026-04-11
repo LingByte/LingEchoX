@@ -1,8 +1,10 @@
 package outbound
 
+// This file runs a validated HybridScript: step dispatch, hooks, tracing, and listen timing helpers.
+// JSON parsing and schema checks are in hybrid_script_parse.go.
+
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,41 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/utils"
+	"go.uber.org/zap"
 )
-
-// HybridScript is a deterministic skeleton where each step has bounded retries/timeouts.
-type HybridScript struct {
-	ID               string       `json:"id"`
-	Version          string       `json:"version"`
-	StartID          string       `json:"start_id"`
-	MaxTurns         int          `json:"max_turns"`
-	SilenceTimeoutMS int          `json:"silence_timeout_ms"`
-	EndIntents       []string     `json:"end_intents"`
-	Steps            []HybridStep `json:"steps"`
-}
-
-type HybridStep struct {
-	ID              string            `json:"id"`
-	Type            string            `json:"type"`
-	Prompt          string            `json:"prompt"`
-	NextID          string            `json:"next_id"`
-	Retry           int               `json:"retry"`
-	TimeoutMS       int               `json:"timeout_ms"`
-	Conditions      map[string]string `json:"conditions"`
-	FallbackID      string            `json:"fallback_id"`
-	ListenTimeoutMS int               `json:"listen_timeout_ms"`
-	ListenFallbackID string           `json:"listen_fallback_id"`
-	LLMInstruction  string            `json:"llm_instruction"`
-	Transitions     []HybridTransition `json:"transitions"`
-}
-
-type HybridTransition struct {
-	Intent   string `json:"intent"`
-	Contains string `json:"contains"`
-	Equals   string `json:"equals"`
-	NextID   string `json:"next_id"`
-}
 
 type ScriptRunRecorder interface {
 	Record(ctx context.Context, event ScriptRunEvent) error
@@ -68,15 +39,14 @@ type ListenResult struct {
 }
 
 type RuntimeHooks struct {
-	OnSay        func(ctx context.Context, leg EstablishedLeg, prompt string) error
+	OnSay func(ctx context.Context, leg EstablishedLeg, prompt string) error
 	// notBefore marks the moment listen step starts; consumers should ignore older ASR turns.
-	OnListen     func(ctx context.Context, leg EstablishedLeg, timeout time.Duration, notBefore time.Time) (ListenResult, error)
-	OnLLMReply   func(ctx context.Context, leg EstablishedLeg, userText, instruction string) (string, error)
-	IsEndIntent  func(input string, script HybridScript) bool
+	OnListen    func(ctx context.Context, leg EstablishedLeg, timeout time.Duration, notBefore time.Time) (ListenResult, error)
+	OnLLMReply  func(ctx context.Context, leg EstablishedLeg, userText, instruction string) (string, error)
+	IsEndIntent func(input string, script HybridScript) bool
 }
 
-// HybridScriptRunner is an MVP runner: it enforces step ordering and logs script traces.
-// Voice input/output integration is delegated to ASR/TTS pipeline through system prompt.
+// HybridScriptRunner enforces step ordering and logs script traces; I/O is delegated via RuntimeHooks.
 type HybridScriptRunner struct {
 	Script   HybridScript
 	Recorder ScriptRunRecorder
@@ -93,45 +63,6 @@ func (r *HybridScriptRunner) WithHooks(h RuntimeHooks) *HybridScriptRunner {
 	}
 	r.Hooks = h
 	return r
-}
-
-func ParseHybridScript(raw string) (HybridScript, error) {
-	var s HybridScript
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &s); err != nil {
-		return HybridScript{}, err
-	}
-	if s.ID == "" {
-		return HybridScript{}, fmt.Errorf("hybrid script id is required")
-	}
-	if s.StartID == "" {
-		return HybridScript{}, fmt.Errorf("hybrid script start_id is required")
-	}
-	seen := map[string]struct{}{}
-	allowedTypes := map[string]struct{}{
-		constants.SIPScriptStepSay:       {},
-		constants.SIPScriptStepListen:    {},
-		constants.SIPScriptStepLLMReply:  {},
-		constants.SIPScriptStepCondition: {},
-		constants.SIPScriptStepEnd:       {},
-	}
-	for _, st := range s.Steps {
-		id := strings.TrimSpace(st.ID)
-		if id == "" {
-			return HybridScript{}, fmt.Errorf("hybrid script step id is required")
-		}
-		stepType := strings.TrimSpace(st.Type)
-		if stepType == "" {
-			return HybridScript{}, fmt.Errorf("hybrid script step type is required: %s", id)
-		}
-		if _, ok := allowedTypes[stepType]; !ok {
-			return HybridScript{}, fmt.Errorf("hybrid script unsupported step type %q: %s", stepType, id)
-		}
-		if _, ok := seen[id]; ok {
-			return HybridScript{}, fmt.Errorf("hybrid script duplicate step id: %s", id)
-		}
-		seen[id] = struct{}{}
-	}
-	return s, nil
 }
 
 func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error {
@@ -162,7 +93,6 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 		}
 		startIn, startOut := lastInput, step.Prompt
 		if strings.TrimSpace(step.Type) == constants.SIPScriptStepListen {
-			// Avoid logging previous-step ASR as "input" for listen; real input is recorded as result=matched.
 			startIn, startOut = "", "-"
 		}
 		if err := r.record(ctx, ScriptRunEvent{
@@ -206,8 +136,6 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 			if timeoutMS <= 0 {
 				timeoutMS = 8000
 			}
-			// Script flow may advance to listen before remote playout fully ends on some media paths.
-			// Add a prompt-length-based tail so listen timeout starts "after AI finishes speaking" in practice.
 			if lastSayPrompt != "" {
 				timeoutMS += estimatePromptTailMS(lastSayPrompt)
 			}
@@ -269,8 +197,14 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 					InputText:     lastInput,
 					OutputText:    "end intent matched",
 				})
-			} else if tNext := resolveTransition(step.Transitions, lastInput); tNext != "" {
-				nextID = tNext
+			} else {
+				picked, branchErr := resolveListenBranches(ctx, leg, step, lastInput)
+				if branchErr != nil {
+					return r.finishWithRouteApology(ctx, leg, step, branchErr)
+				}
+				if picked != "" {
+					nextID = picked
+				}
 			}
 		case constants.SIPScriptStepLLMReply:
 			reply := strings.TrimSpace(lastReply)
@@ -322,6 +256,66 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 	return fmt.Errorf("hybrid script reached max steps")
 }
 
+func (r *HybridScriptRunner) record(ctx context.Context, event ScriptRunEvent) error {
+	if r == nil || r.Recorder == nil {
+		return nil
+	}
+	return r.Recorder.Record(ctx, event)
+}
+
+// finishWithRouteApology speaks SIP_SCRIPT_LLM_FAIL_PROMPT (default apology) and ends the script run successfully.
+func (r *HybridScriptRunner) finishWithRouteApology(ctx context.Context, leg EstablishedLeg, step HybridStep, routeErr error) error {
+	if r == nil {
+		return nil
+	}
+	if logger.Lg != nil {
+		logger.Lg.Warn("hybrid script listen route aborted",
+			zap.String("call_id", leg.CallID),
+			zap.String("step_id", step.ID),
+			zap.Error(routeErr))
+	}
+	msg := strings.TrimSpace(utils.GetEnv(constants.EnvSIPScriptLLMFailPrompt))
+	if msg == "" {
+		msg = "对不起，打扰了。"
+	}
+	_ = r.record(ctx, ScriptRunEvent{
+		CallID:        leg.CallID,
+		CorrelationID: leg.CorrelationID,
+		ScriptID:      r.Script.ID,
+		ScriptVersion: r.Script.Version,
+		StepID:        step.ID,
+		StepType:      step.Type,
+		Result:        constants.SIPScriptRunRouteFailed,
+		InputText:     routeErr.Error(),
+		OutputText:    msg,
+	})
+	if r.Hooks.OnSay != nil {
+		if err := r.Hooks.OnSay(ctx, leg, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *HybridScriptRunner) hitEndIntent(input string) bool {
+	if r == nil {
+		return false
+	}
+	if r.Hooks.IsEndIntent != nil {
+		return r.Hooks.IsEndIntent(input, r.Script)
+	}
+	in := strings.ToLower(strings.TrimSpace(input))
+	if in == "" {
+		return false
+	}
+	for _, it := range r.Script.EndIntents {
+		if v := strings.ToLower(strings.TrimSpace(it)); v != "" && strings.Contains(in, v) {
+			return true
+		}
+	}
+	return false
+}
+
 func estimatePromptTailMS(prompt string) int {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -345,7 +339,6 @@ func estimatePromptTailMS(prompt string) int {
 		}
 	}
 	n := utf8.RuneCountInString(prompt)
-	// ~7 chars/sec for mixed zh text, clamped to avoid over-waiting.
 	ms := n * 140
 	if ms < minMS {
 		ms = minMS
@@ -354,13 +347,6 @@ func estimatePromptTailMS(prompt string) int {
 		ms = maxMS
 	}
 	return ms
-}
-
-func (r *HybridScriptRunner) record(ctx context.Context, event ScriptRunEvent) error {
-	if r == nil || r.Recorder == nil {
-		return nil
-	}
-	return r.Recorder.Record(ctx, event)
 }
 
 func resolveTransition(transitions []HybridTransition, input string) string {
@@ -385,23 +371,3 @@ func resolveTransition(transitions []HybridTransition, input string) string {
 	}
 	return ""
 }
-
-func (r *HybridScriptRunner) hitEndIntent(input string) bool {
-	if r == nil {
-		return false
-	}
-	if r.Hooks.IsEndIntent != nil {
-		return r.Hooks.IsEndIntent(input, r.Script)
-	}
-	in := strings.ToLower(strings.TrimSpace(input))
-	if in == "" {
-		return false
-	}
-	for _, it := range r.Script.EndIntents {
-		if v := strings.ToLower(strings.TrimSpace(it)); v != "" && strings.Contains(in, v) {
-			return true
-		}
-	}
-	return false
-}
-

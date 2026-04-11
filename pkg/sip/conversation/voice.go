@@ -22,6 +22,7 @@ import (
 	sipasr "github.com/LingByte/SoulNexus/pkg/sip/asr"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
 	siptts "github.com/LingByte/SoulNexus/pkg/sip/tts"
 	"github.com/LingByte/SoulNexus/pkg/synthesizer"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -649,7 +650,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			pcm16 := ap.Payload
 			if welcomePlaying.Load() {
 				// Allow user to barge in welcome prompt by speaking above configured RMS.
-				if rmsPCM16LE(pcm16) > sipWelcomeBargeInThresholdFromEnv() {
+				if siputil.RMSPCM16LE(pcm16) > siputil.WelcomeBargeInThresholdFromEnv() {
 					welcomeCancelMu.Lock()
 					if welcomeCancel != nil {
 						welcomeCancel()
