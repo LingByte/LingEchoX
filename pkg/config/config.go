@@ -19,16 +19,17 @@ type Config struct {
 
 // ServerConfig server configuration
 type ServerConfig struct {
-	Name        string `env:"SERVER_NAME"`
-	Desc        string `env:"SERVER_DESC"`
-	URL         string `env:"SERVER_URL"`
-	Logo        string `env:"SERVER_LOGO"`
-	TermsURL    string `env:"SERVER_TERMS_URL"`
-	Addr        string `env:"ADDR"`
-	Mode        string `env:"MODE"`
-	SSLEnabled  bool   `env:"SSL_ENABLED"`
-	SSLCertFile string `env:"SSL_CERT_FILE"`
-	SSLKeyFile  string `env:"SSL_KEY_FILE"`
+	Name         string `env:"SERVER_NAME"`
+	Desc         string `env:"SERVER_DESC"`
+	URL          string `env:"SERVER_URL"`
+	Logo         string `env:"SERVER_LOGO"`
+	TermsURL     string `env:"SERVER_TERMS_URL"`
+	Addr         string `env:"ADDR"`
+	Mode         string `env:"MODE"`
+	APISecretKey string `env:"API_SECRET_KEY"`
+	SSLEnabled   bool   `env:"SSL_ENABLED"`
+	SSLCertFile  string `env:"SSL_CERT_FILE"`
+	SSLKeyFile   string `env:"SSL_KEY_FILE"`
 }
 
 // DatabaseConfig database configuration
@@ -50,16 +51,17 @@ func Load() error {
 	GlobalConfig = &Config{
 		MachineID: utils.GetIntEnv("MACHINE_ID"),
 		Server: ServerConfig{
-			Name:        utils.GetStringOrDefault("SERVER_NAME", ""),
-			Desc:        utils.GetStringOrDefault("SERVER_DESC", ""),
-			URL:         utils.GetStringOrDefault("SERVER_URL", ""),
-			Logo:        utils.GetStringOrDefault("SERVER_LOGO", ""),
-			TermsURL:    utils.GetStringOrDefault("SERVER_TERMS_URL", ""),
-			Addr:        utils.GetStringOrDefault("ADDR", ":8082"),
-			Mode:        utils.GetStringOrDefault("MODE", "development"),
-			SSLEnabled:  utils.GetBoolOrDefault("SSL_ENABLED", false),
-			SSLCertFile: utils.GetStringOrDefault("SSL_CERT_FILE", ""),
-			SSLKeyFile:  utils.GetStringOrDefault("SSL_KEY_FILE", ""),
+			Name:         utils.GetStringOrDefault("SERVER_NAME", ""),
+			Desc:         utils.GetStringOrDefault("SERVER_DESC", ""),
+			URL:          utils.GetStringOrDefault("SERVER_URL", ""),
+			Logo:         utils.GetStringOrDefault("SERVER_LOGO", ""),
+			TermsURL:     utils.GetStringOrDefault("SERVER_TERMS_URL", ""),
+			Addr:         utils.GetStringOrDefault("ADDR", ":7070"),
+			Mode:         utils.GetStringOrDefault("MODE", "development"),
+			APISecretKey: utils.GetStringOrDefault("API_SECRET_KEY", ""),
+			SSLEnabled:   utils.GetBoolOrDefault("SSL_ENABLED", false),
+			SSLCertFile:  utils.GetStringOrDefault("SSL_CERT_FILE", ""),
+			SSLKeyFile:   utils.GetStringOrDefault("SSL_KEY_FILE", ""),
 		},
 		Database: DatabaseConfig{
 			Driver: utils.GetStringOrDefault("DB_DRIVER", "sqlite"),
