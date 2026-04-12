@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -15,9 +16,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"go.uber.org/zap"
 )
 
 var SnowflakeUtil *Snowflake
@@ -64,7 +62,7 @@ func SafeCall(f func() error, failHandle func(error)) error {
 				}
 				failHandle(eo)
 			} else {
-				logger.Error("panic", zap.Any("error", err))
+				log.Fatal("SafeCall err:", err)
 			}
 		}
 	}()
@@ -262,4 +260,31 @@ func NormalizeFramePeriod(d string) time.Duration {
 		return 20 * time.Millisecond
 	}
 	return parsed
+}
+
+// GetStringOrDefault gets environment variable value, returns default if empty
+func GetStringOrDefault(key, defaultValue string) string {
+	value := GetEnv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+// GetIntOrDefault gets integer environment variable value, returns default if empty
+func GetIntOrDefault(key string, defaultValue int) int {
+	value := GetIntEnv(key)
+	if value == 0 {
+		return defaultValue
+	}
+	return int(value)
+}
+
+// GetBoolOrDefault gets boolean environment variable value, returns default if empty
+func GetBoolOrDefault(key string, defaultValue bool) bool {
+	value := GetEnv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return GetBoolEnv(key)
 }

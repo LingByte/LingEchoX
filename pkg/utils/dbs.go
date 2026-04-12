@@ -1,25 +1,25 @@
 package utils
 
-// Copyright (c) 2026 LingByte. All rights reserved.
-// SPDX-License-Identifier: AGPL-3.0
-
 import (
 	"io"
 	"log"
 	"os"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
+// DB
+const ENV_DB_DRIVER = "DB_DRIVER"
+const ENV_DSN = "DSN"
+
 func InitDatabase(logWrite io.Writer, driver, dsn string) (*gorm.DB, error) {
 	if driver == "" {
-		driver = GetEnv(constants.ENV_DB_DRIVER)
+		driver = GetEnv(ENV_DB_DRIVER)
 	}
 	if dsn == "" {
-		dsn = GetEnv(constants.ENV_DSN)
+		dsn = GetEnv(ENV_DSN)
 	}
 
 	var newLogger logger.Interface

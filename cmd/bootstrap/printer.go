@@ -1,8 +1,5 @@
 package bootstrap
 
-// Copyright (c) 2026 LingByte. All rights reserved.
-// SPDX-License-Identifier: AGPL-3.0
-
 import (
 	"fmt"
 	"os"
@@ -30,14 +27,6 @@ func LogConfigInfo() {
 		zap.String("addr", config.GlobalConfig.Server.Addr),
 		zap.String("db_driver", config.GlobalConfig.Database.Driver),
 		zap.String("dsn", config.GlobalConfig.Database.DSN),
-		zap.String("api_secret_key", config.GlobalConfig.Auth.APISecretKey),
-	)
-
-	logger.Info("api config",
-		zap.String("api_prefix", config.GlobalConfig.Server.APIPrefix),
-		zap.String("docs_prefix", config.GlobalConfig.Server.DocsPrefix),
-		zap.String("secret_expire_days", config.GlobalConfig.Auth.SecretExpireDays),
-		zap.String("session_secret", config.GlobalConfig.Auth.SessionSecret),
 	)
 
 	logger.Info("log config",
@@ -47,33 +36,31 @@ func LogConfigInfo() {
 		zap.Int("log_max_age", config.GlobalConfig.Log.MaxAge),
 		zap.Int("log_max_backups", config.GlobalConfig.Log.MaxBackups),
 	)
-
-	logger.Info("backup config",
-		zap.Bool("backup_enabled", config.GlobalConfig.Features.BackupEnabled),
-		zap.String("backup_path", config.GlobalConfig.Features.BackupPath),
-		zap.String("backup_schedule", config.GlobalConfig.Features.BackupSchedule),
-	)
 }
 
-// PrintBannerFromFile Read file and print
-func PrintBannerFromFile(filename string) error {
+// PrintBannerFromFile Read file and print, auto-generate if file doesn't exist
+func PrintBannerFromFile(filename string, defaultText string) error {
+	// Ensure banner file exists, generate if it doesn't
+	if err := EnsureBannerFile(filename, defaultText); err != nil {
+		return fmt.Errorf("failed to ensure banner file: %w", err)
+	}
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return err
 	}
-
 	lines := strings.Split(string(data), "\n")
-
 	colors := []string{
-		"\x1b[38;5;165m",
-		"\x1b[38;5;189m",
-		"\x1b[38;5;207m",
-		"\x1b[38;5;219m",
-		"\x1b[38;5;225m",
-		"\x1b[38;5;231m",
+		"\x1b[38;5;17m",
+		"\x1b[38;5;18m",
+		"\x1b[38;5;19m",
+		"\x1b[38;5;20m",
+		"\x1b[38;5;21m",
+		"\x1b[38;5;26m",
 	}
-
 	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
 		color := colors[i%len(colors)]
 		fmt.Println(color + line + "\x1b[0m")
 	}

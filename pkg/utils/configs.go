@@ -1,20 +1,21 @@
 package utils
 
-// Copyright (c) 2026 LingByte. All rights reserved.
-// SPDX-License-Identifier: AGPL-3.0
-
 import (
+	"github.com/sirupsen/logrus"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/LingByte/SoulNexus/pkg/constants"
-	"github.com/sirupsen/logrus"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
+
+// Default Value: 1024
+const ENV_CONFIG_CACHE_SIZE = "CONFIG_CACHE_SIZE"
+
+// Default Value: 10s
+const ENV_CONFIG_CACHE_EXPIRED = "CONFIG_CACHE_EXPIRED"
 
 type Config struct {
 	ID        uint   `json:"id" gorm:"primaryKey"`
@@ -33,13 +34,13 @@ var envCache *ExpiredLRUCache[string, string]
 
 func init() {
 	size := 1024 // fixed size
-	v, _ := strconv.ParseInt(GetEnv(constants.ENV_CONFIG_CACHE_SIZE), 10, 32)
+	v, _ := strconv.ParseInt(GetEnv(ENV_CONFIG_CACHE_SIZE), 10, 32)
 	if v > 0 {
 		size = int(v)
 	}
 
 	var configCacheExpired = 10 * time.Second
-	exp, err := time.ParseDuration(GetEnv(constants.ENV_CONFIG_CACHE_EXPIRED))
+	exp, err := time.ParseDuration(GetEnv(ENV_CONFIG_CACHE_EXPIRED))
 	if err == nil {
 		configCacheExpired = exp
 	}
