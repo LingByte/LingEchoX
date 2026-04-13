@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LingEcho Voice Call Demo</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 20px; color: #111; }
+    h1 { margin: 0 0 12px; font-size: 20px; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    input { padding: 8px; min-width: 220px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    #log { border: 1px solid #ddd; border-radius: 8px; padding: 10px; height: 360px; overflow: auto; background: #fafafa; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
+    .hint { color: #666; font-size: 12px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Voice Call Demo</h1>
+  <div class="hint">一键开始通话：自动连接 -> 自动 hello -> 自动开麦。当前页面侧重实时会话链路联调。</div>
+
+  <div class="row">
+    <input id="wsUrl" placeholder="ws://127.0.0.1:8080/api/voice/ws?assistant_id=1" style="min-width:560px" />
+  </div>
+  <div class="row">
+    <input id="apiKey" placeholder="X-API-Key" />
+    <input id="apiSecret" placeholder="X-API-Secret" />
+  </div>
+  <div class="row">
+    <button id="startCallBtn">开始通话</button>
+    <button id="endCallBtn">结束通话</button>
+    <button id="abortBtn">打断 AI</button>
+    <button id="clearBtn">清空日志</button>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    let ws = null;
+    let mediaStream = null;
+    let audioCtx = null;
+    let sourceNode = null;
+    let processorNode = null;
+    let playbackCtx = null;
+    let playbackTime = 0;
+    let ttsCodec = "opus";
+    let pingTimer = null;
+    let callActive = false;
+
+    const logEl = document.getElementById("log");
+    const log = (msg, obj) => {
+      const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.textContent += obj ? `${line}\n${JSON.stringify(obj, null, 2)}\n` : `${line}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+
+    const wsUrlEl = document.getElementById("wsUrl");
+    const apiKeyEl = document.getElementById("apiKey");
+    const apiSecretEl = document.getElementById("apiSecret");
+
+    wsUrlEl.value = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host || "127.0.0.1:8080"}/api/voice/ws?assistant_id=1`;
+
+    function buildWsUrlWithHeaders(url, apiKey, apiSecret) {
+      const u = new URL(url);
+      if (apiKey) u.searchParams.set("api_key", apiKey);
+      if (apiSecret) u.searchParams.set("api_secret", apiSecret);
+      return u.toString();
+    }
+
+    function sendJson(data, silent = false) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        if (!silent) log("WS 未连接，无法发送");
+        return;
+      }
+      ws.send(JSON.stringify(data));
+      if (!silent) log("发送文本消息", data);
+    }
+
+    function cleanupMedia() {
+      if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+      mediaStream = null;
+      if (sourceNode) {
+        try { sourceNode.disconnect(); } catch (_) {}
+      }
+      if (processorNode) {
+        try { processorNode.disconnect(); } catch (_) {}
+      }
+      sourceNode = null;
+      processorNode = null;
+      if (audioCtx) {
+        try { audioCtx.close(); } catch (_) {}
+      }
+      audioCtx = null;
+      mediaStream = null;
+    }
+
+    function initPlayback() {
+      if (!playbackCtx) {
+        playbackCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      }
+      if (playbackTime < playbackCtx.currentTime) {
+        playbackTime = playbackCtx.currentTime;
+      }
+    }
+
+    function playPCMChunk(arrayBuffer) {
+      initPlayback();
+      const input = new Int16Array(arrayBuffer);
+      if (input.length === 0) return;
+      const floatData = new Float32Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        floatData[i] = input[i] / 32768;
+      }
+      const audioBuffer = playbackCtx.createBuffer(1, floatData.length, 16000);
+      audioBuffer.copyToChannel(floatData, 0);
+      const source = playbackCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(playbackCtx.destination);
+      source.start(playbackTime);
+      playbackTime += audioBuffer.duration;
+    }
+
+    function cleanupSocket() {
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+      if (ws) {
+        try {
+          if (ws.readyState === WebSocket.OPEN) ws.close(1000, "normal");
+        } catch (_) {}
+      }
+      ws = null;
+    }
+
+    async function startMic() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("WS 未连接");
+      if (audioCtx) return;
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          noiseSuppression: true,
+          echoCancellation: true,
+          autoGainControl: true
+        }
+      });
+
+      // 使用 PCM16 裸流，避免 webm/opus 容器导致后端解码失败。
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+      processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
+
+      processorNode.onaudioprocess = (event) => {
+        if (!callActive || !ws || ws.readyState !== WebSocket.OPEN) return;
+        const input = event.inputBuffer.getChannelData(0);
+        const pcm16 = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i++) {
+          const s = Math.max(-1, Math.min(1, input[i]));
+          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        ws.send(pcm16.buffer);
+      };
+
+      sourceNode.connect(processorNode);
+      processorNode.connect(audioCtx.destination);
+      log("麦克风已开启（PCM16@16kHz），进入实时通话");
+    }
+
+    async function startCall() {
+      if (callActive) {
+        log("当前已在通话中");
+        return;
+      }
+      callActive = true;
+      const rawUrl = wsUrlEl.value.trim();
+      const apiKey = apiKeyEl.value.trim();
+      const apiSecret = apiSecretEl.value.trim();
+      const url = buildWsUrlWithHeaders(rawUrl, apiKey, apiSecret);
+
+      ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = async () => {
+        log("WS 已连接，开始初始化会话");
+        sendJson({
+          type: "hello",
+          version: 1,
+          transport: "websocket",
+          features: { mcp: true, aec: false },
+          audio_params: {
+            format: "pcm",
+            sample_rate: 16000,
+            channels: 1,
+            frame_duration: 60
+          }
+        }, true);
+        log("已自动发送 hello");
+        sendJson({ type: "listen", state: "start", mode: "manual" }, true);
+        try {
+          await startMic();
+        } catch (err) {
+          log("启动麦克风失败", { message: String(err) });
+          endCall();
+          return;
+        }
+        pingTimer = setInterval(() => {
+          sendJson({ type: "ping" }, true);
+        }, 15000);
+      };
+
+      ws.onclose = (evt) => {
+        log(`WS 已关闭 code=${evt.code} reason=${evt.reason || ""}`);
+        if (callActive) {
+          cleanupMedia();
+          cleanupSocket();
+          callActive = false;
+        }
+      };
+
+      ws.onerror = (err) => log("WS 错误", err);
+
+      ws.onmessage = (evt) => {
+        if (typeof evt.data === "string") {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.type === "stt") {
+              log("识别结果: " + (msg.text || ""));
+            } else if (msg.type === "tts" && msg.state === "start") {
+              ttsCodec = (msg.audio_params && msg.audio_params.codec) || "opus";
+              log("TTS 开始，编码: " + ttsCodec);
+            } else {
+              log("收到文本消息", msg);
+            }
+          } catch {
+            log("收到文本消息: " + evt.data);
+          }
+          return;
+        }
+        if (evt.data instanceof ArrayBuffer) {
+          if (ttsCodec === "pcm") {
+            playPCMChunk(evt.data);
+          } else {
+            log(`收到 AI 音频分片 ${evt.data.byteLength} bytes（${ttsCodec}，当前页面未解码）`);
+          }
+          return;
+        }
+        log("收到未知消息类型");
+      };
+    }
+
+    function endCall() {
+      if (!callActive) {
+        log("当前没有通话");
+        return;
+      }
+      sendJson({ type: "abort" }, true);
+      cleanupMedia();
+      cleanupSocket();
+      callActive = false;
+      log("通话已结束");
+    }
+
+    document.getElementById("startCallBtn").onclick = startCall;
+    document.getElementById("endCallBtn").onclick = endCall;
+    document.getElementById("abortBtn").onclick = () => sendJson({ type: "abort" });
+
+    document.getElementById("clearBtn").onclick = () => {
+      logEl.textContent = "";
+    };
+  </script>
+</body>
+</html>

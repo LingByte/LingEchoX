@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -127,5 +128,14 @@ func RunMigrations(db *gorm.DB) error {
 	}
 	return utils.MakeMigrates(db, []any{
 		&utils.Config{},
+		&models.Credential{},
+		&models.VoiceClone{},
+		&models.VoiceTrainingTask{},
+		&models.VoiceSynthesis{},
+		&models.VoiceTrainingText{},
+		&models.VoiceTrainingTextSegment{},
+		&models.DeviceErrorLog{},
+		&models.CallRecording{},
+		&models.Device{},
 	})
 }

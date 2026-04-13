@@ -6,15 +6,18 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LingByte/lingstorage-sdk-go"
 )
 
 var GlobalConfig *Config
+var GlobalStore *lingstorage.Client
 
 type Config struct {
 	MachineID int64            `env:"MACHINE_ID"`
 	Server    ServerConfig     `mapstructure:"server"`
 	Database  DatabaseConfig   `mapstructure:"database"`
 	Log       logger.LogConfig `mapstructure:"log"`
+	Services  ServicesConfig   `mapstructure:"services"`
 }
 
 // ServerConfig server configuration
@@ -36,6 +39,19 @@ type ServerConfig struct {
 type DatabaseConfig struct {
 	Driver string `env:"DB_DRIVER"`
 	DSN    string `env:"DSN"`
+}
+
+// ServicesConfig services configuration
+type ServicesConfig struct {
+	Storage StorageConfig `mapstructure:"storage"`
+}
+
+// StorageConfig storage configuration
+type StorageConfig struct {
+	BaseURL   string `env:"LINGSTORAGE_BASE_URL"`
+	APIKey    string `env:"LINGSTORAGE_API_KEY"`
+	APISecret string `env:"LINGSTORAGE_API_SECRET"`
+	Bucket    string `env:"LINGSTORAGE_BUCKET"`
 }
 
 func Load() error {
@@ -75,6 +91,19 @@ func Load() error {
 			MaxBackups: utils.GetIntOrDefault("LOG_MAX_BACKUPS", 5),
 			Daily:      utils.GetBoolOrDefault("LOG_DAILY", true),
 		},
+		Services: ServicesConfig{
+			Storage: StorageConfig{
+				BaseURL:   utils.GetStringOrDefault("LINGSTORAGE_BASE_URL", "https://api.lingstorage.com"),
+				APIKey:    utils.GetStringOrDefault("LINGSTORAGE_API_KEY", ""),
+				APISecret: utils.GetStringOrDefault("LINGSTORAGE_API_SECRET", ""),
+				Bucket:    utils.GetStringOrDefault("LINGSTORAGE_BUCKET", "default"),
+			},
+		},
 	}
+	GlobalStore = lingstorage.NewClient(&lingstorage.Config{
+		BaseURL:   GlobalConfig.Services.Storage.BaseURL,
+		APIKey:    GlobalConfig.Services.Storage.APIKey,
+		APISecret: GlobalConfig.Services.Storage.APISecret,
+	})
 	return nil
 }
