@@ -1,0 +1,150 @@
+{
+  "id": "qiniu-las-marketing-v1",
+  "version": "1.0.0",
+  "start_id": "welcome",
+  "max_turns": 14,
+  "silence_timeout_ms": 8000,
+  "end_intents": [
+    "再见",
+    "挂了",
+    "不用了",
+    "不需要",
+    "先这样",
+    "没空"
+  ],
+  "steps": [
+    {
+      "id": "welcome",
+      "type": "say",
+      "prompt": "您好，这里是七牛云 LAS 服务团队。想占用您大约一分钟做个回访。如果现在方便，请按电话键盘上的数字 1；如果暂时不方便，请按 2。您也可以直接语音回答方便或不方便。",
+      "next_id": "listen_permission"
+    },
+    {
+      "id": "listen_permission",
+      "type": "listen",
+      "next_id": "q1_usage",
+      "dtmf_transitions": [
+        { "digit": "1", "next_id": "q1_usage" },
+        { "digit": "2", "next_id": "reschedule" }
+      ],
+      "transitions": [
+        {
+          "next_id": "q1_usage",
+          "description": "用户同意继续、表示现在方便、可以聊、行、嗯好的、没问题、请说等肯定回应"
+        },
+        {
+          "next_id": "reschedule",
+          "description": "用户表示不方便、没空、在忙、改天、稍后再说、拒绝接听回访等否定或推迟"
+        }
+      ],
+      "listen_timeout_ms": 7000,
+      "listen_fallback_id": "reask_permission"
+    },
+    {
+      "id": "reask_permission",
+      "type": "say",
+      "prompt": "抱歉刚刚没听清。若现在方便做一分钟回访，请按 1；若不方便，请按 2。也可直接说方便或不方便。",
+      "next_id": "listen_permission_2"
+    },
+    {
+      "id": "listen_permission_2",
+      "type": "listen",
+      "next_id": "reschedule",
+      "dtmf_transitions": [
+        { "digit": "1", "next_id": "q1_usage" },
+        { "digit": "2", "next_id": "reschedule" }
+      ],
+      "listen_timeout_ms": 6000,
+      "listen_fallback_id": "polite_end"
+    },
+    {
+      "id": "q1_usage",
+      "type": "say",
+      "prompt": "感谢配合。想确认下您近期是否有在使用七牛云 LAS？有用过或正在用请按 1；基本没用或暂不使用请按 2。也可语音说明。",
+      "next_id": "listen_q1_usage"
+    },
+    {
+      "id": "listen_q1_usage",
+      "type": "listen",
+      "next_id": "pitch",
+      "dtmf_transitions": [
+        { "digit": "1", "next_id": "pitch" },
+        { "digit": "2", "next_id": "close_soft" }
+      ],
+      "listen_timeout_ms": 8000,
+      "listen_fallback_id": "pitch"
+    },
+    {
+      "id": "pitch",
+      "type": "say",
+      "prompt": "我们近期针对 LAS 做了接入体验优化。若愿意安排一次约三分钟的顾问沟通、帮您评估是否适合当前业务，请按 1；若暂不需要，请按 2。也可直接说愿意或不需要。",
+      "next_id": "listen_interest"
+    },
+    {
+      "id": "listen_interest",
+      "type": "listen",
+      "next_id": "close_soft",
+      "dtmf_transitions": [
+        { "digit": "1", "next_id": "collect_contact" },
+        { "digit": "2", "next_id": "close_soft" }
+      ],
+      "transitions": [
+        {
+          "next_id": "collect_contact",
+          "description": "用户愿意预约、同意顾问沟通、有兴趣、可以安排、让顾问联系等积极意向"
+        },
+        {
+          "next_id": "close_soft",
+          "description": "用户明确拒绝、不需要、暂不考虑、没兴趣、否定顾问沟通，或态度模糊偏拒绝"
+        }
+      ],
+      "listen_timeout_ms": 8000,
+      "listen_fallback_id": "close_soft"
+    },
+    {
+      "id": "collect_contact",
+      "type": "say",
+      "prompt": "太好了，我这边为您登记意向，稍后会有顾问联系。若确认就按本号码联系，请按 1；若暂不登记或不想留资，请按 2。也可语音说是或否。",
+      "next_id": "listen_contact_confirm"
+    },
+    {
+      "id": "listen_contact_confirm",
+      "type": "listen",
+      "next_id": "close_hot",
+      "dtmf_transitions": [
+        { "digit": "1", "next_id": "close_hot" },
+        { "digit": "2", "next_id": "close_soft" }
+      ],
+      "listen_timeout_ms": 7000,
+      "listen_fallback_id": "close_hot"
+    },
+    {
+      "id": "close_hot",
+      "type": "say",
+      "prompt": "好的，已为您记录，感谢您对七牛云 LAS 的支持，稍后顾问会尽快联系您，再见。",
+      "next_id": "end"
+    },
+    {
+      "id": "close_soft",
+      "type": "say",
+      "prompt": "明白了，感谢您的反馈。后续如果您有 LAS 相关需求，欢迎随时联系我们，再见。",
+      "next_id": "end"
+    },
+    {
+      "id": "reschedule",
+      "type": "say",
+      "prompt": "好的，理解您现在不方便，我们改天再联系。感谢接听，祝您顺利，再见。",
+      "next_id": "end"
+    },
+    {
+      "id": "polite_end",
+      "type": "say",
+      "prompt": "感谢您接听，本次先不打扰了，祝您顺利，再见。",
+      "next_id": "end"
+    },
+    {
+      "id": "end",
+      "type": "end"
+    }
+  ]
+}
