@@ -128,6 +128,8 @@ type SIPScriptRun struct {
 	Result        string         `json:"result" gorm:"size:32"` // ok|timeout|retry|skipped|failed
 	InputText     string         `json:"inputText" gorm:"type:text"`
 	OutputText    string         `json:"outputText" gorm:"type:text"`
+	// DurationMs is wall time from step entry to this audit row (ms); Started rows are ~0.
+	DurationMs    int            `json:"durationMs" gorm:"column:duration_ms;default:0"`
 	Variables     datatypes.JSON `json:"variables" gorm:"type:json"`
 }
 

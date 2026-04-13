@@ -1,4 +1,3 @@
-// Package sipserver starts the SIP UDP stack and wires WebSeat / outbound / campaign workers with the main HTTP app.
 package sipserver
 
 import (
@@ -178,8 +177,8 @@ func Start(cfg Config) (*Embedded, error) {
 		sipServerPtr.SetRegisterStore(sipRegStore)
 		sipCallPersist = New(cfg.DB, logger.Lg)
 		sipServerPtr.SetCallPersist(sipCallPersist)
-		conversation.SetSIPTurnPersist(func(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string) {
-			sipCallPersist.SaveConversationTurn(ctx, callID, userText, assistantText, asrProvider, llmModel, ttsProvider)
+		conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
+			sipCallPersist.SaveConversationTurn(ctx, callID, turn)
 		})
 		conversation.SetTransferDialTargetResolver(func(ctx context.Context) (outbound.DialTarget, bool) {
 			return PickTransferDialTarget(ctx, acdDB, sipRegStore)
@@ -214,8 +213,8 @@ func Start(cfg Config) (*Embedded, error) {
 				sipServerPtr.SetRegisterStore(sipRegStore)
 				sipCallPersist = New(db, logger.Lg)
 				sipServerPtr.SetCallPersist(sipCallPersist)
-				conversation.SetSIPTurnPersist(func(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string) {
-					sipCallPersist.SaveConversationTurn(ctx, callID, userText, assistantText, asrProvider, llmModel, ttsProvider)
+				conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
+					sipCallPersist.SaveConversationTurn(ctx, callID, turn)
 				})
 				conversation.SetTransferDialTargetResolver(func(ctx context.Context) (outbound.DialTarget, bool) {
 					return PickTransferDialTarget(ctx, acdDB, sipRegStore)

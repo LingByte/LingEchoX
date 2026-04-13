@@ -9,6 +9,7 @@ import (
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
+	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -69,7 +70,8 @@ func (s *Store) OnEstablished(ctx context.Context, callID string) {
 	_ = s.db.WithContext(ctx).Model(&models.SIPCall{}).Where("call_id = ?", callID).Updates(models.SIPCallEstablishedUpdateMap(now)).Error
 }
 
-// OnBye finalizes SIPCall, optionally uploads PCMU/PCMA or Opus (length-prefixed RTP payloads) as WAV via config.GlobalStore.
+// OnBye finalizes SIPCall, optionally uploads SN2 recording as stereo WAV (L=user R=AI per-leg decode),
+// falling back to legacy mono mix, via config.GlobalStore.
 func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	if s == nil || s.db == nil || p.CallID == "" {
 		return
@@ -92,6 +94,12 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 		durationSec = models.SIPCallDurationSince(call.AckAt, call.InviteAt, now)
 	}
 	updates := models.SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
+	if bi := strings.ToLower(strings.TrimSpace(initiator)); bi != "" {
+		updates["bye_initiator"] = bi
+	}
+	if len(raw) > 0 {
+		updates["recording_raw_bytes"] = len(raw)
+	}
 
 	c := strings.ToLower(codecName)
 	bucketOK := config.GlobalStore != nil && config.GlobalConfig != nil &&
@@ -100,9 +108,15 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	if len(raw) > 0 && bucketOK {
 		switch {
 		case strings.Contains(c, "pcmu") || strings.Contains(c, "pcma"):
-			wav = utils.G711TaggedRecordingToWav(raw, codecName)
+			wav = utils.G711TaggedRecordingToStereoWav(raw, codecName)
+			if len(wav) == 0 {
+				wav = utils.G711TaggedRecordingToWav(raw, codecName)
+			}
 		case strings.Contains(c, "g722"):
-			wav = utils.G722TaggedRecordingToWav(raw)
+			wav = utils.G722TaggedRecordingToStereoWav(raw)
+			if len(wav) == 0 {
+				wav = utils.G722TaggedRecordingToWav(raw)
+			}
 		case strings.Contains(c, "opus"):
 			sr := p.RecordSampleRate
 			if sr <= 0 {
@@ -115,7 +129,13 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 			if ch > 2 {
 				ch = 2
 			}
-			wav = utils.MixedOpusRecordingToWav(raw, sr, ch)
+			wav = utils.MixedOpusRecordingToStereoWav(raw, sr, ch)
+			if len(wav) == 0 {
+				wav = utils.MixedOpusRecordingToWav(raw, sr, ch)
+			}
+			if len(wav) == 0 && ch == 1 {
+				wav = utils.MixedOpusRecordingToStereoWav(raw, sr, 2)
+			}
 			if len(wav) == 0 && ch == 1 {
 				wav = utils.MixedOpusRecordingToWav(raw, sr, 2)
 			}
@@ -143,8 +163,27 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				s.lg.Warn("sippersist recording upload", zap.String("call_id", callID), zap.Error(err))
 			} else if res != nil && res.URL != "" {
 				updates["recording_url"] = res.URL
+				updates["recording_wav_bytes"] = len(wav)
 				s.lg.Info("sippersist recording uploaded", zap.String("call_id", callID), zap.String("codec", codecName))
 			}
+		} else if len(raw) >= 3 && raw[0] == 'S' && raw[1] == 'N' && (raw[2] == '2' || raw[2] == '1') {
+			// WAV mux/decode failed or unsupported codec branch — still persist tagged RTP blob for forensics.
+			snKey := fmt.Sprintf("sip/recordings/%s_%d.sn2", sanitizeKey(callID), now.Unix())
+			res, err := config.GlobalStore.UploadBytes(&lingstorage.UploadBytesRequest{
+				Bucket:   config.GlobalConfig.Services.Storage.Bucket,
+				Data:     raw,
+				Filename: snKey,
+				Key:      snKey,
+			})
+			if err != nil {
+				s.lg.Warn("sippersist raw recording upload", zap.String("call_id", callID), zap.Error(err))
+			} else if res != nil && res.URL != "" {
+				updates["recording_url"] = res.URL
+				s.lg.Info("sippersist raw SN recording uploaded (no WAV)", zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
+			}
+		} else if len(raw) > 0 {
+			s.lg.Warn("sippersist recording not converted to WAV and not SN1/SN2 tagged",
+				zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 		}
 	} else if len(raw) > 0 && !bucketOK {
 		s.lg.Warn("sippersist recording not uploaded (GlobalStore or storage bucket not configured)",
@@ -158,23 +197,33 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 }
 
 // SaveConversationTurn appends one ASR→LLM turn onto sip_calls.turns for callID (creates a minimal call row if missing).
-func (s *Store) SaveConversationTurn(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string) {
+func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conversation.DialogTurn) {
 	if s == nil || s.db == nil || callID == "" {
 		return
 	}
-	userText = strings.TrimSpace(userText)
-	assistantText = strings.TrimSpace(assistantText)
+	userText := strings.TrimSpace(t.ASRText)
+	assistantText := strings.TrimSpace(t.LLMText)
 	if userText == "" && assistantText == "" {
 		return
 	}
 	now := time.Now()
+	if !t.At.IsZero() {
+		now = t.At
+	}
 	turn := models.SIPCallDialogTurn{
-		ASRText:     userText,
-		LLMText:     assistantText,
-		ASRProvider: asrProvider,
-		TTSProvider: ttsProvider,
-		LLMModel:    llmModel,
-		At:          now,
+		ASRText:      userText,
+		LLMText:      assistantText,
+		ASRProvider:  t.ASRProvider,
+		TTSProvider:  t.TTSProvider,
+		LLMModel:     t.LLMModel,
+		At:           now,
+		Trigger:      t.Trigger,
+		ScriptStepID: t.ScriptStepID,
+		RouteIntent:  t.RouteIntent,
+		LLMFirstMs:   t.LLMFirstMs,
+		LLMWallMs:    t.LLMWallMs,
+		TTSMs:        t.TTSMs,
+		PipelineMs:   t.PipelineMs,
 	}
 
 	row, err := models.FindActiveSIPCallByCallID(ctx, s.db, callID)
@@ -195,6 +244,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID, userText, assi
 			if s.lg != nil {
 				s.lg.Info("sippersist call created for first AI turn", zap.String("call_id", callID), zap.Uint("row_id", row.ID))
 			}
+			scriptlisten.Notify(callID)
 			return
 		}
 	} else if err != nil {
@@ -211,6 +261,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID, userText, assi
 		s.lg.Warn("sippersist call turn update failed", zap.String("call_id", callID), zap.Error(err))
 		return
 	}
+	scriptlisten.Notify(callID)
 	if s.lg != nil {
 		s.lg.Info("sippersist call turn appended",
 			zap.String("call_id", callID),

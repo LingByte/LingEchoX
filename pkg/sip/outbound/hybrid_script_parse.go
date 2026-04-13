@@ -35,6 +35,14 @@ type HybridStep struct {
 	ListenFallbackID string             `json:"listen_fallback_id"`
 	LLMInstruction   string             `json:"llm_instruction"`
 	Transitions      []HybridTransition `json:"transitions"`
+	// DTMFTransitions: listen steps only — map keypad (0-9 * #) to next_id without ASR/LLM.
+	DTMFTransitions []HybridDTMFTransition `json:"dtmf_transitions"`
+}
+
+// HybridDTMFTransition binds one DTMF key to the next script step (IVR-style).
+type HybridDTMFTransition struct {
+	Digit  string `json:"digit"`   // single: 0-9, *, #
+	NextID string `json:"next_id"` // required when digit matches
 }
 
 type HybridTransition struct {
@@ -85,6 +93,9 @@ func ParseHybridScript(raw string) (HybridScript, error) {
 	}
 	for _, st := range s.Steps {
 		if strings.TrimSpace(st.Type) != constants.SIPScriptStepListen {
+			if len(st.DTMFTransitions) > 0 {
+				return HybridScript{}, fmt.Errorf("hybrid script step %s: dtmf_transitions only allowed on listen steps", st.ID)
+			}
 			continue
 		}
 		for ti, tr := range st.Transitions {
@@ -92,6 +103,48 @@ func ParseHybridScript(raw string) (HybridScript, error) {
 				return HybridScript{}, fmt.Errorf("hybrid script listen step %s transition[%d]: next_id is required", st.ID, ti)
 			}
 		}
+		seenD := map[string]struct{}{}
+		for ti, dt := range st.DTMFTransitions {
+			d := normalizeDTMFKey(dt.Digit)
+			if d == "" {
+				return HybridScript{}, fmt.Errorf("hybrid script listen step %s dtmf_transitions[%d]: digit must be 0-9, *, or #", st.ID, ti)
+			}
+			if _, dup := seenD[d]; dup {
+				return HybridScript{}, fmt.Errorf("hybrid script listen step %s: duplicate dtmf digit %q", st.ID, d)
+			}
+			seenD[d] = struct{}{}
+			if strings.TrimSpace(dt.NextID) == "" {
+				return HybridScript{}, fmt.Errorf("hybrid script listen step %s dtmf_transitions[%d]: next_id is required", st.ID, ti)
+			}
+		}
 	}
 	return s, nil
+}
+
+func normalizeDTMFKey(d string) string {
+	d = strings.TrimSpace(d)
+	if len(d) != 1 {
+		return ""
+	}
+	switch d[0] {
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '#':
+		return string(d[0])
+	default:
+		return ""
+	}
+}
+
+// DTMFDigitToNextMap builds digit → next_id for script listen (scriptlisten.TryConsumeDTMF).
+func DTMFDigitToNextMap(step HybridStep) map[string]string {
+	m := make(map[string]string, len(step.DTMFTransitions))
+	for _, dt := range step.DTMFTransitions {
+		d := normalizeDTMFKey(dt.Digit)
+		if d == "" {
+			continue
+		}
+		if nx := strings.TrimSpace(dt.NextID); nx != "" {
+			m[d] = nx
+		}
+	}
+	return m
 }

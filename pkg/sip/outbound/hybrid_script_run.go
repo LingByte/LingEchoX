@@ -31,17 +31,22 @@ type ScriptRunEvent struct {
 	Result        string
 	InputText     string
 	OutputText    string
+	// DurationMS is wall ms since the script runner entered this step (set before Record).
+	DurationMS int64
 }
 
 type ListenResult struct {
 	InputText string
 	ReplyText string
+	// DTMFDigit is set when the waiter resolved this listen via keypad (RFC2833 / SIP INFO), e.g. "1".
+	DTMFDigit string
 }
 
 type RuntimeHooks struct {
 	OnSay func(ctx context.Context, leg EstablishedLeg, prompt string) error
 	// notBefore marks the moment listen step starts; consumers should ignore older ASR turns.
-	OnListen    func(ctx context.Context, leg EstablishedLeg, timeout time.Duration, notBefore time.Time) (ListenResult, error)
+	// step is the current listen HybridStep (for DTMF bindings).
+	OnListen func(ctx context.Context, leg EstablishedLeg, timeout time.Duration, notBefore time.Time, step HybridStep) (ListenResult, error)
 	OnLLMReply  func(ctx context.Context, leg EstablishedLeg, userText, instruction string) (string, error)
 	IsEndIntent func(input string, script HybridScript) bool
 }
@@ -91,11 +96,12 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 		if !ok {
 			return fmt.Errorf("hybrid script step not found: %s", current)
 		}
+		stepStart := time.Now()
 		startIn, startOut := lastInput, step.Prompt
 		if strings.TrimSpace(step.Type) == constants.SIPScriptStepListen {
 			startIn, startOut = "", "-"
 		}
-		if err := r.record(ctx, ScriptRunEvent{
+		if err := r.record(ctx, stepStart, ScriptRunEvent{
 			CallID:        leg.CallID,
 			CorrelationID: leg.CorrelationID,
 			ScriptID:      r.Script.ID,
@@ -113,7 +119,7 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 		case constants.SIPScriptStepSay:
 			if p := strings.TrimSpace(step.Prompt); p != "" && r.Hooks.OnSay != nil {
 				if err := r.Hooks.OnSay(ctx, leg, p); err != nil {
-					_ = r.record(ctx, ScriptRunEvent{
+					_ = r.record(ctx, stepStart, ScriptRunEvent{
 						CallID:        leg.CallID,
 						CorrelationID: leg.CorrelationID,
 						ScriptID:      r.Script.ID,
@@ -139,9 +145,10 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 			if lastSayPrompt != "" {
 				timeoutMS += estimatePromptTailMS(lastSayPrompt)
 			}
+			var dtmfUsed bool
 			if r.Hooks.OnListen != nil {
 				listenStartedAt := time.Now()
-				res, err := r.Hooks.OnListen(ctx, leg, time.Duration(timeoutMS)*time.Millisecond, listenStartedAt)
+				res, err := r.Hooks.OnListen(ctx, leg, time.Duration(timeoutMS)*time.Millisecond, listenStartedAt, step)
 				if err != nil {
 					fallback := strings.TrimSpace(step.ListenFallbackID)
 					if fallback == "" {
@@ -149,7 +156,7 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 					}
 					if fallback != "" {
 						nextID = fallback
-						_ = r.record(ctx, ScriptRunEvent{
+						_ = r.record(ctx, stepStart, ScriptRunEvent{
 							CallID:        leg.CallID,
 							CorrelationID: leg.CorrelationID,
 							ScriptID:      r.Script.ID,
@@ -164,29 +171,48 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 						return err
 					}
 				} else {
-					lastInput = strings.TrimSpace(res.InputText)
-					lastReply = strings.TrimSpace(res.ReplyText)
-					out := lastReply
-					if out == "" {
-						out = "-"
+					if d := strings.TrimSpace(res.DTMFDigit); d != "" {
+						dtmfUsed = true
+						lastInput = "dtmf:" + d
+						if nid := matchDTMFNextID(step, d); nid != "" {
+							nextID = nid
+						}
+						_ = r.record(ctx, stepStart, ScriptRunEvent{
+							CallID:        leg.CallID,
+							CorrelationID: leg.CorrelationID,
+							ScriptID:      r.Script.ID,
+							ScriptVersion: r.Script.Version,
+							StepID:        step.ID,
+							StepType:      step.Type,
+							Result:        constants.SIPScriptRunMatched,
+							InputText:     lastInput,
+							OutputText:    "dtmf -> " + nextID,
+						})
+					} else {
+						lastInput = strings.TrimSpace(res.InputText)
+						lastReply = strings.TrimSpace(res.ReplyText)
+						out := lastReply
+						if out == "" {
+							out = "-"
+						}
+						_ = r.record(ctx, stepStart, ScriptRunEvent{
+							CallID:        leg.CallID,
+							CorrelationID: leg.CorrelationID,
+							ScriptID:      r.Script.ID,
+							ScriptVersion: r.Script.Version,
+							StepID:        step.ID,
+							StepType:      step.Type,
+							Result:        constants.SIPScriptRunMatched,
+							InputText:     lastInput,
+							OutputText:    out,
+						})
 					}
-					_ = r.record(ctx, ScriptRunEvent{
-						CallID:        leg.CallID,
-						CorrelationID: leg.CorrelationID,
-						ScriptID:      r.Script.ID,
-						ScriptVersion: r.Script.Version,
-						StepID:        step.ID,
-						StepType:      step.Type,
-						Result:        constants.SIPScriptRunMatched,
-						InputText:     lastInput,
-						OutputText:    out,
-					})
 				}
 			}
 			lastSayPrompt = ""
-			if r.hitEndIntent(lastInput) {
+			if !dtmfUsed && r.hitEndIntent(lastInput) {
 				nextID = ""
-				_ = r.record(ctx, ScriptRunEvent{
+				_ = r.record(ctx, stepStart, ScriptRunEvent{
 					CallID:        leg.CallID,
 					CorrelationID: leg.CorrelationID,
 					ScriptID:      r.Script.ID,
@@ -197,7 +223,7 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 					InputText:     lastInput,
 					OutputText:    "end intent matched",
 				})
-			} else {
+			} else if !dtmfUsed {
 				picked, branchErr := resolveListenBranches(ctx, leg, step, lastInput)
 				if branchErr != nil {
 					return r.finishWithRouteApology(ctx, leg, step, branchErr)
@@ -216,7 +242,7 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 			}
 			if reply != "" && r.Hooks.OnSay != nil {
 				if err := r.Hooks.OnSay(ctx, leg, reply); err != nil {
-					_ = r.record(ctx, ScriptRunEvent{
+					_ = r.record(ctx, stepStart, ScriptRunEvent{
 						CallID:        leg.CallID,
 						CorrelationID: leg.CorrelationID,
 						ScriptID:      r.Script.ID,
@@ -256,9 +282,12 @@ func (r *HybridScriptRunner) Run(ctx context.Context, leg EstablishedLeg) error 
 	return fmt.Errorf("hybrid script reached max steps")
 }
 
-func (r *HybridScriptRunner) record(ctx context.Context, event ScriptRunEvent) error {
+func (r *HybridScriptRunner) record(ctx context.Context, stepStart time.Time, event ScriptRunEvent) error {
 	if r == nil || r.Recorder == nil {
 		return nil
+	}
+	if !stepStart.IsZero() {
+		event.DurationMS = time.Since(stepStart).Milliseconds()
 	}
 	return r.Recorder.Record(ctx, event)
 }
@@ -268,6 +297,7 @@ func (r *HybridScriptRunner) finishWithRouteApology(ctx context.Context, leg Est
 	if r == nil {
 		return nil
 	}
+	routeApologyStart := time.Now()
 	if logger.Lg != nil {
 		logger.Lg.Warn("hybrid script listen route aborted",
 			zap.String("call_id", leg.CallID),
@@ -278,7 +308,7 @@ func (r *HybridScriptRunner) finishWithRouteApology(ctx context.Context, leg Est
 	if msg == "" {
 		msg = "对不起，打扰了。"
 	}
-	_ = r.record(ctx, ScriptRunEvent{
+	_ = r.record(ctx, routeApologyStart, ScriptRunEvent{
 		CallID:        leg.CallID,
 		CorrelationID: leg.CorrelationID,
 		ScriptID:      r.Script.ID,
@@ -295,6 +325,19 @@ func (r *HybridScriptRunner) finishWithRouteApology(ctx context.Context, leg Est
 		}
 	}
 	return nil
+}
+
+func matchDTMFNextID(step HybridStep, digit string) string {
+	d := normalizeDTMFKey(digit)
+	if d == "" {
+		return ""
+	}
+	for _, dt := range step.DTMFTransitions {
+		if normalizeDTMFKey(dt.Digit) == d {
+			return strings.TrimSpace(dt.NextID)
+		}
+	}
+	return ""
 }
 
 func (r *HybridScriptRunner) hitEndIntent(input string) bool {

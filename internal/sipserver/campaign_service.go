@@ -13,6 +13,7 @@ import (
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -49,16 +50,10 @@ type CreateCampaignInput struct {
 	ScriptID          string `json:"script_id"`
 	ScriptVersion     string `json:"script_version"`
 	ScriptSpec        string `json:"script_spec"`
-	SystemPrompt      string `json:"system_prompt"`
-	OpeningMessage    string `json:"opening_message"`
-	ClosingMessage    string `json:"closing_message"`
 	RetrySchedule     string `json:"retry_schedule"`
 	MaxAttempts       int    `json:"max_attempts"`
 	TaskConcurrency   int    `json:"task_concurrency"`
 	GlobalConcurrency int    `json:"global_concurrency"`
-	OutboundHost      string `json:"outbound_host"`
-	OutboundPort      int    `json:"outbound_port"`
-	SignalingAddr     string `json:"signaling_addr"`
 	RequestURIFmt     string `json:"request_uri_fmt"`
 }
 
@@ -107,16 +102,10 @@ func (s *CampaignService) CreateCampaign(ctx context.Context, in CreateCampaignI
 		ScriptID:          strings.TrimSpace(in.ScriptID),
 		ScriptVersion:     strings.TrimSpace(in.ScriptVersion),
 		ScriptSpec:        scriptSpec,
-		SystemPrompt:      strings.TrimSpace(in.SystemPrompt),
-		OpeningMessage:    strings.TrimSpace(in.OpeningMessage),
-		ClosingMessage:    strings.TrimSpace(in.ClosingMessage),
 		RetrySchedule:     emptyOr(in.RetrySchedule, "5m,30m,2h"),
 		MaxAttempts:       maxInt(in.MaxAttempts, 3),
 		TaskConcurrency:   maxInt(in.TaskConcurrency, 5),
 		GlobalConcurrency: maxInt(in.GlobalConcurrency, 20),
-		OutboundHost:      strings.TrimSpace(in.OutboundHost),
-		OutboundPort:      maxInt(in.OutboundPort, 5060),
-		SignalingAddr:     strings.TrimSpace(in.SignalingAddr),
 		RequestURIFmt:     strings.TrimSpace(in.RequestURIFmt),
 	}
 	if c.Name == "" {
@@ -355,6 +344,7 @@ func (s *CampaignService) RecordScriptStep(ctx context.Context, evt outbound.Scr
 		Result:        evt.Result,
 		InputText:     evt.InputText,
 		OutputText:    evt.OutputText,
+		DurationMs:    int(evt.DurationMS),
 	}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return err
@@ -413,28 +403,8 @@ func (s *CampaignService) hasAttemptSIPStatusCodeColumn() bool {
 
 // PrepareCallPrompt binds campaign script text to this call id.
 func (s *CampaignService) PrepareCallPrompt(callID, correlationID string) {
-	if s == nil || s.db == nil {
-		return
-	}
-	campaignID, _, _, ok := parseCorrelation(correlationID)
-	if !ok {
-		return
-	}
-	var c models.SIPCampaign
-	if err := s.db.First(&c, campaignID).Error; err != nil {
-		return
-	}
-	prompt := strings.TrimSpace(c.SystemPrompt)
-	if prompt == "" {
-		return
-	}
-	if c.OpeningMessage != "" {
-		prompt += "\n开场必须先说：" + strings.TrimSpace(c.OpeningMessage)
-	}
-	if c.ClosingMessage != "" {
-		prompt += "\n结束前必须说：" + strings.TrimSpace(c.ClosingMessage)
-	}
-	conversation.SetSIPCallSystemPrompt(callID, prompt)
+	_ = callID
+	_ = correlationID
 }
 
 // RunScriptIfConfigured executes hybrid script trace flow when media profile is "script".
@@ -479,8 +449,8 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 			}
 			return conversation.SpeakTextOnce(runCtx, runLeg.Session, prompt, logger.Lg)
 		},
-		OnListen: func(runCtx context.Context, runLeg outbound.EstablishedLeg, timeout time.Duration, notBefore time.Time) (outbound.ListenResult, error) {
-			res, err := s.waitNextTurn(runCtx, runLeg.CallID, lastTurnIndex, timeout, notBefore)
+		OnListen: func(runCtx context.Context, runLeg outbound.EstablishedLeg, timeout time.Duration, notBefore time.Time, step outbound.HybridStep) (outbound.ListenResult, error) {
+			res, err := s.waitNextTurn(runCtx, runLeg.CallID, lastTurnIndex, timeout, notBefore, outbound.DTMFDigitToNextMap(step))
 			if err != nil {
 				if logger.Lg != nil && runLeg.Session != nil && strings.Contains(strings.ToLower(err.Error()), "timeout") {
 					if rtpSess := runLeg.Session.RTPSession(); rtpSess != nil {
@@ -505,6 +475,11 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 			}
 			lastTurnIndex = res.Index
 			lastTurnReply = res.Turn.LLMText
+			if strings.TrimSpace(res.DTMFDigit) != "" {
+				return outbound.ListenResult{
+					DTMFDigit: strings.TrimSpace(res.DTMFDigit),
+				}, nil
+			}
 			return outbound.ListenResult{
 				InputText: strings.TrimSpace(res.Turn.ASRText),
 				ReplyText: strings.TrimSpace(res.Turn.LLMText),
@@ -559,8 +534,9 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 }
 
 type turnFetchResult struct {
-	Index int
-	Turn  models.SIPCallDialogTurn
+	Index      int
+	Turn       models.SIPCallDialogTurn
+	DTMFDigit  string // non-empty when resolved via keypad (matched dtmf_transitions)
 }
 
 // scriptListenPollInterval is how often we poll DB for a new user turn during script listen (default 120ms).
@@ -574,7 +550,7 @@ func scriptListenPollInterval() time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, afterIndex int, timeout time.Duration, notBefore time.Time) (turnFetchResult, error) {
+func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, afterIndex int, timeout time.Duration, notBefore time.Time, dtmfNext map[string]string) (turnFetchResult, error) {
 	if s == nil || s.db == nil {
 		return turnFetchResult{}, fmt.Errorf("script listen: db unavailable")
 	}
@@ -587,11 +563,19 @@ func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, after
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(scriptListenPollInterval())
 	defer ticker.Stop()
+	wake, wakeCancel := scriptlisten.Subscribe(callID)
+	defer wakeCancel()
 
 	for {
 		res, ok := s.fetchTurn(callID, afterIndex, notBefore)
 		if ok {
+			scriptlisten.ClearDTMF(callID)
 			return res, nil
+		}
+		if len(dtmfNext) > 0 {
+			if _, d, ok := scriptlisten.TryConsumeDTMF(callID, notBefore, dtmfNext); ok {
+				return turnFetchResult{Index: afterIndex, DTMFDigit: d}, nil
+			}
 		}
 		if time.Now().After(deadline) {
 			return turnFetchResult{}, fmt.Errorf("script listen timeout")
@@ -599,6 +583,7 @@ func (s *CampaignService) waitNextTurn(ctx context.Context, callID string, after
 		select {
 		case <-ctx.Done():
 			return turnFetchResult{}, ctx.Err()
+		case <-wake:
 		case <-ticker.C:
 		}
 	}

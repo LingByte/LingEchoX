@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	sipprotocol "github.com/LingByte/SoulNexus/pkg/sip/protocol"
@@ -34,6 +35,21 @@ const (
 const EnvSIPMediaMaxSeconds = "SIP_MEDIA_MAX_SECONDS"
 
 const defaultSIPMediaMaxSeconds = 3600
+
+func sipMediaOutputQueueSize() int {
+	const def = 512
+	const minQ = 64
+	const maxQ = 2048
+	s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPMediaTXQueueSize))
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < minQ || n > maxQ {
+		return def
+	}
+	return n
+}
 
 // CallSession binds an RTP session to a MediaSession for SIP calls.
 //
@@ -198,10 +214,9 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 	cs.rxTransport = rxTransport
 	cs.txTransport = txTransport
 
-	ms := media.NewDefaultSession().
-		Context(ctx).
-		SetSessionID("sip-call-" + callID).
-		Decode(dec).
+	ms := media.NewDefaultSession().Context(ctx).SetSessionID("sip-call-" + callID)
+	ms.QueueSize = sipMediaOutputQueueSize()
+	ms.Decode(dec).
 		Encode(enc).
 		Input(rxTransport).
 		Output(txTransport)

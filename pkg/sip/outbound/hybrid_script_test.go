@@ -17,6 +17,30 @@ func (r *inMemoryRecorder) Record(_ context.Context, event ScriptRunEvent) error
 	return nil
 }
 
+func TestParseHybridScript_DTMFTransitions(t *testing.T) {
+	raw := `{
+		"id":"ivr",
+		"start_id":"l1",
+		"steps":[
+			{"id":"l1","type":"listen","next_id":"default","dtmf_transitions":[
+				{"digit":"1","next_id":"yes"},
+				{"digit":"2","next_id":"no"}
+			]},
+			{"id":"yes","type":"end"},
+			{"id":"no","type":"end"},
+			{"id":"default","type":"end"}
+		]
+	}`
+	s, err := ParseHybridScript(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	m := DTMFDigitToNextMap(s.Steps[0])
+	if m["1"] != "yes" || m["2"] != "no" {
+		t.Fatalf("map: %#v", m)
+	}
+}
+
 func TestParseHybridScript_ExtendedFields(t *testing.T) {
 	raw := `{
 		"id":"followup-v2",
@@ -69,7 +93,7 @@ func TestListenRouteWithoutLLM_Apology(t *testing.T) {
 	var said string
 	rec := &inMemoryRecorder{}
 	r := NewHybridScriptRunner(script, rec).WithHooks(RuntimeHooks{
-		OnListen: func(_ context.Context, _ EstablishedLeg, _ time.Duration, _ time.Time) (ListenResult, error) {
+		OnListen: func(_ context.Context, _ EstablishedLeg, _ time.Duration, _ time.Time, _ HybridStep) (ListenResult, error) {
 			return ListenResult{InputText: "随便说说", ReplyText: ""}, nil
 		},
 		OnSay: func(_ context.Context, _ EstablishedLeg, prompt string) error {
@@ -100,7 +124,7 @@ func TestRunner_ListenTimeoutFallback(t *testing.T) {
 	}
 	rec := &inMemoryRecorder{}
 	r := NewHybridScriptRunner(script, rec).WithHooks(RuntimeHooks{
-		OnListen: func(_ context.Context, _ EstablishedLeg, _ time.Duration, _ time.Time) (ListenResult, error) {
+		OnListen: func(_ context.Context, _ EstablishedLeg, _ time.Duration, _ time.Time, _ HybridStep) (ListenResult, error) {
 			return ListenResult{}, context.DeadlineExceeded
 		},
 	})

@@ -39,6 +39,13 @@ type SIPCallDialogTurn struct {
 	TTSProvider string    `json:"ttsProvider,omitempty"`
 	LLMModel    string    `json:"llmModel,omitempty"`
 	At          time.Time `json:"at"`
+	Trigger       string `json:"trigger,omitempty"`
+	ScriptStepID  string `json:"scriptStepId,omitempty"`
+	RouteIntent   string `json:"routeIntent,omitempty"`
+	LLMFirstMs    int    `json:"llmFirstMs,omitempty"`
+	LLMWallMs     int    `json:"llmWallMs,omitempty"`
+	TTSMs         int    `json:"ttsMs,omitempty"`
+	PipelineMs    int    `json:"pipelineMs,omitempty"`
 }
 
 // SIPCall records one SIP call lifecycle (INVITE -> ACK -> BYE) and optional AI dialog turns in JSON.
@@ -62,6 +69,12 @@ type SIPCall struct {
 	EndedAt        *time.Time     `json:"endedAt" gorm:"index"`
 	FailureReason  string         `json:"failureReason" gorm:"type:text"`
 	RecordingURL   string         `json:"recordingUrl" gorm:"size:1024"`
+	// RecordingRawBytes is SN2 blob size from CallSession.TakeRecording (0 if none).
+	RecordingRawBytes int `json:"recordingRawBytes" gorm:"column:recording_raw_bytes;default:0"`
+	// RecordingWavBytes is mono WAV byte length after decode/mix upload (0 if not produced).
+	RecordingWavBytes int `json:"recordingWavBytes" gorm:"column:recording_wav_bytes;default:0"`
+	// ByeInitiator is who tore down the SIP dialog for this row: "local" | "remote" (from BYE / Hangup path).
+	ByeInitiator string `json:"byeInitiator" gorm:"column:bye_initiator;size:16"`
 	DurationSec    int            `json:"durationSec" gorm:"default:0"`
 	EndStatus      string         `json:"endStatus" gorm:"size:64;index"` // EndStatus is one of SIPCallEnd* constants.
 	Turns          datatypes.JSON `json:"turns" gorm:"type:json"`         // AI dialog (same row as call)

@@ -7,17 +7,22 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 )
 
-var sipTurnPersist func(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string)
+var sipTurnPersist func(ctx context.Context, callID string, turn DialogTurn)
 
 var warnTurnPersistOnce sync.Once
 
-// SetSIPTurnPersist registers a callback after a successful ASR→LLM reply (before TTS); cmd/sip wires it to sippersist.Store.SaveConversationTurn (appends one turn in sip_calls.turns JSON).
-// Related lifecycle: INVITE/ACK → optional AI turns → BYE → sippersist.OnBye uploads PCMU/PCMA or Opus→WAV via config.GlobalStore and updates sip_calls.
-func SetSIPTurnPersist(fn func(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string)) {
+// SetSIPTurnPersist registers a callback to append one dialog turn onto sip_calls.turns.
+// cmd/sip wires this to sipserver.Store.SaveConversationTurn.
+//
+// Call recording (inbound UAS and outbound UAC with CallSession registered):
+//   - pkg/sip/session.CallSession: OnInputRTP (user) + OnOutputRTP (AI) → SN2 blob.
+//   - BYE → TakeRecording → sipserver.OnBye → stereo WAV preferred (L=user R=AI per-leg decode, no mono ducking),
+//     falling back to legacy mono mix if stereo build fails; upload → recording_url.
+func SetSIPTurnPersist(fn func(ctx context.Context, callID string, turn DialogTurn)) {
 	sipTurnPersist = fn
 }
 
-func persistSIPTurn(ctx context.Context, callID, userText, assistantText, asrProvider, llmModel, ttsProvider string) {
+func persistSIPTurn(ctx context.Context, callID string, turn DialogTurn) {
 	if callID == "" {
 		return
 	}
@@ -29,5 +34,5 @@ func persistSIPTurn(ctx context.Context, callID, userText, assistantText, asrPro
 		})
 		return
 	}
-	sipTurnPersist(ctx, callID, userText, assistantText, asrProvider, llmModel, ttsProvider)
+	sipTurnPersist(ctx, callID, turn)
 }

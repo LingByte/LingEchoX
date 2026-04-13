@@ -85,6 +85,12 @@ func normalizeSIPRequestURI(u string) string {
 	return u
 }
 
+// RegisterPasswordFromEnv returns SIP_PASSWORD when set (trimmed). Empty means REGISTER is open
+// (no shared secret). Non-empty means clients must send matching X-SIP-Register-Password on REGISTER.
+func RegisterPasswordFromEnv() string {
+	return strings.TrimSpace(utils.GetEnv(constants.EnvSIPRegisterPassword))
+}
+
 // TransferDialTargetFromEnv reads SIP_TRANSFER_* (agent extension / URI for blind transfer dial).
 // Same shape as DialTargetFromEnv but separate keys so campaign and transfer can coexist.
 func TransferDialTargetFromEnv() (t SIPDialEnv, ok bool) {

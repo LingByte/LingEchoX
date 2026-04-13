@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 )
 
@@ -430,37 +432,32 @@ func (s *CampaignService) isDuplicateWithinWindow(ctx context.Context, contactID
 }
 
 func buildDialTarget(c models.SIPCampaign, ct models.SIPCampaignContact) (outbound.DialTarget, error) {
-	if u := strings.TrimSpace(ct.RequestURI); u != "" {
-		sig := strings.TrimSpace(c.SignalingAddr)
-		if sig == "" {
-			return outbound.DialTarget{}, fmt.Errorf("signaling_addr required when contact request_uri is set")
+	host := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundHost))
+	if host == "" {
+		return outbound.DialTarget{}, fmt.Errorf("SIP_OUTBOUND_HOST is required")
+	}
+	port := 5060
+	if s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundPort)); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 65535 {
+			port = n
 		}
-		return outbound.DialTarget{RequestURI: u, SignalingAddr: sig}, nil
+	}
+	defaultSig := strings.TrimSpace(utils.GetEnv(constants.EnvSIPSignalingAddr))
+	if defaultSig == "" {
+		defaultSig = fmt.Sprintf("%s:%d", host, port)
+	}
+
+	if u := strings.TrimSpace(ct.RequestURI); u != "" {
+		return outbound.DialTarget{RequestURI: u, SignalingAddr: defaultSig}, nil
 	}
 	if tmpl := strings.TrimSpace(c.RequestURIFmt); tmpl != "" {
-		sig := strings.TrimSpace(c.SignalingAddr)
-		if sig == "" {
-			return outbound.DialTarget{}, fmt.Errorf("signaling_addr required with request_uri_fmt")
-		}
 		return outbound.DialTarget{
 			RequestURI:    fmt.Sprintf(tmpl, strings.TrimSpace(ct.Phone)),
-			SignalingAddr: sig,
+			SignalingAddr: defaultSig,
 		}, nil
-	}
-	host := strings.TrimSpace(c.OutboundHost)
-	if host == "" {
-		return outbound.DialTarget{}, fmt.Errorf("outbound_host is required")
-	}
-	port := c.OutboundPort
-	if port <= 0 {
-		port = 5060
-	}
-	sig := strings.TrimSpace(c.SignalingAddr)
-	if sig == "" {
-		sig = fmt.Sprintf("%s:%d", host, port)
 	}
 	return outbound.DialTarget{
 		RequestURI:    fmt.Sprintf("sip:%s@%s:%d", strings.TrimSpace(ct.Phone), host, port),
-		SignalingAddr: sig,
+		SignalingAddr: defaultSig,
 	}, nil
 }

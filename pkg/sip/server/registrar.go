@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -10,10 +11,30 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"go.uber.org/zap"
 )
+
+// sipRegisterPasswordHeader is sent by SIP clients when SIP_PASSWORD is set server-side.
+const sipRegisterPasswordHeader = "X-SIP-Register-Password"
+
+// registerPasswordOK is true when REGISTER is allowed: SIP_PASSWORD env empty, or header matches.
+func registerPasswordOK(msg *protocol.Message) bool {
+	required := config.RegisterPasswordFromEnv()
+	if required == "" {
+		return true
+	}
+	if msg == nil {
+		return false
+	}
+	got := strings.TrimSpace(msg.GetHeader(sipRegisterPasswordHeader))
+	if len(got) != len(required) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(required)) == 1
+}
 
 func randomBranch() string {
 	b := make([]byte, 8)

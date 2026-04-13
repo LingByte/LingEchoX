@@ -3,7 +3,6 @@ package conversation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/recognizer"
+	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip"
 	sipasr "github.com/LingByte/SoulNexus/pkg/sip/asr"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
@@ -367,7 +367,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	if err != nil {
 		return fmt.Errorf("sip conversation: llm provider init: %w", err)
 	}
-	// All providers register transfer tool; Alibaba keeps native action parsing too.
 	registerSIPTransferTool(llmProvider, cs.CallID, lg)
 	lg.Info("sip voice pipeline config",
 		zap.String("llm_model", llmModel),
@@ -405,7 +404,12 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	var partialMu sync.Mutex
 	var partialTimer *time.Timer
 	var pendingPartial string
-
+	// When partial-timeout already ran LLM+TTS for text T, ASR often sends final with the same T;
+	// skipping the second trigger avoids duplicate user turns in LLM history and extra latency.
+	var partialTimeoutDoneMu sync.Mutex
+	var partialTimeoutDoneText string
+	var partialTimeoutDoneAt time.Time
+	const partialTimeoutFinalDedupeWindow = 12 * time.Second
 	ttsPipe, err := siptts.New(siptts.Config{
 		Service:       ttsStream,
 		SampleRate:    env.TTSSampleRate,
@@ -500,14 +504,20 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 
 			var reply string
 			var err error
+			pipelineT0 := time.Now()
+			var streamMeta StreamTurnTimings
 			if scriptMode {
-				// Script mode needs deterministic and low-latency branching.
-				// Persist ASR text immediately so listen steps can resolve without waiting for LLM RTT.
-				asrProv := "qcloud_asr"
-				if env.ASRModelType != "" {
-					asrProv = env.ASRModelType
+				// Persist only on ASR final to avoid duplicate sip_calls.turns rows when partial ASR is enabled.
+				if asrIsFinal {
+					asrProv := "qcloud_asr"
+					if env.ASRModelType != "" {
+						asrProv = env.ASRModelType
+					}
+					go persistSIPTurn(context.Background(), cs.CallID, DialogTurn{
+						ASRText: userText, ASRProvider: asrProv, Trigger: trigger,
+						PipelineMs: int(time.Since(pipelineT0).Milliseconds()),
+					})
 				}
-				go persistSIPTurn(context.Background(), cs.CallID, userText, "", asrProv, "", "")
 			} else {
 				ttsPipe.Start(ms.GetContext())
 				defer func() {
@@ -517,11 +527,17 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				}()
 				ttsPlaying.Store(true)
 				ttsStartedAtNS.Store(time.Now().UnixNano())
-				reply, err = streamLLMToTTS(ms.GetContext(), llmProvider, llmModel, userText, ttsPipe, lg)
+				reply, streamMeta, err = streamLLMToTTS(ms.GetContext(), llmProvider, llmModel, userText, ttsPipe, lg)
 			}
 			if err != nil {
 				lg.Warn("sip voice llm/tts", zap.Error(err))
 				return
+			}
+			if !scriptMode && trigger == "partial-timeout" {
+				partialTimeoutDoneMu.Lock()
+				partialTimeoutDoneText = userText
+				partialTimeoutDoneAt = time.Now()
+				partialTimeoutDoneMu.Unlock()
 			}
 			reply = normalizeTTSText(reply)
 			if scriptMode {
@@ -554,7 +570,12 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			if env.ASRModelType != "" {
 				asrProv = env.ASRModelType
 			}
-			go persistSIPTurn(context.Background(), cs.CallID, userText, reply, asrProv, llmModel, "qcloud_tts")
+			go persistSIPTurn(context.Background(), cs.CallID, DialogTurn{
+				ASRText: userText, LLMText: reply, ASRProvider: asrProv,
+				LLMModel: llmModel, TTSProvider: "qcloud_tts", Trigger: trigger,
+				LLMFirstMs: streamMeta.LLMFirstMs, LLMWallMs: streamMeta.LLMWallMs,
+				TTSMs: streamMeta.TTSMs, PipelineMs: int(time.Since(pipelineT0).Milliseconds()),
+			})
 		}(userText, asrIsFinal, trigger)
 	}
 
@@ -595,6 +616,17 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				partialTimer.Stop()
 			}
 			partialMu.Unlock()
+			partialTimeoutDoneMu.Lock()
+			prevT := partialTimeoutDoneText
+			prevAt := partialTimeoutDoneAt
+			partialTimeoutDoneMu.Unlock()
+			if prevT != "" && corrected == prevT && time.Since(prevAt) < partialTimeoutFinalDedupeWindow {
+				lg.Info("sip voice asr skip duplicate final (same text as recent partial-timeout turn)",
+					zap.String("call_id", cs.CallID),
+					zap.Int("text_runes", len([]rune(corrected))),
+				)
+				return
+			}
 			triggerTurn(corrected, true, "final")
 			return
 		}
@@ -698,6 +730,9 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 
 	sipdtmf.AttachProcessor(ms, "sip-dtmf", func(_ context.Context, digit string) {
 		lg.Info("sip dtmf", zap.String("digit", digit), zap.String("call_id", cs.CallID))
+		if isSIPScriptMode(cs.CallID) {
+			scriptlisten.PublishDTMF(cs.CallID, digit)
+		}
 	})
 
 	// Start RTP read/write before welcome so the first inbound packet can update symmetric RTP
@@ -782,12 +817,24 @@ func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger,
 	return nil
 }
 
-func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, userText string, ttsPipe *siptts.Pipeline, lg *zap.Logger) (string, error) {
+func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, userText string, ttsPipe *siptts.Pipeline, lg *zap.Logger) (string, StreamTurnTimings, error) {
+	var meta StreamTurnTimings
 	if llmProvider == nil {
-		return "", fmt.Errorf("nil llm provider")
+		return "", meta, fmt.Errorf("nil llm provider")
 	}
 	if ttsPipe == nil {
-		return "", fmt.Errorf("nil tts pipe")
+		return "", meta, fmt.Errorf("nil tts pipe")
+	}
+	ttsMs := 0
+	speak := func(s string) error {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		t0 := time.Now()
+		err := ttsPipe.Speak(s)
+		ttsMs += int(time.Since(t0).Milliseconds())
+		return err
 	}
 	var full strings.Builder
 	var seg strings.Builder
@@ -808,102 +855,91 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, use
 		if s == "" {
 			return nil
 		}
-		return ttsPipe.Speak(s)
+		return speak(s)
 	}
 	// Alibaba App API usually returns one JSON message per turn; non-streaming avoids long
 	// silent waits when SSE chunks are sparse on some networks.
 	if _, isAlibaba := llmProvider.(*llm.AlibabaProvider); isAlibaba {
+		t0 := time.Now()
 		reply, err := llmProvider.Query(userText, model)
+		meta.LLMWallMs = int(time.Since(t0).Milliseconds())
+		meta.LLMFirstMs = meta.LLMWallMs
 		if err != nil {
-			return "", err
+			return "", meta, err
 		}
 		reply = normalizeTTSText(reply)
 		if reply == "" {
-			return "", nil
+			return "", meta, nil
 		}
-		if err := ttsPipe.Speak(reply); err != nil {
+		if err := speak(reply); err != nil {
+			meta.TTSMs = ttsMs
 			if errors.Is(err, context.Canceled) {
-				return reply, nil
+				return reply, meta, nil
 			}
-			return "", err
+			return "", meta, err
 		}
-		return strings.TrimSpace(reply), nil
+		meta.TTSMs = ttsMs
+		return strings.TrimSpace(reply), meta, nil
 	}
+	streamStart := time.Now()
+	gotFirst := false
 	options := llm.QueryOptions{Model: model, Stream: true}
 	reply, err := llmProvider.QueryStream(userText, options, func(piece string, _ bool) error {
 		piece = strings.TrimSpace(piece)
 		if piece == "" {
 			return nil
 		}
+		if !gotFirst {
+			meta.LLMFirstMs = int(time.Since(streamStart).Milliseconds())
+			gotFirst = true
+		}
 		full.WriteString(piece)
 		seg.WriteString(piece)
 		return flush(false)
 	})
+	meta.LLMWallMs = int(time.Since(streamStart).Milliseconds())
 	if err != nil {
 		// fallback to non-streaming so behavior stays stable even if provider stream fails.
+		ttsMs = 0
+		t0 := time.Now()
 		reply, err = llmProvider.Query(userText, model)
+		meta.LLMWallMs = int(time.Since(t0).Milliseconds())
+		meta.LLMFirstMs = meta.LLMWallMs
 		if err != nil {
-			return "", err
+			return "", meta, err
 		}
 		reply = normalizeTTSText(reply)
 		if reply == "" {
 			if lg != nil {
 				lg.Warn("sip voice tts skip empty/invalid reply after sanitize")
 			}
-			return "", nil
+			return "", meta, nil
 		}
-		if err := ttsPipe.Speak(reply); err != nil {
+		if err := speak(reply); err != nil {
+			meta.TTSMs = ttsMs
 			if errors.Is(err, context.Canceled) {
 				if lg != nil {
 					lg.Info("sip voice tts stopped (barge-in or cancel)")
 				}
-				return reply, nil
+				return reply, meta, nil
 			}
-			return "", err
+			return "", meta, err
 		}
-		return strings.TrimSpace(reply), nil
+		meta.TTSMs = ttsMs
+		return strings.TrimSpace(reply), meta, nil
 	}
 	if strings.TrimSpace(reply) == "" {
 		reply = full.String()
 	}
 	if err := flush(true); err != nil {
+		meta.TTSMs = ttsMs
 		if errors.Is(err, context.Canceled) {
-			return strings.TrimSpace(reply), nil
+			return strings.TrimSpace(reply), meta, nil
 		}
-		return "", err
+		return "", meta, err
 	}
-	return strings.TrimSpace(reply), nil
-}
-
-func registerSIPTransferTool(provider llm.LLMProvider, callID string, lg *zap.Logger) {
-	if provider == nil || strings.TrimSpace(callID) == "" {
-		return
-	}
-	params := json.RawMessage(`{
-		"type":"object",
-		"properties":{
-			"reason":{"type":"string","description":"用户请求转人工的简短原因"},
-			"confidence":{"type":"number","description":"0到1，当前意图置信度"}
-		},
-		"required":[],
-		"additionalProperties":true
-	}`)
-	provider.RegisterFunctionTool(
-		"transfer_to_agent",
-		"当且仅当用户明确要求转人工客服时调用该工具。调用后系统会执行转人工，不要让用户重复确认。",
-		params,
-		func(args map[string]interface{}, _ interface{}) (string, error) {
-			if lg != nil {
-				lg.Info("sip voice: transfer tool invoked",
-					zap.String("call_id", callID),
-					zap.Any("args", args),
-				)
-			}
-			// Keep UX consistent with Alibaba flow: transfer only after current TTS reply finishes.
-			markSIPTransferPending(callID)
-			return "transfer_requested", nil
-		},
-	)
+	meta.TTSMs = ttsMs
+	return strings.TrimSpace(reply), meta, nil
 }
 
 // SpeakTextOnce sends one synthesized sentence to the current SIP media output.

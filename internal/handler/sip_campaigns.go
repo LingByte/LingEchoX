@@ -22,16 +22,10 @@ type sipCampaignCreateReq struct {
 	ScriptID          string `json:"script_id"`
 	ScriptVersion     string `json:"script_version"`
 	ScriptSpec        string `json:"script_spec"`
-	SystemPrompt      string `json:"system_prompt"`
-	OpeningMessage    string `json:"opening_message"`
-	ClosingMessage    string `json:"closing_message"`
 	RetrySchedule     string `json:"retry_schedule"`
 	MaxAttempts       int    `json:"max_attempts"`
 	TaskConcurrency   int    `json:"task_concurrency"`
 	GlobalConcurrency int    `json:"global_concurrency"`
-	OutboundHost      string `json:"outbound_host"`
-	OutboundPort      int    `json:"outbound_port"`
-	SignalingAddr     string `json:"signaling_addr"`
 	RequestURIFmt     string `json:"request_uri_fmt"`
 }
 
@@ -78,16 +72,10 @@ func (h *Handlers) createSIPCampaign(c *gin.Context) {
 		ScriptID:          strings.TrimSpace(req.ScriptID),
 		ScriptVersion:     strings.TrimSpace(req.ScriptVersion),
 		ScriptSpec:        spec,
-		SystemPrompt:      strings.TrimSpace(req.SystemPrompt),
-		OpeningMessage:    strings.TrimSpace(req.OpeningMessage),
-		ClosingMessage:    strings.TrimSpace(req.ClosingMessage),
 		RetrySchedule:     strings.TrimSpace(req.RetrySchedule),
 		MaxAttempts:       req.MaxAttempts,
 		TaskConcurrency:   req.TaskConcurrency,
 		GlobalConcurrency: req.GlobalConcurrency,
-		OutboundHost:      strings.TrimSpace(req.OutboundHost),
-		OutboundPort:      req.OutboundPort,
-		SignalingAddr:     strings.TrimSpace(req.SignalingAddr),
 		RequestURIFmt:     strings.TrimSpace(req.RequestURIFmt),
 	}
 	if row.Scenario == "" {
@@ -104,9 +92,6 @@ func (h *Handlers) createSIPCampaign(c *gin.Context) {
 	}
 	if row.GlobalConcurrency <= 0 {
 		row.GlobalConcurrency = 20
-	}
-	if row.OutboundPort <= 0 {
-		row.OutboundPort = 5060
 	}
 	if op := acdOperator(c); op != "" {
 		row.SetCreateInfo(op)
