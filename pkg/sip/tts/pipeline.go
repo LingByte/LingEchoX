@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 )
@@ -123,7 +124,18 @@ func (p *Pipeline) Speak(text string) error {
 		return fmt.Errorf("sip/tts: invalid frame size")
 	}
 
-	buffer := make([]byte, 0, bytesPerFrame*2)
+	// Pre-size buffer to cut reallocations on long TTS (rough PCM estimate from text length).
+	bufCap := bytesPerFrame * 16
+	if n := utf8.RuneCountInString(text); n > 0 {
+		if c := n * 1200; c > bufCap {
+			bufCap = c
+		}
+	}
+	const bufCapMax = 4 << 20
+	if bufCap > bufCapMax {
+		bufCap = bufCapMax
+	}
+	buffer := make([]byte, 0, bufCap)
 	err := cfg.Service.SynthesizeStream(ctx, text, func(pcm []byte) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -175,12 +187,11 @@ func (p *Pipeline) paceAfterFrame(ctx context.Context, cfg Config) {
 	if !cfg.PaceRealtime || cfg.FrameDuration <= 0 {
 		return
 	}
-	t := time.NewTimer(cfg.FrameDuration)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-	case <-t.C:
+	if ctx.Err() != nil {
+		return
 	}
+	// Avoid allocating a Timer per 20ms frame on long utterances (reduces GC jitter).
+	time.Sleep(cfg.FrameDuration)
 }
 
 func (p *Pipeline) nextSeq() uint32 {
@@ -218,4 +229,3 @@ func trimSpace(s string) string {
 	}
 	return s[i:j]
 }
-

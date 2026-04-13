@@ -19,3 +19,15 @@ func TestParseRouteLLMJSON(t *testing.T) {
 		t.Fatal("expected error on empty")
 	}
 }
+
+func TestParseRouteLLMReplyCompact(t *testing.T) {
+	sorted := []string{"a", "b", "c"}
+	id, err := parseRouteLLMReply(`{"i":1}`, sorted, false)
+	if err != nil || id != "b" {
+		t.Fatalf("compact: id=%q err=%v", id, err)
+	}
+	id, err = parseRouteLLMReply(`{"next_id":"c"}`, sorted, false)
+	if err != nil || id != "c" {
+		t.Fatalf("fallback next_id: id=%q err=%v", id, err)
+	}
+}

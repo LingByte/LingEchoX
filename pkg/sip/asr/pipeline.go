@@ -33,7 +33,6 @@ type Metrics struct {
 
 type Options struct {
 	ASR recognizer.TranscribeService
-
 	// DecodeSource is the negotiated RTP codec (opus / pcmu / pcma / g722 …).
 	// If Codec is empty or "pcm", no decode stage is added — input must already be PCM
 	// (typical when pkg/media/MediaSession has already decoded RTP).
@@ -222,34 +221,3 @@ func (p *Pipeline) onASRError(err error, fatal bool) {
 		p.logger.Error("sip/asr error", zap.Error(err), zap.Bool("fatal", fatal))
 	}
 }
-
-type asrInputStage struct {
-	asr     recognizer.TranscribeService
-	metrics *Metrics
-	logger  *zap.Logger
-}
-
-func (s *asrInputStage) Name() string { return "asr.input" }
-
-func (s *asrInputStage) Process(_ context.Context, data interface{}) (interface{}, bool, error) {
-	pcm, ok := data.([]byte)
-	if !ok {
-		return nil, false, fmt.Errorf("sip/asr: invalid data type: %T", data)
-	}
-	if len(pcm) == 0 {
-		return nil, false, nil
-	}
-	if s.metrics != nil {
-		s.metrics.mu.Lock()
-		s.metrics.TotalAudioBytes += len(pcm)
-		s.metrics.mu.Unlock()
-	}
-	if err := s.asr.SendAudioBytes(pcm); err != nil {
-		if s.logger != nil {
-			s.logger.Warn("sip/asr send audio failed", zap.Error(err))
-		}
-		return nil, false, err
-	}
-	return nil, true, nil
-}
-

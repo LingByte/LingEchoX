@@ -17,11 +17,9 @@ import (
 	"go.uber.org/zap"
 )
 
-const llmRouteSystemPrompt = `You are a routing engine for a voice outbound call script.
-Given the user's latest utterance (from speech recognition, may be noisy or colloquial Chinese),
-choose exactly ONE branch target id (next_id) from the ALLOWED list supplied by the user message.
-Output a single JSON object only, with shape: {"next_id":"<id>"}.
-The value must match one allowed id exactly (same spelling and casing).`
+const llmRouteSystemPromptLegacy = `You route a voice outbound script. Output only JSON {"next_id":"<id>"} matching one allowed id exactly.`
+
+const llmRouteSystemPromptCompact = `You route a voice outbound script. Output only JSON {"i":N} where N is a non-negative integer index from the numbered list in the user message. No prose, no markdown.`
 
 // ErrListenRouteNoLLM is returned when a listen step has transitions but CHECK_LLM_* is not configured.
 var ErrListenRouteNoLLM = errors.New("listen transitions require CHECK_LLM_* configuration")
@@ -96,6 +94,29 @@ func collectAllowedNextIDs(step HybridStep) map[string]bool {
 	return out
 }
 
+func sortedAllowedIDs(allowed map[string]bool) []string {
+	ids := make([]string, 0, len(allowed))
+	for id := range allowed {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func routeLegacyJSON() bool {
+	return isTruthyEnv(utils.GetEnv(constants.EnvCHECKLLMRouteLegacyJSON))
+}
+
+func routeMaxCompletionTokens() int {
+	def := 32
+	if s := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMRouteMaxTokens)); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 8 && n <= 128 {
+			return n
+		}
+	}
+	return def
+}
+
 func pickNextWithLLM(ctx context.Context, leg EstablishedLeg, step HybridStep, userText string, allowed map[string]bool) (string, error) {
 	apiKey := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMAPIKey))
 	baseURL := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMBaseURL))
@@ -109,13 +130,24 @@ func pickNextWithLLM(ctx context.Context, leg EstablishedLeg, step HybridStep, u
 	routeCtx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
 	defer cancel()
 
-	prov := llm.NewOpenAIProvider(routeCtx, apiKey, baseURL, llmRouteSystemPrompt)
+	sorted := sortedAllowedIDs(allowed)
+	legacy := routeLegacyJSON()
+	sys := llmRouteSystemPromptCompact
+	if legacy {
+		sys = llmRouteSystemPromptLegacy
+	}
+	prov := llm.NewOpenAIProvider(routeCtx, apiKey, baseURL, sys)
 
-	userPayload := buildListenRouteUserPrompt(step, userText, allowed)
+	var userPayload string
+	if legacy {
+		userPayload = buildListenRouteUserPrompt(step, userText, allowed)
+	} else {
+		userPayload = buildCompactListenRouteUserPrompt(step, userText, sorted)
+	}
 	opts := llm.QueryOptions{
 		Model:               model,
-		Temperature:         llm.Float32Ptr(0.1),
-		MaxCompletionTokens: llm.IntPtr(128),
+		Temperature:         llm.Float32Ptr(0),
+		MaxCompletionTokens: llm.IntPtr(routeMaxCompletionTokens()),
 		EnableJSONOutput:    true,
 	}
 	reply, err := prov.QueryWithOptions(userPayload, opts)
@@ -128,7 +160,7 @@ func pickNextWithLLM(ctx context.Context, leg EstablishedLeg, step HybridStep, u
 		}
 		return "", err
 	}
-	nextID, perr := parseRouteLLMJSON(reply)
+	nextID, perr := parseRouteLLMReply(reply, sorted, legacy)
 	if perr != nil {
 		if logger.Lg != nil {
 			logger.Lg.Warn("script listen LLM route parse failed",
@@ -140,6 +172,47 @@ func pickNextWithLLM(ctx context.Context, leg EstablishedLeg, step HybridStep, u
 		return "", perr
 	}
 	return strings.TrimSpace(nextID), nil
+}
+
+func buildCompactListenRouteUserPrompt(step HybridStep, userText string, sorted []string) string {
+	var b strings.Builder
+	b.WriteString("Branches (index:next_id):\n")
+	def := strings.TrimSpace(step.NextID)
+	defIdx := -1
+	for i, id := range sorted {
+		fmt.Fprintf(&b, "%d:%s\n", i, id)
+		if def != "" && id == def {
+			defIdx = i
+		}
+	}
+	if defIdx >= 0 {
+		fmt.Fprintf(&b, "\nIf vague or off-topic, use index %d (default).\n", defIdx)
+	}
+	b.WriteString("\nSemantics:\n")
+	byTarget := map[string][]string{}
+	for _, tr := range step.Transitions {
+		tid := strings.TrimSpace(tr.NextID)
+		if tid == "" {
+			continue
+		}
+		if d := strings.TrimSpace(tr.Description); d != "" {
+			byTarget[tid] = append(byTarget[tid], d)
+		}
+	}
+	for _, id := range sorted {
+		if hints, ok := byTarget[id]; ok && len(hints) > 0 {
+			fmt.Fprintf(&b, "- %s: %s\n", id, strings.Join(hints, " | "))
+		} else {
+			fmt.Fprintf(&b, "- %s: infer from user intent\n", id)
+		}
+	}
+	ut := strings.TrimSpace(userText)
+	if ut == "" {
+		ut = "(empty utterance)"
+	}
+	fmt.Fprintf(&b, "\nUser utterance:\n\"\"\"\n%s\n\"\"\"\n", ut)
+	b.WriteString("\nReturn only: {\"i\":N}\n")
+	return b.String()
 }
 
 func buildListenRouteUserPrompt(step HybridStep, userText string, allowed map[string]bool) string {
@@ -184,7 +257,7 @@ func buildListenRouteUserPrompt(step HybridStep, userText string, allowed map[st
 	return b.String()
 }
 
-func parseRouteLLMJSON(raw string) (string, error) {
+func parseRouteLLMReply(raw string, sorted []string, legacy bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", fmt.Errorf("empty LLM reply")
@@ -194,16 +267,46 @@ func parseRouteLLMJSON(raw string) (string, error) {
 	if obj == "" {
 		return "", fmt.Errorf("no json object in reply")
 	}
-	var m struct {
-		NextID string `json:"next_id"`
-	}
+	var m map[string]any
 	if err := json.Unmarshal([]byte(obj), &m); err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(m.NextID) == "" {
-		return "", fmt.Errorf("missing next_id")
+	if legacy {
+		v, ok := m["next_id"]
+		if !ok {
+			return "", fmt.Errorf("missing next_id")
+		}
+		s, _ := v.(string)
+		if strings.TrimSpace(s) == "" {
+			return "", fmt.Errorf("empty next_id")
+		}
+		return strings.TrimSpace(s), nil
 	}
-	return m.NextID, nil
+	if v, ok := m["i"]; ok {
+		var idx int
+		switch n := v.(type) {
+		case float64:
+			idx = int(n)
+		default:
+			return "", fmt.Errorf("invalid i type %T", v)
+		}
+		if idx >= 0 && idx < len(sorted) {
+			return sorted[idx], nil
+		}
+		return "", fmt.Errorf("index %d out of range [0,%d)", idx, len(sorted))
+	}
+	if v, ok := m["next_id"]; ok {
+		s, _ := v.(string)
+		if strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s), nil
+		}
+	}
+	return "", fmt.Errorf("missing i or next_id")
+}
+
+// parseRouteLLMJSON is kept for tests; prefer parseRouteLLMReply in production paths.
+func parseRouteLLMJSON(raw string) (string, error) {
+	return parseRouteLLMReply(raw, nil, true)
 }
 
 func stripMarkdownCodeFence(s string) string {

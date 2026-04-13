@@ -64,12 +64,6 @@ export default function OutboundCampaignTab() {
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [detailCampaignId, setDetailCampaignId] = useState<number | null>(null)
   const [name, setName] = useState('')
-  const [systemPrompt, setSystemPrompt] = useState('你是电话回访助手，先核验身份，再按流程提问，最后礼貌结束。')
-  const [openingMessage, setOpeningMessage] = useState('您好，我是回访助手。')
-  const [closingMessage, setClosingMessage] = useState('感谢您的时间，祝您生活愉快。')
-  const [outboundHost, setOutboundHost] = useState('')
-  const [outboundPort, setOutboundPort] = useState(5060)
-  const [signalingAddr, setSignalingAddr] = useState('')
   const [contactsText, setContactsText] = useState('1001\n1002')
   const pageSize = 10
 
@@ -114,24 +108,16 @@ export default function OutboundCampaignTab() {
   const resetCreateForm = () => {
     setName('')
     setSelectedScriptId('')
-    setSystemPrompt('你是电话回访助手，先核验身份，再按流程提问，最后礼貌结束。')
-    setOpeningMessage('您好，我是回访助手。')
-    setClosingMessage('感谢您的时间，祝您生活愉快。')
-    setOutboundHost('')
-    setOutboundPort(5060)
-    setSignalingAddr('')
   }
 
   const createCampaign = async () => {
     if (!name.trim()) return showAlert('任务名称不能为空', 'error')
-    if (!outboundHost.trim()) return showAlert('外呼网关不能为空', 'error')
     setCreating(true)
     try {
       const selected = scripts.find((s) => String(s.id) === selectedScriptId)
       const scriptSpec = selected?.scriptSpec != null ? (typeof selected.scriptSpec === 'string' ? selected.scriptSpec : JSON.stringify(selected.scriptSpec)) : JSON.stringify({ id: 'followup-v1', version: '2026-04-06', start_id: 'begin', steps: [{ id: 'begin', type: 'say', prompt: '你好，这里是云联络中心回访。', next_id: 'end' }, { id: 'end', type: 'end' }] })
       const res = await createOutboundCampaign({
         name: name.trim(), scenario: 'campaign', media_profile: 'script', script_id: selected?.scriptId || 'followup-v1', script_version: '', script_spec: scriptSpec,
-        system_prompt: systemPrompt.trim(), opening_message: openingMessage.trim(), closing_message: closingMessage.trim(), outbound_host: outboundHost.trim(), outbound_port: Number(outboundPort) || 5060, signaling_addr: signalingAddr.trim(),
       })
       if (res.code === 200 && res.data?.id) {
         showAlert('创建成功', 'success')
@@ -276,12 +262,6 @@ export default function OutboundCampaignTab() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">脚本模板</label><select className="border border-border rounded-md px-3 py-2 bg-background w-full text-sm" value={selectedScriptId} onChange={(e) => setSelectedScriptId(e.target.value)}><option value="">无</option>{scripts.map((s) => <option key={s.id} value={String(s.id)}>{s.name} ({s.scriptId})</option>)}</select></div>
             <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">任务名称</label><input className="border border-border rounded-md px-3 py-2 bg-background w-full" value={name} onChange={(e) => setName(e.target.value)} /></div>
-            <div className="space-y-2"><label className="text-xs text-muted-foreground">外呼网关</label><input className="border border-border rounded-md px-3 py-2 bg-background w-full" value={outboundHost} onChange={(e) => setOutboundHost(e.target.value)} placeholder="10.0.0.8" /></div>
-            <div className="space-y-2"><label className="text-xs text-muted-foreground">外呼端口</label><input type="number" min={1} max={65535} className="border border-border rounded-md px-3 py-2 bg-background w-full" value={outboundPort} onChange={(e) => setOutboundPort(parseInt(e.target.value, 10) || 5060)} /></div>
-            <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">信令地址</label><input className="border border-border rounded-md px-3 py-2 bg-background w-full" value={signalingAddr} onChange={(e) => setSignalingAddr(e.target.value)} placeholder="10.0.0.8:5060" /></div>
-            <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">System Prompt</label><textarea className="border border-border rounded-md px-3 py-2 bg-background w-full h-20" value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} /></div>
-            <div className="space-y-2"><label className="text-xs text-muted-foreground">开场白</label><input className="border border-border rounded-md px-3 py-2 bg-background w-full" value={openingMessage} onChange={(e) => setOpeningMessage(e.target.value)} /></div>
-            <div className="space-y-2"><label className="text-xs text-muted-foreground">结束语</label><input className="border border-border rounded-md px-3 py-2 bg-background w-full" value={closingMessage} onChange={(e) => setClosingMessage(e.target.value)} /></div>
           </div>
           <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setCreateModalOpen(false)} disabled={creating}>取消</Button><Button onClick={() => void createCampaign()} disabled={creating}>{creating ? '创建中...' : '创建'}</Button></div>
         </div>

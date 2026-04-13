@@ -23,6 +23,14 @@ export interface SIPCallDialogTurn {
   ttsProvider?: string
   llmModel?: string
   at?: string
+  /** ASR 触发方式：final | partial | partial-timeout 等 */
+  trigger?: string
+  scriptStepId?: string
+  routeIntent?: string
+  llmFirstMs?: number
+  llmWallMs?: number
+  ttsMs?: number
+  pipelineMs?: number
 }
 
 export interface SIPCallRow {
@@ -40,6 +48,9 @@ export interface SIPCallRow {
   remoteRtpAddr?: string
   localRtpAddr?: string
   recordingUrl?: string
+  recordingRawBytes?: number
+  recordingWavBytes?: number
+  byeInitiator?: string
   durationSec?: number
   endStatus?: string
   failureReason?: string
@@ -256,12 +267,6 @@ export async function createOutboundCampaign(body: {
   script_id?: string
   script_version?: string
   script_spec?: string
-  system_prompt?: string
-  opening_message?: string
-  closing_message?: string
-  outbound_host?: string
-  outbound_port?: number
-  signaling_addr?: string
 }): Promise<ApiResponse<OutboundCampaignRow>> {
   return post('/sip-center/campaigns', body)
 }

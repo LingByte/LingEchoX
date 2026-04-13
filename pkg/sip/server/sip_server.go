@@ -670,6 +670,15 @@ func (s *SIPServer) handleRegister(msg *protocol.Message, addr *net.UDPAddr) *pr
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != protocol.MethodRegister {
 		return nil
 	}
+	if !registerPasswordOK(msg) {
+		if logger.Lg != nil {
+			logger.Lg.Warn("sip register rejected (SIP_PASSWORD set but X-SIP-Register-Password missing or wrong)",
+				zap.String("from", msg.GetHeader("From")),
+				zap.String("remote", addrString(addr)),
+			)
+		}
+		return s.makeResponse(msg, 403, "Forbidden", "", "")
+	}
 	s.upsertRegistration(msg, addr)
 	// Minimal REGISTER: accept registration. Echo Contact if present and Expires if provided.
 	resp := s.makeResponse(msg, 200, "OK", "", "")

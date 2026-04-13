@@ -6,6 +6,7 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
+	"github.com/LingByte/SoulNexus/pkg/recognizer"
 	"go.uber.org/zap"
 )
 
@@ -59,4 +60,34 @@ func (s *codecDecodeStage) Process(_ context.Context, data interface{}) (interfa
 		return nil, false, fmt.Errorf("sip/asr: decoder returned invalid packet type")
 	}
 	return ap.Payload, true, nil
+}
+
+type asrInputStage struct {
+	asr     recognizer.TranscribeService
+	metrics *Metrics
+	logger  *zap.Logger
+}
+
+func (s *asrInputStage) Name() string { return "asr.input" }
+
+func (s *asrInputStage) Process(_ context.Context, data interface{}) (interface{}, bool, error) {
+	pcm, ok := data.([]byte)
+	if !ok {
+		return nil, false, fmt.Errorf("sip/asr: invalid data type: %T", data)
+	}
+	if len(pcm) == 0 {
+		return nil, false, nil
+	}
+	if s.metrics != nil {
+		s.metrics.mu.Lock()
+		s.metrics.TotalAudioBytes += len(pcm)
+		s.metrics.mu.Unlock()
+	}
+	if err := s.asr.SendAudioBytes(pcm); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("sip/asr send audio failed", zap.Error(err))
+		}
+		return nil, false, err
+	}
+	return nil, true, nil
 }

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LingByte. All rights reserved.
 // SPDX-License-Identifier: AGPL-3.0
 
-// SIP call recording: tagged G.711/G.722/Opus payloads → mono WAV (used by sip call persistence).
+// SIP call recording: tagged G.711/G.722/Opus payloads → mono or stereo WAV (sip call persistence).
 package utils
 
 import (
@@ -18,6 +18,11 @@ const (
 	recTagUserLeg byte = 0
 	recTagAILeg   byte = 1
 )
+
+// recordingMonoDuckUserFrames: mono-mix decoders used to drop uplink for N frames after each AI
+// packet to reduce interleave stutter; for call archival that removes the caller whenever TTS plays.
+// Keep at 0 so mono/stereo WAV reconstructions retain both legs.
+const recordingMonoDuckUserFrames = 0
 
 // G711TaggedRecordingToWav decodes tagged SIP recordings:
 // - v2: "SN2" + [dir u8][seq u16LE][ts u32LE][len u16LE][payload]
@@ -36,7 +41,6 @@ func G711TaggedRecordingToWav(b []byte, codec string) []byte {
 func g711TaggedFramesV2ToPcmWav(b []byte, codec string) []byte {
 	c := strings.ToLower(strings.TrimSpace(codec))
 	var pcm []int16
-	const aiPriorityHoldFrames = 8
 	aiPriorityLeft := 0
 	for len(b) >= 9 {
 		dir := b[0]
@@ -48,7 +52,7 @@ func g711TaggedFramesV2ToPcmWav(b []byte, codec string) []byte {
 		chunk := b[:n]
 		b = b[n:]
 		if dir == 1 {
-			aiPriorityLeft = aiPriorityHoldFrames
+			aiPriorityLeft = recordingMonoDuckUserFrames
 		} else if aiPriorityLeft > 0 {
 			aiPriorityLeft--
 			continue
@@ -67,7 +71,6 @@ func g711TaggedFramesV2ToPcmWav(b []byte, codec string) []byte {
 func g711TaggedFramesToPcmWav(b []byte, codec string) []byte {
 	c := strings.ToLower(strings.TrimSpace(codec))
 	var pcm []int16
-	const aiPriorityHoldFrames = 8
 	aiPriorityLeft := 0
 	for len(b) >= 3 {
 		dir := b[0]
@@ -79,7 +82,7 @@ func g711TaggedFramesToPcmWav(b []byte, codec string) []byte {
 		chunk := b[:n]
 		b = b[n:]
 		if dir == 1 {
-			aiPriorityLeft = aiPriorityHoldFrames
+			aiPriorityLeft = recordingMonoDuckUserFrames
 		} else if aiPriorityLeft > 0 {
 			aiPriorityLeft--
 			continue
@@ -135,7 +138,6 @@ func g722TaggedFramesV2ToPcmWav(b []byte) []byte {
 	decUser := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
 	decAI := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
 	var pcm []int16
-	const aiPriorityHoldFrames = 8
 	aiPriorityLeft := 0
 	for len(b) >= 9 {
 		dir := b[0]
@@ -147,7 +149,7 @@ func g722TaggedFramesV2ToPcmWav(b []byte) []byte {
 		chunk := b[:n]
 		b = b[n:]
 		if dir == recTagAILeg {
-			aiPriorityLeft = aiPriorityHoldFrames
+			aiPriorityLeft = recordingMonoDuckUserFrames
 		} else if aiPriorityLeft > 0 {
 			aiPriorityLeft--
 			continue
@@ -171,7 +173,6 @@ func g722TaggedFramesV1ToPcmWav(b []byte) []byte {
 	decUser := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
 	decAI := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
 	var pcm []int16
-	const aiPriorityHoldFrames = 8
 	aiPriorityLeft := 0
 	for len(b) >= 3 {
 		dir := b[0]
@@ -183,7 +184,7 @@ func g722TaggedFramesV1ToPcmWav(b []byte) []byte {
 		chunk := b[:n]
 		b = b[n:]
 		if dir == recTagAILeg {
-			aiPriorityLeft = aiPriorityHoldFrames
+			aiPriorityLeft = recordingMonoDuckUserFrames
 		} else if aiPriorityLeft > 0 {
 			aiPriorityLeft--
 			continue
@@ -297,6 +298,255 @@ func pcm16MonoToWav(samples []int16, sampleRate int) []byte {
 	return buf.Bytes()
 }
 
+// pcm16StereoInterleavedToWav builds 16-bit stereo WAV from L,R,L,R,... interleaved samples.
+func pcm16StereoInterleavedToWav(lr []int16, sampleRate int) []byte {
+	if len(lr) == 0 || len(lr)%2 != 0 {
+		return nil
+	}
+	dataSize := len(lr) * 2
+	buf := &bytes.Buffer{}
+	_, _ = buf.WriteString("RIFF")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(36+dataSize))
+	_, _ = buf.WriteString("WAVE")
+	_, _ = buf.WriteString("fmt ")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(16))
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1)) // PCM
+	_ = binary.Write(buf, binary.LittleEndian, uint16(2)) // stereo
+	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate))
+	_ = binary.Write(buf, binary.LittleEndian, uint32(uint32(sampleRate)*4)) // byte rate
+	_ = binary.Write(buf, binary.LittleEndian, uint16(4))                     // block align
+	_ = binary.Write(buf, binary.LittleEndian, uint16(16))
+	_, _ = buf.WriteString("data")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(dataSize))
+	for _, s := range lr {
+		_ = binary.Write(buf, binary.LittleEndian, s)
+	}
+	return buf.Bytes()
+}
+
+func g711DecodeChunk(codec string, chunk []byte) []int16 {
+	c := strings.ToLower(strings.TrimSpace(codec))
+	if strings.Contains(c, "pcma") {
+		return decodeALaw(chunk)
+	}
+	return decodeMuLaw(chunk)
+}
+
+// G711TaggedRecordingToStereoWav builds stereo WAV: L=user leg, R=AI leg (SN2 only).
+// Each channel concatenates that leg’s RTP payloads in capture order (no mono ducking).
+func G711TaggedRecordingToStereoWav(b []byte, codec string) []byte {
+	if len(b) < 3 || b[0] != 'S' || b[1] != 'N' || b[2] != '2' {
+		return nil
+	}
+	var userPCM, aiPCM []int16
+	body := b[3:]
+	for len(body) >= 9 {
+		dir := body[0]
+		n := int(binary.LittleEndian.Uint16(body[7:9]))
+		body = body[9:]
+		if n <= 0 || n > 2000 || len(body) < n {
+			break
+		}
+		chunk := body[:n]
+		body = body[n:]
+		dec := g711DecodeChunk(codec, chunk)
+		switch dir {
+		case recTagUserLeg:
+			userPCM = append(userPCM, dec...)
+		case recTagAILeg:
+			aiPCM = append(aiPCM, dec...)
+		}
+	}
+	if len(userPCM) == 0 && len(aiPCM) == 0 {
+		return nil
+	}
+	n := len(userPCM)
+	if len(aiPCM) > n {
+		n = len(aiPCM)
+	}
+	lr := make([]int16, 2*n)
+	for i := 0; i < len(userPCM); i++ {
+		lr[2*i] = userPCM[i]
+	}
+	for i := 0; i < len(aiPCM); i++ {
+		lr[2*i+1] = aiPCM[i]
+	}
+	return pcm16StereoInterleavedToWav(lr, 8000)
+}
+
+// G722TaggedRecordingToStereoWav is like G711 stereo: L=user, R=AI, SN2 only.
+func G722TaggedRecordingToStereoWav(b []byte) []byte {
+	if len(b) < 3 || b[0] != 'S' || b[1] != 'N' || b[2] != '2' {
+		return nil
+	}
+	decUser := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
+	decAI := encoder.NewG722Decoder(encoder.G722_RATE_DEFAULT, encoder.G722_DEFAULT)
+	var userPCM, aiPCM []int16
+	body := b[3:]
+	for len(body) >= 9 {
+		dir := body[0]
+		n := int(binary.LittleEndian.Uint16(body[7:9]))
+		body = body[9:]
+		if n <= 0 || n > 2000 || len(body) < n {
+			break
+		}
+		chunk := body[:n]
+		body = body[n:]
+		var dec *encoder.G722Decoder
+		switch dir {
+		case recTagUserLeg:
+			dec = decUser
+		case recTagAILeg:
+			dec = decAI
+		default:
+			continue
+		}
+		pcmBytes := dec.Decode(chunk)
+		m := g722PCMBytesToMono16(pcmBytes)
+		switch dir {
+		case recTagUserLeg:
+			userPCM = append(userPCM, m...)
+		case recTagAILeg:
+			aiPCM = append(aiPCM, m...)
+		}
+	}
+	if len(userPCM) == 0 && len(aiPCM) == 0 {
+		return nil
+	}
+	n := len(userPCM)
+	if len(aiPCM) > n {
+		n = len(aiPCM)
+	}
+	lr := make([]int16, 2*n)
+	for i := 0; i < len(userPCM); i++ {
+		lr[2*i] = userPCM[i]
+	}
+	for i := 0; i < len(aiPCM); i++ {
+		lr[2*i+1] = aiPCM[i]
+	}
+	return pcm16StereoInterleavedToWav(lr, 16000)
+}
+
+// MixedOpusRecordingToStereoWav decodes SN2 Opus per leg (separate decoders) into L=user R=AI stereo WAV.
+func MixedOpusRecordingToStereoWav(b []byte, sampleRate, decodeChannels int) []byte {
+	if len(b) < 3 || b[0] != 'S' || b[1] != 'N' || b[2] != '2' {
+		return nil
+	}
+	var frames []taggedOpusFrame
+	body := b[3:]
+	for len(body) >= 9 {
+		dir := body[0]
+		seq := binary.LittleEndian.Uint16(body[1:3])
+		n := int(binary.LittleEndian.Uint16(body[7:9]))
+		body = body[9:]
+		if n <= 0 || n > 4000 || len(body) < n {
+			break
+		}
+		pkt := make([]byte, n)
+		copy(pkt, body[:n])
+		body = body[n:]
+		if dir == recTagUserLeg || dir == recTagAILeg {
+			frames = append(frames, taggedOpusFrame{dir: dir, seq: seq, payload: pkt})
+		}
+	}
+	return opusFramesPerLegStereoWav(frames, sampleRate, decodeChannels)
+}
+
+func opusFramesPerLegStereoWav(frames []taggedOpusFrame, sampleRate, decodeChannels int) []byte {
+	if len(frames) == 0 {
+		return nil
+	}
+	if sampleRate <= 0 {
+		sampleRate = 48000
+	}
+	if decodeChannels < 1 {
+		decodeChannels = 1
+	}
+	if decodeChannels > 2 {
+		decodeChannels = 2
+	}
+	decUser, errU := opus.NewDecoder(sampleRate, decodeChannels)
+	decAI, errA := opus.NewDecoder(sampleRate, decodeChannels)
+	if errU != nil || errA != nil {
+		return nil
+	}
+	maxSamples := sampleRate * 120 / 1000
+	if maxSamples < 960 {
+		maxSamples = 960
+	}
+	pcmScratch := make([]int16, maxSamples*decodeChannels)
+
+	decodeChain := func(dec *opus.Decoder, chain []taggedOpusFrame) []int16 {
+		var out []int16
+		var lastSeq uint16
+		var hasSeq bool
+		for _, f := range chain {
+			if hasSeq {
+				gap := int(uint16(f.seq - lastSeq))
+				if gap > 1 && gap < 20 {
+					for i := 0; i < gap-1; i++ {
+						if plc, err := dec.Decode(nil, pcmScratch); err == nil && plc > 0 {
+							out = appendOpusPCMSlice(out, pcmScratch, plc, decodeChannels)
+						}
+					}
+				}
+			}
+			lastSeq = f.seq
+			hasSeq = true
+			samples, derr := dec.Decode(f.payload, pcmScratch)
+			if derr != nil || samples <= 0 {
+				plc, err2 := dec.Decode(nil, pcmScratch)
+				if err2 == nil && plc > 0 {
+					samples = plc
+				} else {
+					continue
+				}
+			}
+			out = appendOpusPCMSlice(out, pcmScratch, samples, decodeChannels)
+		}
+		return out
+	}
+
+	var userFrames, aiFrames []taggedOpusFrame
+	for _, f := range frames {
+		switch f.dir {
+		case recTagUserLeg:
+			userFrames = append(userFrames, f)
+		case recTagAILeg:
+			aiFrames = append(aiFrames, f)
+		}
+	}
+	userPCM := decodeChain(decUser, userFrames)
+	aiPCM := decodeChain(decAI, aiFrames)
+	if len(userPCM) == 0 && len(aiPCM) == 0 {
+		return nil
+	}
+	n := len(userPCM)
+	if len(aiPCM) > n {
+		n = len(aiPCM)
+	}
+	lr := make([]int16, 2*n)
+	for i := 0; i < len(userPCM); i++ {
+		lr[2*i] = userPCM[i]
+	}
+	for i := 0; i < len(aiPCM); i++ {
+		lr[2*i+1] = aiPCM[i]
+	}
+	return pcm16StereoInterleavedToWav(lr, sampleRate)
+}
+
+func appendOpusPCMSlice(dst []int16, pcmScratch []int16, samples int, decodeChannels int) []int16 {
+	if decodeChannels == 2 {
+		for i := 0; i < samples; i++ {
+			L := int32(pcmScratch[i*2])
+			R := int32(pcmScratch[i*2+1])
+			dst = append(dst, int16((L+R)/2))
+		}
+		return dst
+	}
+	return append(dst, pcmScratch[:samples]...)
+}
+
 func MixedOpusRecordingToWav(b []byte, sampleRate, decodeChannels int) []byte {
 	if len(b) >= 3 && b[0] == 'S' && b[1] == 'N' && b[2] == '2' {
 		return opusTaggedFramesV2ToWav(b[3:], sampleRate, decodeChannels)
@@ -394,13 +644,11 @@ func decodeTaggedOpusFrames(frames []taggedOpusFrame, sampleRate, decodeChannels
 	var lastSeqAI uint16
 	var hasSeqUser bool
 	var hasSeqAI bool
-	// When AI is actively speaking, uplink comfort-noise / residual user packets may interleave
-	// and make AI sound "stuttered" in offline reconstruction. Keep a short AI priority window.
-	const aiPriorityHoldFrames = 8 // about 160ms with 20ms packets
+	// archival: keep all uplink (see recordingMonoDuckUserFrames).
 	aiPriorityLeft := 0
 	for _, f := range frames {
 		if f.dir == recTagAILeg {
-			aiPriorityLeft = aiPriorityHoldFrames
+			aiPriorityLeft = recordingMonoDuckUserFrames
 		} else if aiPriorityLeft > 0 {
 			aiPriorityLeft--
 			// Skip uplink frames during short AI-active window to avoid fragmenting AI audio.

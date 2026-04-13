@@ -9,6 +9,7 @@ import {
   listSIPCalls,
   resolveSipRecordingUrl,
   sipAiEndStatusI18nKey,
+  type SIPCallDialogTurn,
   type SIPCallRow,
 } from '@/api/sipContactCenter'
 import { showAlert } from '@/utils/notification'
@@ -100,6 +101,31 @@ const CallRecords = () => {
       <div className="break-words font-medium">{value ?? '—'}</div>
     </div>
   )
+
+  const formatTurnMeta = (turn: SIPCallDialogTurn) => {
+    const parts: string[] = []
+    if (turn.trigger?.trim()) parts.push(`触发: ${turn.trigger.trim()}`)
+    if (turn.scriptStepId?.trim()) parts.push(`脚本步骤: ${turn.scriptStepId.trim()}`)
+    if (turn.routeIntent?.trim()) parts.push(`路由意图: ${turn.routeIntent.trim()}`)
+    return parts.length ? parts.join(' · ') : ''
+  }
+
+  const formatTurnTimings = (turn: SIPCallDialogTurn) => {
+    const t: string[] = []
+    if (turn.llmFirstMs != null && turn.llmFirstMs > 0) t.push(`LLM 首字 ${turn.llmFirstMs}ms`)
+    if (turn.llmWallMs != null && turn.llmWallMs > 0) t.push(`LLM 总耗时 ${turn.llmWallMs}ms`)
+    if (turn.ttsMs != null && turn.ttsMs > 0) t.push(`TTS ${turn.ttsMs}ms`)
+    if (turn.pipelineMs != null && turn.pipelineMs > 0) t.push(`流水线 ${turn.pipelineMs}ms`)
+    return t.length ? t.join(' · ') : ''
+  }
+
+  const formatTurnProviders = (turn: SIPCallDialogTurn) => {
+    const p: string[] = []
+    if (turn.asrProvider?.trim()) p.push(`ASR: ${turn.asrProvider.trim()}`)
+    if (turn.ttsProvider?.trim()) p.push(`TTS: ${turn.ttsProvider.trim()}`)
+    if (turn.llmModel?.trim()) p.push(`模型: ${turn.llmModel.trim()}`)
+    return p.length ? p.join(' · ') : ''
+  }
 
   return (
     <AdminLayout title="通话记录" description="云联络中心 / 通话记录">
@@ -249,6 +275,9 @@ const CallRecords = () => {
                         {detailField('ACK', fmt(d.ackAt))}
                         {detailField('BYE', fmt(d.byeAt))}
                         {detailField('结束时间', fmt(d.endedAt))}
+                        {detailField('BYE 发起方', d.byeInitiator || '—')}
+                        {detailField('录音原始字节', d.recordingRawBytes != null && d.recordingRawBytes > 0 ? d.recordingRawBytes : '—')}
+                        {detailField('录音 WAV 字节', d.recordingWavBytes != null && d.recordingWavBytes > 0 ? d.recordingWavBytes : '—')}
                         {detailField('转接', [d.hadSipTransfer && 'SIP', d.hadWebSeat && 'WebSeat'].filter(Boolean).join(' · ') || '—')}
                         <div className="col-span-2">{detailField('失败原因', d.failureReason || '—')}</div>
                       </div>
@@ -295,13 +324,21 @@ const CallRecords = () => {
                           <p className="text-xs text-muted-foreground">—</p>
                         ) : (
                           <ul className="space-y-3 rounded-md border border-border bg-background/80 p-3">
-                            {turns.map((turn, i) => (
+                            {turns.map((turn, i) => {
+                              const meta = formatTurnMeta(turn)
+                              const timings = formatTurnTimings(turn)
+                              const providers = formatTurnProviders(turn)
+                              return (
                               <li key={i} className="space-y-1 border-l-2 border-primary/40 pl-3 text-sm">
                                 <div><span className="text-xs text-muted-foreground">用户 </span>{turn.asrText || '—'}</div>
                                 <div><span className="text-xs text-muted-foreground">AI </span>{turn.llmText || '—'}</div>
+                                {meta ? <div className="text-[11px] text-muted-foreground">{meta}</div> : null}
+                                {timings ? <div className="text-[11px] text-muted-foreground">{timings}</div> : null}
+                                {providers ? <div className="text-[11px] text-muted-foreground">{providers}</div> : null}
                                 {turn.at ? <div className="text-[11px] text-muted-foreground">{fmt(turn.at)}</div> : null}
                               </li>
-                            ))}
+                              )
+                            })}
                           </ul>
                         )}
                       </div>

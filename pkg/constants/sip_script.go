@@ -38,6 +38,10 @@ const (
 	EnvCHECKLLMModel          = "CHECK_LLM_MODEL"
 	EnvCHECKLLMRouteTimeoutMS = "CHECK_LLM_ROUTE_TIMEOUT_MS"
 	EnvCHECKLLMRouteDisabled  = "CHECK_LLM_ROUTE_DISABLED" // "1" or "true" disables LLM listen routing (then listen+transitions is invalid at runtime)
+	// CHECK_LLM_ROUTE_LEGACY_JSON=1: model returns {"next_id":"..."}; default uses compact {"i":N} index (faster, fewer tokens).
+	EnvCHECKLLMRouteLegacyJSON = "CHECK_LLM_ROUTE_LEGACY_JSON"
+	// CHECK_LLM_ROUTE_MAX_TOKENS: max completion tokens for route call (default 32, range 8–128).
+	EnvCHECKLLMRouteMaxTokens = "CHECK_LLM_ROUTE_MAX_TOKENS"
 	// SIP_SCRIPT_LLM_FAIL_PROMPT: spoken when listen LLM routing is unavailable or fails (default below).
 	EnvSIPScriptLLMFailPrompt = "SIP_SCRIPT_LLM_FAIL_PROMPT"
 )

@@ -10,6 +10,8 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
+	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -56,14 +58,21 @@ func SetWebSeatTransfer(fn func(inboundCallID string, lg *zap.Logger)) {
 	webSeatTransfer = fn
 }
 
-// HandleSIPINFODTMF parses SIP INFO (application/dtmf-relay) for observability only.
-// Transfer is no longer triggered by keypad digits.
+// HandleSIPINFODTMF parses SIP INFO (application/dtmf-relay). In script mode, digits wake listen waiters.
 func HandleSIPINFODTMF(inboundCallID string, contentType, body string, lg *zap.Logger) {
 	if lg == nil && logger.Lg != nil {
 		lg = logger.Lg
 	}
 	if lg == nil {
 		lg = zap.NewNop()
+	}
+	if d, ok := sipdtmf.DigitFromSIPINFO(contentType, body); ok && isSIPScriptMode(inboundCallID) {
+		scriptlisten.PublishDTMF(inboundCallID, d)
+		lg.Info("sip info dtmf (script)",
+			zap.String("call_id", inboundCallID),
+			zap.String("digit", d),
+		)
+		return
 	}
 	lg.Info("sip info received (dtmf transfer disabled)",
 		zap.String("call_id", inboundCallID),
