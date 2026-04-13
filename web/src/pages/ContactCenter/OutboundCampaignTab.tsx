@@ -10,6 +10,7 @@ import {
   resetOutboundCampaignSuppressedContacts,
   getOutboundCampaignLogs,
   getOutboundCampaignMetrics,
+  getOutboundCampaignWorkerMetrics,
   listOutboundCampaigns,
   listSIPScriptTemplates,
   pauseOutboundCampaign,
@@ -20,6 +21,7 @@ import {
   type OutboundCampaignLogRow,
   type OutboundCampaignContactRow,
   type OutboundCampaignMetrics,
+  type OutboundCampaignWorkerMetrics,
   type SIPScriptTemplateRow,
 } from '@/api/sipContactCenter'
 
@@ -55,6 +57,7 @@ export default function OutboundCampaignTab() {
   const [contactsLoading, setContactsLoading] = useState(false)
   const [contactsRows, setContactsRows] = useState<OutboundCampaignContactRow[]>([])
   const [metricsLoading, setMetricsLoading] = useState(false)
+  const [workerMetrics, setWorkerMetrics] = useState<OutboundCampaignWorkerMetrics | null>(null)
   const [logsLoading, setLogsLoading] = useState(false)
   const [metrics, setMetrics] = useState<OutboundCampaignMetrics | null>(null)
   const [logs, setLogs] = useState<OutboundCampaignLogRow[]>([])
@@ -175,9 +178,11 @@ export default function OutboundCampaignTab() {
   const refreshMetrics = async () => {
     setMetricsLoading(true)
     try {
-      const res = await getOutboundCampaignMetrics()
+      const [res, workerRes] = await Promise.all([getOutboundCampaignMetrics(), getOutboundCampaignWorkerMetrics()])
       if (res.code === 200 && res.data) setMetrics(res.data)
       else showAlert(res.msg || '加载失败', 'error')
+      if (workerRes.code === 200 && workerRes.data) setWorkerMetrics(workerRes.data)
+      else showAlert(workerRes.msg || '加载 worker 指标失败', 'error')
     } catch (e: any) { showAlert(e?.msg || '加载失败', 'error') } finally { setMetricsLoading(false) }
   }
 
@@ -210,7 +215,7 @@ export default function OutboundCampaignTab() {
       } else showAlert(res.msg || '操作失败', 'error')
     } catch (e: any) { showAlert(e?.msg || '操作失败', 'error') } finally { setResetSuppressedBusy(false) }
   }
-  useEffect(() => { if (!detailModalOpen) return; void refreshLogs(); void loadContacts() }, [detailCampaignId, detailModalOpen])
+  useEffect(() => { if (!detailModalOpen) return; void refreshLogs(); void loadContacts(); void refreshMetrics() }, [detailCampaignId, detailModalOpen])
   useEffect(() => {
     if (!detailCampaignId || !detailModalOpen) return
     const timer = window.setInterval(() => void refreshLogs(true), 3000)
@@ -284,6 +289,13 @@ export default function OutboundCampaignTab() {
           <div className="rounded-lg border border-border bg-card p-3 space-y-2">
             <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">全局指标</h3><Button size="sm" variant="outline" onClick={() => void refreshMetrics()} disabled={metricsLoading}>{metricsLoading ? '加载中...' : '刷新'}</Button></div>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs"><div className="rounded border border-border p-2">invited: {metrics?.invited_total ?? 0}</div><div className="rounded border border-border p-2">answered: {metrics?.answered_total ?? 0}</div><div className="rounded border border-border p-2">failed: {metrics?.failed_total ?? 0}</div><div className="rounded border border-border p-2">retrying: {metrics?.retrying_total ?? 0}</div><div className="rounded border border-border p-2">suppressed: {metrics?.suppressed_total ?? 0}</div></div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs"><div className="rounded border border-border p-2">task queued: {workerMetrics?.task_queued ?? 0}</div><div className="rounded border border-border p-2">task running: {workerMetrics?.task_running ?? 0}</div><div className="rounded border border-border p-2">task channel: {workerMetrics?.task_channel_len ?? 0}</div><div className="rounded border border-border p-2">task unfinished: {workerMetrics?.task_unfinished ?? 0}</div></div>
+            {detailCampaignId ? (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded border border-border p-2">当前任务排队: {workerMetrics?.per_campaign_queued?.[String(detailCampaignId)] ?? 0}</div>
+                <div className="rounded border border-border p-2">当前任务运行中: {workerMetrics?.per_campaign_running?.[String(detailCampaignId)] ?? 0}</div>
+              </div>
+            ) : null}
           </div>
           <div className="rounded-lg border border-border bg-card p-3 space-y-2">
             <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">执行日志终端</h3><Button size="sm" variant="outline" onClick={() => void refreshLogs()} disabled={!detailCampaignId || logsLoading}>{logsLoading ? '加载中...' : '刷新'}</Button></div>

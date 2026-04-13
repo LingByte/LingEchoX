@@ -197,6 +197,12 @@ func (h *Handlers) setSIPCampaignStatus(c *gin.Context, status string) {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
+	if h.campaignSvc != nil && (status == models.SIPCampaignStatusPaused || status == models.SIPCampaignStatusDone) {
+		if _, err := h.campaignSvc.CancelCampaignQueuedTasks(context.Background(), uint(id)); err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	h.appendCampaignEvent(uint(id), 0, 0, "", "", "campaign", "info", "campaign status changed to "+status)
 	response.Success(c, "success", nil)
 }

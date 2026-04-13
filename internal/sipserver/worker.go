@@ -13,6 +13,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/task"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 )
@@ -32,9 +33,12 @@ func (s *CampaignService) StartWorker(dialer Dialer) {
 	}
 	s.running = true
 	s.stopCh = make(chan struct{})
+	s.dialer = dialer
+	s.dispatcher = task.NewScheduler[campaignDispatchTask, struct{}](s.globalConcurrency, logger.Lg)
+	s.dispatchMeta = map[string]campaignDispatchTask{}
+	s.dispatchOutstanding = map[uint]int{}
 	s.mu.Unlock()
 
-	sem := make(chan struct{}, s.globalConcurrency)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -45,7 +49,7 @@ func (s *CampaignService) StartWorker(dialer Dialer) {
 			case <-s.stopCh:
 				return
 			case <-ticker.C:
-				s.tick(dialer, sem)
+				s.tick()
 			}
 		}
 	}()
@@ -62,11 +66,18 @@ func (s *CampaignService) StopWorker() {
 	}
 	close(s.stopCh)
 	s.running = false
+	dispatcher := s.dispatcher
+	s.dispatcher = nil
+	s.dispatchMeta = map[string]campaignDispatchTask{}
+	s.dispatchOutstanding = map[uint]int{}
 	s.mu.Unlock()
+	if dispatcher != nil {
+		_ = dispatcher.Stop()
+	}
 	s.wg.Wait()
 }
 
-func (s *CampaignService) tick(dialer Dialer, sem chan struct{}) {
+func (s *CampaignService) tick() {
 	ctx := context.Background()
 	now := time.Now()
 	campaigns, err := models.ListRunningSIPCampaigns(ctx, s.db)
@@ -86,19 +97,79 @@ func (s *CampaignService) tick(dialer Dialer, sem chan struct{}) {
 			if !s.tryClaim(ctx, contact.ID) {
 				continue
 			}
-			sem <- struct{}{}
-			s.wg.Add(1)
-			go func(campaign models.SIPCampaign, ct models.SIPCampaignContact) {
-				defer s.wg.Done()
-				defer func() { <-sem }()
-				s.processContact(context.Background(), dialer, campaign, ct)
-			}(c, contact)
+			_ = s.enqueueDispatchTask(c, contact)
 		}
 	}
 }
 
 func (s *CampaignService) tryClaim(ctx context.Context, contactID uint) bool {
 	return models.TryClaimSIPCampaignContactDialing(ctx, s.db, contactID)
+}
+
+func (s *CampaignService) enqueueDispatchTask(campaign models.SIPCampaign, contact models.SIPCampaignContact) bool {
+	if s == nil || s.dispatcher == nil {
+		return false
+	}
+	campaignLimit := campaign.TaskConcurrency
+	if campaignLimit <= 0 {
+		campaignLimit = 1
+	}
+	if !s.tryAcquireCampaignSlot(campaign.ID, campaignLimit) {
+		now := time.Now()
+		_ = s.db.WithContext(context.Background()).Model(&models.SIPCampaignContact{}).
+			Where("id = ? AND status = ?", contact.ID, models.SIPCampaignContactDialing).
+			Updates(map[string]any{
+				"status":         models.SIPCampaignContactReady,
+				"failure_reason": "",
+				"next_run_at":    &now,
+			}).Error
+		s.appendEvent(context.Background(), models.SIPCampaignEvent{
+			CampaignID: campaign.ID,
+			ContactID:  contact.ID,
+			Type:       "dispatch",
+			Level:      "info",
+			Message:    fmt.Sprintf("skip enqueue: campaign concurrency full (%d)", campaignLimit),
+		})
+		return false
+	}
+	priority := contact.Priority
+	taskBody := campaignDispatchTask{Campaign: campaign, Contact: contact}
+	t := s.dispatcher.SubmitTask(context.Background(), priority, taskBody, func(ctx context.Context, p campaignDispatchTask) (struct{}, error) {
+		s.processContact(ctx, s.dialer, p.Campaign, p.Contact)
+		return struct{}{}, nil
+	})
+	s.dispatchMu.Lock()
+	s.dispatchMeta[t.ID] = taskBody
+	s.dispatchMu.Unlock()
+	pos := s.dispatcher.GetTaskPosition(t.ID)
+	s.appendEvent(context.Background(), models.SIPCampaignEvent{
+		CampaignID: campaign.ID,
+		ContactID:  contact.ID,
+		Type:       "dispatch",
+		Level:      "info",
+		Message:    fmt.Sprintf("task queued id=%s priority=%d queue_pos=%d", t.ID, priority, pos),
+	})
+	go func(taskID string, cID, ctID uint) {
+		err := <-t.Err
+		s.dispatchMu.Lock()
+		delete(s.dispatchMeta, taskID)
+		s.dispatchMu.Unlock()
+		s.releaseCampaignSlot(cID)
+		level := "info"
+		msg := fmt.Sprintf("task done id=%s", taskID)
+		if err != nil {
+			level = "warn"
+			msg = fmt.Sprintf("task done id=%s err=%v", taskID, err)
+		}
+		s.appendEvent(context.Background(), models.SIPCampaignEvent{
+			CampaignID: cID,
+			ContactID:  ctID,
+			Type:       "dispatch",
+			Level:      level,
+			Message:    msg,
+		})
+	}(t.ID, campaign.ID, contact.ID)
+	return true
 }
 
 func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, campaign models.SIPCampaign, contact models.SIPCampaignContact) {

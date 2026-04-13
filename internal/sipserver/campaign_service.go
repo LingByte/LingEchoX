@@ -16,6 +16,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/task"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
@@ -23,16 +24,21 @@ import (
 )
 
 type CampaignService struct {
-	db                 *gorm.DB
-	dialTargetResolver func(ctx context.Context, phone string) (outbound.DialTarget, bool)
-	mu                 sync.Mutex
-	running            bool
-	stopCh             chan struct{}
-	wg                 sync.WaitGroup
-	pollInterval       time.Duration
-	globalConcurrency  int
-	dedupeWindow       time.Duration
-	metrics            CampaignMetrics
+	db                  *gorm.DB
+	dialTargetResolver  func(ctx context.Context, phone string) (outbound.DialTarget, bool)
+	dialer              Dialer
+	mu                  sync.Mutex
+	running             bool
+	stopCh              chan struct{}
+	wg                  sync.WaitGroup
+	pollInterval        time.Duration
+	globalConcurrency   int
+	dedupeWindow        time.Duration
+	metrics             CampaignMetrics
+	dispatcher          *task.Scheduler[campaignDispatchTask, struct{}]
+	dispatchMu          sync.Mutex
+	dispatchMeta        map[string]campaignDispatchTask
+	dispatchOutstanding map[uint]int
 }
 
 type CampaignMetrics struct {
@@ -67,12 +73,19 @@ type ContactInput struct {
 	Variables  map[string]any `json:"variables"`
 }
 
+type campaignDispatchTask struct {
+	Campaign models.SIPCampaign
+	Contact  models.SIPCampaignContact
+}
+
 func NewCampaignService(db *gorm.DB) *CampaignService {
 	return &CampaignService{
-		db:                db,
-		pollInterval:      1500 * time.Millisecond,
-		globalConcurrency: 20,
-		dedupeWindow:      24 * time.Hour,
+		db:                  db,
+		pollInterval:        1500 * time.Millisecond,
+		globalConcurrency:   20,
+		dedupeWindow:        24 * time.Hour,
+		dispatchMeta:        map[string]campaignDispatchTask{},
+		dispatchOutstanding: map[uint]int{},
 	}
 }
 
@@ -534,9 +547,9 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 }
 
 type turnFetchResult struct {
-	Index      int
-	Turn       models.SIPCallDialogTurn
-	DTMFDigit  string // non-empty when resolved via keypad (matched dtmf_transitions)
+	Index     int
+	Turn      models.SIPCallDialogTurn
+	DTMFDigit string // non-empty when resolved via keypad (matched dtmf_transitions)
 }
 
 // scriptListenPollInterval is how often we poll DB for a new user turn during script listen (default 120ms).
@@ -640,15 +653,137 @@ func nonEmptyOr(v, fallback string) string {
 	return v
 }
 
-func (s *CampaignService) SnapshotMetrics() map[string]int64 {
+func (s *CampaignService) tryAcquireCampaignSlot(campaignID uint, limit int) bool {
 	if s == nil {
-		return map[string]int64{}
+		return false
 	}
-	return map[string]int64{
+	if limit <= 0 {
+		limit = 1
+	}
+	s.dispatchMu.Lock()
+	defer s.dispatchMu.Unlock()
+	cur := s.dispatchOutstanding[campaignID]
+	if cur >= limit {
+		return false
+	}
+	s.dispatchOutstanding[campaignID] = cur + 1
+	return true
+}
+
+func (s *CampaignService) releaseCampaignSlot(campaignID uint) {
+	if s == nil {
+		return
+	}
+	s.dispatchMu.Lock()
+	defer s.dispatchMu.Unlock()
+	cur := s.dispatchOutstanding[campaignID]
+	if cur <= 1 {
+		delete(s.dispatchOutstanding, campaignID)
+		return
+	}
+	s.dispatchOutstanding[campaignID] = cur - 1
+}
+
+// CancelCampaignQueuedTasks removes pending (not running) dispatch tasks for one campaign.
+func (s *CampaignService) CancelCampaignQueuedTasks(ctx context.Context, campaignID uint) (int, error) {
+	if s == nil || campaignID == 0 || s.dispatcher == nil {
+		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pending := s.dispatcher.PendingSnapshot()
+	canceledContactIDs := make([]uint, 0)
+	canceled := 0
+	for _, p := range pending {
+		s.dispatchMu.Lock()
+		meta, ok := s.dispatchMeta[p.TaskID]
+		s.dispatchMu.Unlock()
+		if !ok || meta.Campaign.ID != campaignID {
+			continue
+		}
+		if s.dispatcher.CancelTaskByID(p.TaskID) {
+			s.dispatchMu.Lock()
+			delete(s.dispatchMeta, p.TaskID)
+			s.dispatchMu.Unlock()
+			s.releaseCampaignSlot(campaignID)
+			canceled++
+			if meta.Contact.ID > 0 {
+				canceledContactIDs = append(canceledContactIDs, meta.Contact.ID)
+			}
+		}
+	}
+	if len(canceledContactIDs) > 0 && s.db != nil {
+		now := time.Now()
+		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).
+			Where("campaign_id = ? AND id IN ? AND status = ?", campaignID, canceledContactIDs, models.SIPCampaignContactDialing).
+			Updates(map[string]any{
+				"status":         models.SIPCampaignContactReady,
+				"failure_reason": "",
+				"next_run_at":    &now,
+			}).Error
+	}
+	if canceled > 0 {
+		s.appendEvent(ctx, models.SIPCampaignEvent{
+			CampaignID: campaignID,
+			Type:       "dispatch",
+			Level:      "warn",
+			Message:    fmt.Sprintf("cancel queued tasks on campaign status change: %d", canceled),
+		})
+	}
+	return canceled, nil
+}
+
+func (s *CampaignService) SnapshotMetrics() map[string]any {
+	if s == nil {
+		return map[string]any{}
+	}
+	out := map[string]any{
 		"invited_total":    s.metrics.Invited.Load(),
 		"answered_total":   s.metrics.Answered.Load(),
 		"failed_total":     s.metrics.Failed.Load(),
 		"retrying_total":   s.metrics.Retrying.Load(),
 		"suppressed_total": s.metrics.Suppressed.Load(),
 	}
+	if s.dispatcher == nil {
+		return out
+	}
+	st := s.dispatcher.Stats()
+	out["task_queued"] = st.Queued
+	out["task_channel_len"] = st.ChannelLen
+	out["task_running"] = st.Running
+	out["task_unfinished"] = st.Unfinished
+	pending := s.dispatcher.PendingSnapshot()
+	s.dispatchMu.Lock()
+	preview := make([]map[string]any, 0, len(pending))
+	perCampaignQueued := map[uint]int{}
+	for i, p := range pending {
+		meta, ok := s.dispatchMeta[p.TaskID]
+		if !ok {
+			continue
+		}
+		perCampaignQueued[meta.Campaign.ID]++
+		preview = append(preview, map[string]any{
+			"queue_index": i,
+			"task_id":     p.TaskID,
+			"priority":    p.Priority,
+			"campaign_id": meta.Campaign.ID,
+			"contact_id":  meta.Contact.ID,
+			"phone":       strings.TrimSpace(meta.Contact.Phone),
+		})
+		if len(preview) >= 50 {
+			break
+		}
+	}
+	perCampaignRunning := map[uint]int{}
+	for cid, n := range s.dispatchOutstanding {
+		if n > 0 {
+			perCampaignRunning[cid] = n
+		}
+	}
+	s.dispatchMu.Unlock()
+	out["pending_preview"] = preview
+	out["per_campaign_queued"] = perCampaignQueued
+	out["per_campaign_running"] = perCampaignRunning
+	return out
 }
