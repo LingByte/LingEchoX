@@ -122,6 +122,20 @@ export interface OutboundCampaignMetrics {
   suppressed_total: number
 }
 
+export interface OutboundCampaignWorkerMetrics {
+  invited_total: number
+  answered_total: number
+  failed_total: number
+  retrying_total: number
+  suppressed_total: number
+  task_queued?: number
+  task_channel_len?: number
+  task_running?: number
+  task_unfinished?: number
+  per_campaign_queued?: Record<string, number>
+  per_campaign_running?: Record<string, number>
+}
+
 export interface OutboundCampaignLogRow {
   id: number
   at: string
@@ -313,6 +327,10 @@ export async function deleteOutboundCampaign(campaignId: number): Promise<ApiRes
 
 export async function getOutboundCampaignMetrics(): Promise<ApiResponse<OutboundCampaignMetrics>> {
   return get('/sip-center/campaigns/metrics')
+}
+
+export async function getOutboundCampaignWorkerMetrics(): Promise<ApiResponse<OutboundCampaignWorkerMetrics>> {
+  return get('/sip-center/campaigns/worker-metrics')
 }
 
 export async function getOutboundCampaignLogs(campaignId: number, limit = 100): Promise<ApiResponse<{ list: OutboundCampaignLogRow[]; total: number }>> {
