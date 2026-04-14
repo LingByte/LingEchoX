@@ -17,10 +17,10 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/recognizer"
-	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip"
 	sipasr "github.com/LingByte/SoulNexus/pkg/sip/asr"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
+	"github.com/LingByte/SoulNexus/pkg/sip/scriptlisten"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
 	siptts "github.com/LingByte/SoulNexus/pkg/sip/tts"
@@ -544,16 +544,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				// In script mode, output is controlled by script steps (say/llm_reply). Do not auto-play here.
 				return
 			}
-			if ap, ok := llmProvider.(*llm.AlibabaProvider); ok {
-				if action := ap.ConsumePendingAction(); action == "transfer_to_agent" {
-					if ms != nil && ms.GetContext().Err() == nil {
-						lg.Info("sip voice: transfer after ai tts confirmation",
-							zap.String("call_id", cs.CallID),
-						)
-						TriggerTransferToAgent(context.Background(), cs.CallID, lg)
-					}
-				}
-			} else if consumeSIPTransferPending(cs.CallID) || shouldFallbackTransferByText(userText) {
+			if consumeSIPTransferPending(cs.CallID) || shouldFallbackTransferByText(userText) {
 				if ms != nil && ms.GetContext().Err() == nil {
 					lg.Info("sip voice: transfer after ai tts confirmation (tool/fallback)",
 						zap.String("call_id", cs.CallID),
@@ -817,7 +808,7 @@ func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger,
 	return nil
 }
 
-func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, userText string, ttsPipe *siptts.Pipeline, lg *zap.Logger) (string, StreamTurnTimings, error) {
+func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMHandler, model, userText string, ttsPipe *siptts.Pipeline, lg *zap.Logger) (string, StreamTurnTimings, error) {
 	var meta StreamTurnTimings
 	if llmProvider == nil {
 		return "", meta, fmt.Errorf("nil llm provider")
@@ -859,7 +850,7 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, use
 	}
 	// Alibaba App API usually returns one JSON message per turn; non-streaming avoids long
 	// silent waits when SSE chunks are sparse on some networks.
-	if _, isAlibaba := llmProvider.(*llm.AlibabaProvider); isAlibaba {
+	if _, isAlibaba := llmProvider.(*llm.AlibabaHandler); isAlibaba {
 		t0 := time.Now()
 		reply, err := llmProvider.Query(userText, model)
 		meta.LLMWallMs = int(time.Since(t0).Milliseconds())
@@ -883,8 +874,8 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, use
 	}
 	streamStart := time.Now()
 	gotFirst := false
-	options := llm.QueryOptions{Model: model, Stream: true}
-	reply, err := llmProvider.QueryStream(userText, options, func(piece string, _ bool) error {
+	options := &llm.QueryOptions{Model: model}
+	resp, err := llmProvider.QueryStream(userText, options, func(piece string, _ bool) error {
 		piece = strings.TrimSpace(piece)
 		if piece == "" {
 			return nil
@@ -898,6 +889,10 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, use
 		return flush(false)
 	})
 	meta.LLMWallMs = int(time.Since(streamStart).Milliseconds())
+	reply := ""
+	if resp != nil && len(resp.Choices) > 0 {
+		reply = strings.TrimSpace(resp.Choices[0].Content)
+	}
 	if err != nil {
 		// fallback to non-streaming so behavior stays stable even if provider stream fails.
 		ttsMs = 0
