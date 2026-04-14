@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -35,13 +36,21 @@ func NewAlibabaHandler(ctx context.Context, llmOptions *LLMOptions) (*AlibabaHan
 			timeout = time.Duration(n) * time.Second
 		}
 	}
-	endpoint := strings.TrimSpace(opts.BaseURL)
-	if endpoint == "" {
-		endpoint = "https://dashscope.aliyuncs.com"
+	rawBase := strings.TrimSpace(opts.BaseURL)
+	endpoint := "https://dashscope.aliyuncs.com"
+	appID := ""
+	// Compatibility:
+	// - If BaseURL is a real URL, use it as endpoint and read AppID from env.
+	// - If BaseURL is not a URL (legacy call-path), treat it as AppID.
+	if rawBase != "" {
+		if strings.Contains(rawBase, "://") {
+			endpoint = rawBase
+		} else {
+			appID = rawBase
+		}
 	}
-	appID := strings.TrimSpace(opts.BaseURL)
-	if strings.Contains(endpoint, "://") {
-		appID = strings.TrimSpace(os.Getenv("ALIBABA_APP_ID"))
+	if appID == "" {
+		appID = strings.TrimSpace(os.Getenv("LLM_APP_ID"))
 	}
 	if appID == "" {
 		appID = strings.TrimSpace(os.Getenv("ALIBABA_APP_ID"))
@@ -149,19 +158,170 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 }
 
 func (h *AlibabaHandler) QueryStream(text string, options *QueryOptions, callback func(segment string, isComplete bool) error) (*QueryResponse, error) {
-	resp, err := h.QueryWithOptions(text, options)
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	select {
+	case <-h.interruptCh:
+		return nil, errors.New("interrupted")
+	default:
+	}
+
+	var rewrite *QueryRewrite
+	promptUser := text
+	if options.EnableQueryRewrite {
+		rw, err := h.rewriteQueryAlibaba(h.ctx, promptUser, options)
+		if err == nil && rw != "" {
+			rewrite = &QueryRewrite{Original: promptUser, Rewritten: rw}
+			promptUser = rw
+		}
+	}
+
+	var expansion *QueryExpansion
+	if options.EnableQueryExpansion {
+		expanded, terms, err := h.expandQueryAlibaba(h.ctx, promptUser, options)
+		if err == nil {
+			expansion = &QueryExpansion{
+				Original: promptUser,
+				Expanded: expanded,
+				Terms:    terms,
+				Debug:    map[string]any{},
+			}
+			promptUser = expanded
+		}
+	}
+
+	reqBody := map[string]any{
+		"input": map[string]string{
+			"prompt": h.composePrompt(promptUser, options),
+		},
+		"parameters": map[string]any{
+			"incremental_output": true,
+		},
+	}
+	b, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
 	}
-	if callback != nil && len(resp.Choices) > 0 {
-		if err := callback(resp.Choices[0].Content, false); err != nil {
-			return nil, err
+
+	url := fmt.Sprintf("%s/api/v1/apps/%s/completion", strings.TrimRight(h.endpoint, "/"), h.appID)
+	reqCtx, cancel := context.WithCancel(h.ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("X-DashScope-SSE", "enable")
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+		case <-h.interruptCh:
+			cancel()
 		}
+	}()
+	defer close(done)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(reqCtx.Err(), context.Canceled) {
+			return nil, errors.New("interrupted")
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("alibaba stream request failed: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	extractText := func(m map[string]any) string {
+		output, ok := m["output"].(map[string]any)
+		if !ok {
+			return ""
+		}
+		if v, ok := output["text"].(string); ok {
+			return v
+		}
+		choices, ok := output["choices"].([]any)
+		if !ok || len(choices) == 0 {
+			return ""
+		}
+		first, ok := choices[0].(map[string]any)
+		if !ok {
+			return ""
+		}
+		msg, ok := first["message"].(map[string]any)
+		if !ok {
+			return ""
+		}
+		if v, ok := msg["content"].(string); ok {
+			return v
+		}
+		return ""
+	}
+
+	var assembled strings.Builder
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 0, 16*1024), 2*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(payload), &evt); err != nil {
+			continue
+		}
+		chunk := extractText(evt)
+		if chunk == "" {
+			continue
+		}
+		delta := chunk
+		current := assembled.String()
+		if strings.HasPrefix(chunk, current) {
+			delta = chunk[len(current):]
+		}
+		if delta == "" {
+			continue
+		}
+		assembled.WriteString(delta)
+		if callback != nil {
+			if err := callback(delta, false); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(reqCtx.Err(), context.Canceled) {
+			return nil, errors.New("interrupted")
+		}
+		return nil, err
+	}
+	if callback != nil {
 		if err := callback("", true); err != nil {
 			return nil, err
 		}
 	}
-	return resp, nil
+	finalText := strings.TrimSpace(assembled.String())
+	return &QueryResponse{
+		Provider:  h.Provider(),
+		Model:     options.Model,
+		Choices:   []QueryChoice{{Index: 0, Content: finalText, FinishReason: "stop"}},
+		Expansion: expansion,
+		Rewrite:   rewrite,
+	}, nil
 }
 
 func (h *AlibabaHandler) Provider() string { return LLM_ALIBABA }

@@ -287,6 +287,44 @@ func sipASRPartialTimeoutMs() int {
 	return n
 }
 
+// sipLLMStreamFirstChunkMinRunes controls how early SIP starts the first TTS chunk during streaming.
+// Smaller value = faster first audio at the cost of potentially choppier segmentation.
+func sipLLMStreamFirstChunkMinRunes() int {
+	s := strings.TrimSpace(utils.GetEnv("SIP_LLM_FIRST_CHUNK_MIN_RUNES"))
+	if s == "" {
+		return 8
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 8
+	}
+	if n < 3 {
+		return 3
+	}
+	if n > 24 {
+		return 24
+	}
+	return n
+}
+
+func sipLLMStreamChunkMinRunes() int {
+	s := strings.TrimSpace(utils.GetEnv("SIP_LLM_CHUNK_MIN_RUNES"))
+	if s == "" {
+		return 18
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 18
+	}
+	if n < 6 {
+		return 6
+	}
+	if n > 48 {
+		return 48
+	}
+	return n
+}
+
 // welcomeWaitFirstRTPMs is how long we wait for the first inbound RTP datagram before playing the welcome clip.
 // Default 2000 ms gives the RTP layer time to learn symmetric NAT (remote send target updates from first packet).
 // Set SIP_WELCOME_WAIT_FIRST_RTP_MS=0 to skip waiting (e.g. same-LAN tests).
@@ -363,10 +401,15 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	if strings.EqualFold(env.LLMProvider, "alibaba") {
 		llmEndpointOrAppID = strings.TrimSpace(env.LLMAppID)
 	}
-	llmProvider, err := llm.NewLLMProvider(ctx, env.LLMProvider, env.LLMAPIKey, llmEndpointOrAppID, systemPrompt)
+	llmProvider, err := llm.NewLLMProvider(ms.GetContext(), env.LLMProvider, env.LLMAPIKey, llmEndpointOrAppID, systemPrompt)
 	if err != nil {
 		return fmt.Errorf("sip conversation: llm provider init: %w", err)
 	}
+	// Ensure in-flight LLM calls are interrupted immediately when call media context ends.
+	go func() {
+		<-ms.GetContext().Done()
+		llmProvider.Interrupt()
+	}()
 	registerSIPTransferTool(llmProvider, cs.CallID, lg)
 	lg.Info("sip voice pipeline config",
 		zap.String("llm_model", llmModel),
@@ -531,6 +574,9 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			}
 			if err != nil {
 				lg.Warn("sip voice llm/tts", zap.Error(err))
+				return
+			}
+			if ms == nil || ms.GetContext().Err() != nil {
 				return
 			}
 			if !scriptMode && trigger == "partial-timeout" {
@@ -829,6 +875,9 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMHandler, model, user
 	}
 	var full strings.Builder
 	var seg strings.Builder
+	firstChunkSpoken := false
+	firstChunkMinRunes := sipLLMStreamFirstChunkMinRunes()
+	chunkMinRunes := sipLLMStreamChunkMinRunes()
 	flush := func(force bool) error {
 		s := strings.TrimSpace(seg.String())
 		if s == "" {
@@ -837,7 +886,11 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMHandler, model, user
 		if !force {
 			runes := []rune(s)
 			last := runes[len(runes)-1]
-			if !strings.ContainsRune("。！？.!?,，；;:", last) && len(runes) < 18 {
+			minRunes := chunkMinRunes
+			if !firstChunkSpoken {
+				minRunes = firstChunkMinRunes
+			}
+			if !strings.ContainsRune("。！？.!?,，；;:", last) && len(runes) < minRunes {
 				return nil
 			}
 		}
@@ -846,7 +899,11 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMHandler, model, user
 		if s == "" {
 			return nil
 		}
-		return speak(s)
+		if err := speak(s); err != nil {
+			return err
+		}
+		firstChunkSpoken = true
+		return nil
 	}
 	// Alibaba App API usually returns one JSON message per turn; non-streaming avoids long
 	// silent waits when SSE chunks are sparse on some networks.
