@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/internal/sfu"
+	"github.com/LingByte/SoulNexus/internal/sipserver"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/rtcsfu"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -19,6 +21,7 @@ import (
 
 type Handlers struct {
 	db                   *gorm.DB
+	campaignSvc          *sipserver.CampaignService
 	rtcsfu               *rtcsfu.ControlPlane
 	sfuEng               *sfu.Engine
 	p2p                  *sfu.P2PBroker
@@ -71,6 +74,15 @@ func NewHandlers(db *gorm.DB) *Handlers {
 	return h
 }
 
+// SetCampaignService wires the embedded SIP outbound worker (optional). Call after sipserver.Start
+// so Gin routes can expose dial-side counters (e.g. GET .../sip-center/campaigns/worker-metrics).
+func (h *Handlers) SetCampaignService(svc *sipserver.CampaignService) {
+	if h == nil {
+		return
+	}
+	h.campaignSvc = svc
+}
+
 func (h *Handlers) Register(engine *gin.Engine) {
 	engine.StaticFile("/rtcsfu_demo.html", "static/rtcsfu_demo.html")
 	engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
@@ -80,4 +92,9 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	h.registerVoiceDialogueRoutes(r)
 	h.registerOpenAPIRoutes(r)
 	h.registerRTCSFURoutes(r)
+
+	// Register Global Singleton DB
+	r.Use(middleware.InjectDB(h.db))
+	h.registerSIPContactCenterRoutes(r)
+	h.registerLingechoWebSeatRoutes(r)
 }

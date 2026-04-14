@@ -1,0 +1,458 @@
+import { get, post, put, del, ApiResponse } from '@/utils/request'
+import { getApiBaseURL } from '@/config/apiConfig'
+
+export interface SIPUserRow {
+  id: number
+  username: string
+  domain: string
+  contactUri?: string
+  remoteIp?: string
+  remotePort?: number
+  online?: boolean
+  expiresAt?: string
+  lastSeenAt?: string
+  userAgent?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface SIPCallDialogTurn {
+  asrText?: string
+  llmText?: string
+  asrProvider?: string
+  ttsProvider?: string
+  llmModel?: string
+  at?: string
+  /** ASR 触发方式：final | partial | partial-timeout 等 */
+  trigger?: string
+  scriptStepId?: string
+  routeIntent?: string
+  llmFirstMs?: number
+  llmWallMs?: number
+  ttsMs?: number
+  pipelineMs?: number
+}
+
+export interface SIPCallRow {
+  id: number
+  callId: string
+  fromHeader?: string
+  toHeader?: string
+  cseqInvite?: string
+  direction?: string
+  state?: string
+  codec?: string
+  payloadType?: number
+  clockRate?: number
+  remoteAddr?: string
+  remoteRtpAddr?: string
+  localRtpAddr?: string
+  recordingUrl?: string
+  recordingRawBytes?: number
+  recordingWavBytes?: number
+  byeInitiator?: string
+  durationSec?: number
+  endStatus?: string
+  failureReason?: string
+  inviteAt?: string
+  ackAt?: string
+  byeAt?: string
+  endedAt?: string
+  turnCount?: number
+  firstTurnAt?: string
+  lastTurnAt?: string
+  hadSipTransfer?: boolean
+  hadWebSeat?: boolean
+  turns?: SIPCallDialogTurn[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface Paginated<T> {
+  list: T[]
+  total: number
+  page: number
+  size: number
+}
+
+export interface ACDPoolTargetRow {
+  id: number
+  name?: string
+  createBy?: string
+  routeType: string
+  sipSource?: string
+  targetValue?: string
+  weight: number
+  workState: string
+  workStateAt?: string
+  sipTrunkHost?: string
+  sipTrunkPort?: number
+  sipTrunkSignalingAddr?: string
+  sipCallerId?: string
+  sipCallerDisplayName?: string
+  liveLineOnline?: boolean
+  webSeatLastSeenAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type ACDSipSource = 'internal' | 'trunk'
+export const ACD_SIP_SOURCES: ACDSipSource[] = ['internal', 'trunk']
+export type ACDRouteType = 'sip' | 'web'
+export const ACD_ROUTE_TYPES: ACDRouteType[] = ['sip', 'web']
+export const ACD_WORK_STATES = ['offline', 'available', 'ringing', 'busy', 'acw', 'break'] as const
+export type ACDWorkState = (typeof ACD_WORK_STATES)[number]
+
+export interface OutboundCampaignRow {
+  id: number
+  name: string
+  status: string
+  scenario?: string
+  mediaProfile?: string
+  scriptId?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface OutboundCampaignMetrics {
+  invited_total: number
+  answered_total: number
+  failed_total: number
+  retrying_total: number
+  suppressed_total: number
+}
+
+export interface OutboundCampaignWorkerMetrics {
+  invited_total: number
+  answered_total: number
+  failed_total: number
+  retrying_total: number
+  suppressed_total: number
+  task_queued?: number
+  task_channel_len?: number
+  task_running?: number
+  task_unfinished?: number
+  per_campaign_queued?: Record<string, number>
+  per_campaign_running?: Record<string, number>
+}
+
+export interface OutboundCampaignLogRow {
+  id: number
+  at: string
+  type: string
+  contactId?: number
+  attemptId?: number
+  attemptNo?: number
+  phone?: string
+  callId?: string
+  correlationId?: string
+  level?: string
+  message: string
+}
+
+export interface OutboundCampaignContactRow {
+  id: number
+  campaignId: number
+  phone: string
+  status: string
+  attemptCount?: number
+  maxAttempts?: number
+  failureReason?: string
+  nextRunAt?: string
+  lastDialAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface SIPScriptTemplateRow {
+  id: number
+  name: string
+  scriptId: string
+  version?: string
+  description?: string
+  enabled: boolean
+  scriptSpec: unknown
+  createdAt?: string
+  updatedAt?: string
+}
+
+export async function listACDPoolTargets(page = 1, size = 20, opts?: { routeType?: string }): Promise<ApiResponse<Paginated<ACDPoolTargetRow>>> {
+  const q = new URLSearchParams({ page: String(page), size: String(size) })
+  if (opts?.routeType) q.set('routeType', opts.routeType)
+  return get(`/sip-center/acd-pool?${q.toString()}`)
+}
+
+export async function getACDPoolTarget(id: number): Promise<ApiResponse<ACDPoolTargetRow>> {
+  return get(`/sip-center/acd-pool/${id}`)
+}
+
+export async function createACDPoolTarget(body: {
+  name?: string
+  routeType: string
+  sipSource?: string
+  targetValue?: string
+  sipTrunkHost?: string
+  sipTrunkPort?: number
+  sipTrunkSignalingAddr?: string
+  sipCallerId?: string
+  sipCallerDisplayName?: string
+  weight?: number
+  workState?: string
+}): Promise<ApiResponse<ACDPoolTargetRow>> {
+  return post('/sip-center/acd-pool', body)
+}
+
+export async function updateACDPoolTarget(id: number, body: {
+  name?: string
+  routeType: string
+  sipSource?: string
+  targetValue?: string
+  sipTrunkHost?: string
+  sipTrunkPort?: number
+  sipTrunkSignalingAddr?: string
+  sipCallerId?: string
+  sipCallerDisplayName?: string
+  weight?: number
+  workState?: string
+}): Promise<ApiResponse<ACDPoolTargetRow>> {
+  return put(`/sip-center/acd-pool/${id}`, body)
+}
+
+export async function deleteACDPoolTarget(id: number): Promise<ApiResponse<{ id: number }>> {
+  return del(`/sip-center/acd-pool/${id}`)
+}
+
+export async function listSIPUsers(page = 1, size = 20): Promise<ApiResponse<Paginated<SIPUserRow>>> {
+  return get(`/sip-center/users?page=${page}&size=${size}`)
+}
+
+export async function fetchSIPUsersForSelect(maxTotal = 500): Promise<SIPUserRow[]> {
+  const out: SIPUserRow[] = []
+  const size = 100
+  let page = 1
+  while (out.length < maxTotal) {
+    const res = await listSIPUsers(page, size)
+    if (res.code !== 200 || !res.data?.list?.length) break
+    out.push(...res.data.list)
+    if (res.data.list.length < size) break
+    page += 1
+  }
+  return out.slice(0, maxTotal)
+}
+
+export async function getSIPCall(id: number): Promise<ApiResponse<SIPCallRow>> {
+  return get(`/sip-center/calls/${id}`)
+}
+
+export async function deleteSIPUser(id: number): Promise<ApiResponse<{ id: number }>> {
+  return del(`/sip-center/users/${id}`)
+}
+
+export async function listSIPCalls(page = 1, size = 20, opts?: { callId?: string; state?: string }): Promise<ApiResponse<Paginated<SIPCallRow>>> {
+  const q = new URLSearchParams({ page: String(page), size: String(size) })
+  if (opts?.callId) q.set('callId', opts.callId)
+  if (opts?.state) q.set('state', opts.state)
+  return get(`/sip-center/calls?${q.toString()}`)
+}
+
+export function resolveSipRecordingUrl(url?: string | null): string {
+  if (!url) return ''
+  const u = url.trim()
+  if (/^https?:\/\//i.test(u)) return u
+  const base = getApiBaseURL().replace(/\/$/, '')
+  return u.startsWith('/') ? `${base}${u}` : `${base}/${u}`
+}
+
+export function sipAiEndStatusI18nKey(status?: string | null): string {
+  const s = (status || '').trim()
+  const map: Record<string, string> = {
+    completed_remote: '对端挂断（未转接）',
+    completed_local: '本端挂断（未转接）',
+    after_transfer_remote: '曾转接 · 对端挂断',
+    after_transfer_local: '曾转接 · 本端挂断',
+  }
+  return map[s] || '—'
+}
+
+export async function createOutboundCampaign(body: {
+  name: string
+  scenario: string
+  media_profile: string
+  script_id?: string
+  script_version?: string
+  script_spec?: string
+}): Promise<ApiResponse<OutboundCampaignRow>> {
+  return post('/sip-center/campaigns', body)
+}
+
+export async function listOutboundCampaigns(page = 1, size = 20, opts?: { status?: string; name?: string }): Promise<ApiResponse<Paginated<OutboundCampaignRow>>> {
+  const q = new URLSearchParams({ page: String(page), size: String(size) })
+  if (opts?.status) q.set('status', opts.status)
+  if (opts?.name) q.set('name', opts.name)
+  return get(`/sip-center/campaigns?${q.toString()}`)
+}
+
+export async function enqueueOutboundCampaignContacts(campaignId: number, contacts: Array<{ phone: string; display?: string; priority?: number }>): Promise<ApiResponse<{ accepted: number }>> {
+  return post(`/sip-center/campaigns/${campaignId}/contacts`, contacts)
+}
+
+export async function listOutboundCampaignContacts(campaignId: number, page = 1, size = 50): Promise<ApiResponse<Paginated<OutboundCampaignContactRow>>> {
+  const q = new URLSearchParams({ page: String(page), size: String(size) })
+  return get(`/sip-center/campaigns/${campaignId}/contacts?${q.toString()}`)
+}
+
+export async function resetOutboundCampaignSuppressedContacts(campaignId: number): Promise<ApiResponse<{ updated: number }>> {
+  return post(`/sip-center/campaigns/${campaignId}/contacts/reset-suppressed`, {})
+}
+
+export async function startOutboundCampaign(campaignId: number): Promise<ApiResponse<null>> {
+  return post(`/sip-center/campaigns/${campaignId}/start`, {})
+}
+
+export async function pauseOutboundCampaign(campaignId: number): Promise<ApiResponse<null>> {
+  return post(`/sip-center/campaigns/${campaignId}/pause`, {})
+}
+
+export async function resumeOutboundCampaign(campaignId: number): Promise<ApiResponse<null>> {
+  return post(`/sip-center/campaigns/${campaignId}/resume`, {})
+}
+
+export async function stopOutboundCampaign(campaignId: number): Promise<ApiResponse<null>> {
+  return post(`/sip-center/campaigns/${campaignId}/stop`, {})
+}
+
+export async function deleteOutboundCampaign(campaignId: number): Promise<ApiResponse<{ id: number }>> {
+  return del(`/sip-center/campaigns/${campaignId}`)
+}
+
+export async function getOutboundCampaignMetrics(): Promise<ApiResponse<OutboundCampaignMetrics>> {
+  return get('/sip-center/campaigns/metrics')
+}
+
+export async function getOutboundCampaignWorkerMetrics(): Promise<ApiResponse<OutboundCampaignWorkerMetrics>> {
+  return get('/sip-center/campaigns/worker-metrics')
+}
+
+export async function getOutboundCampaignLogs(campaignId: number, limit = 100): Promise<ApiResponse<{ list: OutboundCampaignLogRow[]; total: number }>> {
+  const q = new URLSearchParams({ limit: String(limit) })
+  return get(`/sip-center/campaigns/${campaignId}/logs?${q.toString()}`)
+}
+
+export async function listSIPScriptTemplates(page = 1, size = 20, opts?: { scriptId?: string; name?: string }): Promise<ApiResponse<Paginated<SIPScriptTemplateRow>>> {
+  const q = new URLSearchParams({ page: String(page), size: String(size) })
+  if (opts?.scriptId) q.set('scriptId', opts.scriptId)
+  if (opts?.name) q.set('name', opts.name)
+  return get(`/sip-center/scripts?${q.toString()}`)
+}
+
+export async function createSIPScriptTemplate(body: {
+  name: string
+  scriptId?: string
+  version?: string
+  description?: string
+  enabled?: boolean
+  scriptSpec: string
+}): Promise<ApiResponse<SIPScriptTemplateRow>> {
+  return post('/sip-center/scripts', body)
+}
+
+export async function updateSIPScriptTemplate(id: number, body: {
+  name: string
+  scriptId?: string
+  version?: string
+  description?: string
+  enabled?: boolean
+  scriptSpec?: string
+}): Promise<ApiResponse<SIPScriptTemplateRow>> {
+  return put(`/sip-center/scripts/${id}`, body)
+}
+
+export async function deleteSIPScriptTemplate(id: number): Promise<ApiResponse<{ id: number }>> {
+  return del(`/sip-center/scripts/${id}`)
+}
+
+const WEBSEAT_ACD_POOL_ROW_SESSION_KEY = 'soulnexus.webseat.acdPoolTargetId'
+
+function readAnchoredWebSeatAcdPoolId(): number | null {
+  if (typeof sessionStorage === 'undefined') return null
+  try {
+    const s = sessionStorage.getItem(WEBSEAT_ACD_POOL_ROW_SESSION_KEY)
+    if (!s) return null
+    const id = parseInt(s, 10)
+    return Number.isFinite(id) && id > 0 ? id : null
+  } catch {
+    return null
+  }
+}
+
+function writeAnchoredWebSeatAcdPoolId(id: number): void {
+  if (typeof sessionStorage === 'undefined') return
+  sessionStorage.setItem(WEBSEAT_ACD_POOL_ROW_SESSION_KEY, String(id))
+}
+
+export function clearWebSeatAcdPoolAnchor(): void {
+  if (typeof sessionStorage === 'undefined') return
+  sessionStorage.removeItem(WEBSEAT_ACD_POOL_ROW_SESSION_KEY)
+}
+
+function normOpKey(s: string): string {
+  return s.trim().toLowerCase()
+}
+
+async function findWebAcdRowIdForOperator(operatorKey: string): Promise<number | null> {
+  const k = normOpKey(operatorKey)
+  if (!k) return null
+  const res = await listACDPoolTargets(1, 100, { routeType: 'web' })
+  if (res.code !== 200 || !res.data?.list?.length) return null
+  const mine = res.data.list.filter((r) => normOpKey(r.createBy || '') === k)
+  if (!mine.length) return null
+  mine.sort((a, b) => a.id - b.id)
+  return mine[0]!.id
+}
+
+export async function postWebSeatAcdHeartbeat(targetId: number): Promise<void> {
+  const r = await post<{ ok?: boolean }>('/sip-center/acd-pool/web-seat/heartbeat', { targetId })
+  if (r.code !== 200) throw new Error(r.msg || 'web seat heartbeat failed')
+}
+
+export async function ensureWebSeatAcdPoolRowOnline(opts: { displayLabel: string; operatorKey: string }): Promise<number> {
+  const label = opts.displayLabel.trim() || 'Web'
+  const existing = await findWebAcdRowIdForOperator(opts.operatorKey)
+  let targetId: number | null = existing
+  if (targetId == null) {
+    const anchor = readAnchoredWebSeatAcdPoolId()
+    if (anchor != null) {
+      const cur = await getACDPoolTarget(anchor)
+      if (cur.code === 200 && cur.data?.routeType === 'web') targetId = anchor
+    }
+  }
+  if (targetId != null) {
+    const cur = await getACDPoolTarget(targetId)
+    if (cur.code === 200 && cur.data?.routeType === 'web') {
+      const r = cur.data
+      const wt = r.weight != null && r.weight > 0 ? r.weight : 10
+      const u = await updateACDPoolTarget(targetId, { name: label, routeType: 'web', sipSource: '', targetValue: '', weight: wt, workState: 'available' })
+      if (u.code !== 200) throw new Error(u.msg || 'update web seat acd failed')
+      writeAnchoredWebSeatAcdPoolId(targetId)
+      return targetId
+    }
+    clearWebSeatAcdPoolAnchor()
+  }
+  const c = await createACDPoolTarget({ name: label, routeType: 'web', sipSource: '', targetValue: '', weight: 10, workState: 'available' })
+  if (c.code !== 200 || !c.data?.id) throw new Error(c.msg || 'create web seat acd failed')
+  writeAnchoredWebSeatAcdPoolId(c.data.id)
+  return c.data.id
+}
+
+export async function setWebSeatAcdPoolRowOffline(): Promise<void> {
+  const anchor = readAnchoredWebSeatAcdPoolId()
+  if (anchor == null) return
+  const cur = await getACDPoolTarget(anchor)
+  if (cur.code !== 200 || !cur.data || cur.data.routeType !== 'web') {
+    clearWebSeatAcdPoolAnchor()
+    return
+  }
+  const r = cur.data
+  const u = await updateACDPoolTarget(anchor, { name: r.name || '', routeType: 'web', sipSource: '', targetValue: '', weight: r.weight ?? 10, workState: 'offline' })
+  if (u.code !== 200) throw new Error(u.msg || 'set web seat acd offline failed')
+}

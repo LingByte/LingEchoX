@@ -139,5 +139,14 @@ func RunMigrations(db *gorm.DB) error {
 		&models.Device{},
 		&models.RTCSFURoomAssignment{},
 		&models.RTCSFUMediaSession{},
+		&models.SIPUser{},
+		&models.SIPCall{},
+		&models.ACDPoolTarget{},
+		&models.SIPCampaign{},
+		&models.SIPCampaignContact{},
+		&models.SIPCallAttempt{},
+		&models.SIPScriptRun{},
+		&models.SIPCampaignEvent{},
+		&models.SIPScriptTemplate{},
 	})
 }

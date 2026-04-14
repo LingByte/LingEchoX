@@ -4,17 +4,21 @@ package main
 // SPDX-License-Identifier: MIT
 
 import (
+	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/LingByte/SoulNexus/cmd/bootstrap"
 	"github.com/LingByte/SoulNexus/internal/handlers"
 	"github.com/LingByte/SoulNexus/internal/listeners"
 	"github.com/LingByte/SoulNexus/internal/rtcsfu_replica"
+	"github.com/LingByte/SoulNexus/internal/sipserver"
+	"github.com/LingByte/SoulNexus/internal/tasks"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
@@ -46,6 +50,9 @@ func main() {
 	mode := flag.String("mode", "", "running environment (development, test, production)")
 	init := flag.Bool("init", false, "initialize database")
 	initSQL := flag.String("init-sql", "", "path to database init .sql script (optional)")
+	sipHost := flag.String("sip-host", "0.0.0.0", "embedded SIP UDP listen host")
+	sipPort := flag.Int("sip-port", 5060, "embedded SIP UDP listen port")
+	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "SDP c= line IP (RTP reachable from SIP peers)")
 	flag.Parse()
 
 	// 2. Set Environment Variables
@@ -185,9 +192,28 @@ func main() {
 
 	// 16. Register Routes
 	app.RegisterRoutes(r)
+	sipUserCleaner := tasks.NewSIPUserOnlineCleaner(db, time.Duration(utils.GetIntEnv("SIP_USER_ONLINE_SWEEP_SECONDS"))*time.Second)
+	sipUserCleaner.Start()
 	// 17. Initialize System Listeners
 	listeners.InitSystemListeners()
 	go rtcsfu_replica.RunAnnouncer()
+
+	var sipEmbedded *sipserver.Embedded
+	se, err := sipserver.Start(sipserver.Config{
+		Host:    *sipHost,
+		Port:    *sipPort,
+		LocalIP: *sipLocalIP,
+		DB:      db,
+	})
+	if err != nil {
+		logger.Fatal("embedded SIP stack failed to start", zap.Error(err))
+	}
+	sipEmbedded = se
+	app.handlers.SetCampaignService(sipEmbedded.CampaignService())
+	logger.Info("embedded SIP stack started",
+		zap.String("sip_host", *sipHost),
+		zap.Int("sip_port", *sipPort),
+		zap.String("sip_local_ip", *sipLocalIP))
 	// 18. Start HTTP/HTTPS Server
 	httpServer := &http.Server{
 		Addr:           addr,
@@ -198,30 +224,48 @@ func main() {
 		MaxHeaderBytes: 1 << 20, // 1MB
 	}
 
-	// Check if SSL is enabled
+	shutdownAll := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		sipUserCleaner.Stop()
+		if sipEmbedded != nil {
+			sipEmbedded.Shutdown(ctx)
+		}
+		if err := httpServer.Shutdown(ctx); err != nil {
+			logger.Error("HTTP server shutdown", zap.Error(err))
+		}
+	}
+
 	if config.GlobalConfig.Server.SSLEnabled && listeners.IsSSLEnabled() {
 		tlsConfig, err := listeners.GetTLSConfig()
 		if err != nil {
 			logger.Error("failed to get TLS config", zap.Error(err))
 			return
 		}
-
 		if tlsConfig != nil {
 			httpServer.TLSConfig = tlsConfig
-			logger.Info("Starting HTTPS server", zap.String("addr", addr))
-			if err := httpServer.ListenAndServeTLS(config.GlobalConfig.Server.SSLCertFile, config.GlobalConfig.Server.SSLKeyFile); err != nil && err != http.ErrServerClosed {
-				logger.Error("HTTPS server run failed", zap.Error(err))
-			}
 		} else {
 			logger.Warn("SSL enabled but TLS config is nil, falling back to HTTP")
-			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Error("HTTP server run failed", zap.Error(err))
-			}
-		}
-	} else {
-		logger.Info(fmt.Sprintf("Starting HTTP server Port is: %s", addr))
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server run failed", zap.Error(err))
 		}
 	}
+
+	go func() {
+		var err error
+		if httpServer.TLSConfig != nil {
+			logger.Info("Starting HTTPS server", zap.String("addr", addr))
+			err = httpServer.ListenAndServeTLS("", "")
+		} else {
+			logger.Info("Starting HTTP server", zap.String("addr", addr))
+			err = httpServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTP server run failed", zap.Error(err))
+		}
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	logger.Info("shutdown signal received")
+	shutdownAll()
 }
