@@ -14,6 +14,7 @@ import (
 	"github.com/LingByte/SoulNexus/cmd/bootstrap"
 	"github.com/LingByte/SoulNexus/internal/handlers"
 	"github.com/LingByte/SoulNexus/internal/listeners"
+	"github.com/LingByte/SoulNexus/internal/rtcsfu_replica"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
@@ -159,6 +160,13 @@ func main() {
 			// 用户管理接口限流
 			"/api/users":   "100-M", // 用户列表：100次/分钟
 			"/api/users/*": "200-M", // 用户操作：200次/分钟
+
+			"/api/rtcsfu/v1/join":                      "120-M", // SFU 房间分配
+			"/api/rtcsfu/v1/token":                     "30-M",  // 签发 join_token
+			"/api/rtcsfu/v1/admin/reload-nodes":        "30-M",  // 运维：热更新节点列表
+			"/api/rtcsfu/v1/admin/nodes/register":      "20-M",  // 副节点注册
+			"/api/rtcsfu/v1/admin/nodes/replica/touch": "60-M",  // 轻量心跳
+			"/api/rtcsfu/v1/admin/nodes":               "60-M",  // 节点列表
 		},
 		SkipPaths: []string{
 			"/health",
@@ -168,6 +176,9 @@ func main() {
 			"/media/",
 			"/admin",   // 管理后台静态资源
 			"/admin/*", // 管理后台路由
+			"/api/rtcsfu/v1/signal",
+			"/api/rtcsfu/v1/p2p",
+			"/api/rtcsfu/v1/ready",
 		},
 	})
 	r.Use(middleware.RateLimiterMiddleware())
@@ -176,6 +187,7 @@ func main() {
 	app.RegisterRoutes(r)
 	// 17. Initialize System Listeners
 	listeners.InitSystemListeners()
+	go rtcsfu_replica.RunAnnouncer()
 	// 18. Start HTTP/HTTPS Server
 	httpServer := &http.Server{
 		Addr:           addr,

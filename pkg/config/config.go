@@ -18,6 +18,49 @@ type Config struct {
 	Database  DatabaseConfig   `mapstructure:"database"`
 	Log       logger.LogConfig `mapstructure:"log"`
 	Services  ServicesConfig   `mapstructure:"services"`
+	RTCSFU    RTCSFUConfig     `mapstructure:"rtcsfu"`
+}
+
+// RTCSFUConfig enables the hybrid multi-SFU control-plane HTTP API (pkg/rtcsfu) and embedded Pion SFU.
+type RTCSFUConfig struct {
+	Enabled   bool   `env:"RTCSFU_ENABLED"`
+	NodesJSON string `env:"RTCSFU_NODES"`   // JSON array, see pkg/rtcsfu.ParseNodesJSON
+	APIKey    string `env:"RTCSFU_API_KEY"` // optional; if set, join requires header X-RTCSFU-Key
+
+	ICEServersJSON       string `env:"RTCSFU_ICE_SERVERS_JSON"`       // browser-style JSON array; empty = default STUN
+	MaxRooms             int    `env:"RTCSFU_MAX_ROOMS"`              // 0 = unlimited
+	MaxPeersPerRoom      int    `env:"RTCSFU_MAX_PEERS_PER_ROOM"`     // 0 = unlimited
+	WSReadTimeoutSec     int    `env:"RTCSFU_WS_READ_TIMEOUT_SEC"`    // WebSocket read deadline (ping/pong refresh)
+	WSPingIntervalSec    int    `env:"RTCSFU_WS_PING_INTERVAL_SEC"`   // 0 = disable WS ping
+	WSMaxMessageBytes    int    `env:"RTCSFU_WS_MAX_MESSAGE_BYTES"`   // signaling frame size cap
+	SignalAllowedOrigins string `env:"RTCSFU_SIGNAL_ALLOWED_ORIGINS"` // comma-separated Origin allowlist; empty: prod=same-host only
+	SignalRequireAuth    bool   `env:"RTCSFU_SIGNAL_REQUIRE_AUTH"`    // if true, signal WS requires same auth as join when API key is set
+
+	JoinTokenSecret            string `env:"RTCSFU_JOIN_TOKEN_SECRET"`              // HMAC secret for short-lived room tokens (optional)
+	JoinTokenDefaultTTLSeconds int    `env:"RTCSFU_JOIN_TOKEN_DEFAULT_TTL_SECONDS"` // mint default when ttl_sec omitted
+	JoinTokenMaxTTLSeconds     int    `env:"RTCSFU_JOIN_TOKEN_MAX_TTL_SECONDS"`     // cap mint ttl; 0 = use default cap in handler
+
+	// ClusterRole is informational + gates some admin APIs: primary | replica | standalone (default standalone).
+	ClusterRole string `env:"RTCSFU_CLUSTER_ROLE"`
+
+	// Replica → primary registration (HTTP). Auth: X-RTCSFU-Key must match primary RTCSFU_API_KEY.
+	PrimaryBaseURL      string `env:"RTCSFU_PRIMARY_BASE_URL"`      // e.g. https://primary.example.com:7075
+	ReplicaSelfJSON     string `env:"RTCSFU_REPLICA_SELF_JSON"`     // one node object or array (same shape as RTCSFU_NODES items)
+	ReplicaHeartbeatSec int    `env:"RTCSFU_REPLICA_HEARTBEAT_SEC"` // interval for re-register; 0 = default 30
+	// ReplicaHeartbeatMode: register (full JSON each tick) or touch (POST .../replica/touch after one initial register).
+	ReplicaHeartbeatMode string `env:"RTCSFU_REPLICA_HEARTBEAT_MODE"`
+
+	ReplicaMTLSClientCAFile       string `env:"RTCSFU_REPLICA_MTLS_CA_FILE"`              // PEM CA to verify primary server cert
+	ReplicaMTLSClientCertFile     string `env:"RTCSFU_REPLICA_MTLS_CERT_FILE"`            // client cert for mTLS
+	ReplicaMTLSClientKeyFile      string `env:"RTCSFU_REPLICA_MTLS_KEY_FILE"`             // client key
+	ReplicaMTLSInsecureSkipVerify bool   `env:"RTCSFU_REPLICA_MTLS_INSECURE_SKIP_VERIFY"` // dev only
+
+	// Primary: if last_seen older than this many seconds, replica is treated as unhealthy for routing (0 = off).
+	ReplicaStaleSeconds int `env:"RTCSFU_REPLICA_STALE_SECONDS"`
+	// Primary: if set, POST .../replica/touch must include valid HMAC (Bearer or JSON touch_token) bound to id.
+	ReplicaTouchHMACSecret string `env:"RTCSFU_REPLICA_TOUCH_HMAC_SECRET"`
+	// Replica: TTL for minted touch tokens (seconds); 0 = default 120.
+	ReplicaTouchTokenTTLSeconds int `env:"RTCSFU_REPLICA_TOUCH_TOKEN_TTL_SECONDS"`
 }
 
 // ServerConfig server configuration
@@ -55,7 +98,7 @@ type StorageConfig struct {
 }
 
 func Load() error {
-	// 1. Load .env file based on environment (don't error if it doesn't exist, use default values)
+	// 1. Load .env file based on the environment (don't error if it doesn't exist, use default values)
 	env := os.Getenv("MODE")
 	err := utils.LoadEnv(env)
 	if err != nil {
@@ -98,6 +141,34 @@ func Load() error {
 				APISecret: utils.GetStringOrDefault("LINGSTORAGE_API_SECRET", ""),
 				Bucket:    utils.GetStringOrDefault("LINGSTORAGE_BUCKET", "default"),
 			},
+		},
+		RTCSFU: RTCSFUConfig{
+			Enabled:                       utils.GetBoolOrDefault("RTCSFU_ENABLED", false),
+			NodesJSON:                     utils.GetStringOrDefault("RTCSFU_NODES", ""),
+			APIKey:                        utils.GetStringOrDefault("RTCSFU_API_KEY", ""),
+			ICEServersJSON:                utils.GetStringOrDefault("RTCSFU_ICE_SERVERS_JSON", ""),
+			MaxRooms:                      utils.GetIntOrDefault("RTCSFU_MAX_ROOMS", 5000),
+			MaxPeersPerRoom:               utils.GetIntOrDefault("RTCSFU_MAX_PEERS_PER_ROOM", 50),
+			WSReadTimeoutSec:              utils.GetIntOrDefault("RTCSFU_WS_READ_TIMEOUT_SEC", 70),
+			WSPingIntervalSec:             utils.GetIntOrDefault("RTCSFU_WS_PING_INTERVAL_SEC", 25),
+			WSMaxMessageBytes:             utils.GetIntOrDefault("RTCSFU_WS_MAX_MESSAGE_BYTES", 786432),
+			SignalAllowedOrigins:          utils.GetStringOrDefault("RTCSFU_SIGNAL_ALLOWED_ORIGINS", ""),
+			SignalRequireAuth:             utils.GetBoolOrDefault("RTCSFU_SIGNAL_REQUIRE_AUTH", false),
+			JoinTokenSecret:               utils.GetStringOrDefault("RTCSFU_JOIN_TOKEN_SECRET", ""),
+			JoinTokenDefaultTTLSeconds:    utils.GetIntOrDefault("RTCSFU_JOIN_TOKEN_DEFAULT_TTL_SECONDS", 3600),
+			JoinTokenMaxTTLSeconds:        utils.GetIntOrDefault("RTCSFU_JOIN_TOKEN_MAX_TTL_SECONDS", 0),
+			ClusterRole:                   utils.GetStringOrDefault("RTCSFU_CLUSTER_ROLE", "standalone"),
+			PrimaryBaseURL:                utils.GetStringOrDefault("RTCSFU_PRIMARY_BASE_URL", ""),
+			ReplicaSelfJSON:               utils.GetStringOrDefault("RTCSFU_REPLICA_SELF_JSON", ""),
+			ReplicaHeartbeatSec:           utils.GetIntOrDefault("RTCSFU_REPLICA_HEARTBEAT_SEC", 30),
+			ReplicaHeartbeatMode:          utils.GetStringOrDefault("RTCSFU_REPLICA_HEARTBEAT_MODE", "register"),
+			ReplicaMTLSClientCAFile:       utils.GetStringOrDefault("RTCSFU_REPLICA_MTLS_CA_FILE", ""),
+			ReplicaMTLSClientCertFile:     utils.GetStringOrDefault("RTCSFU_REPLICA_MTLS_CERT_FILE", ""),
+			ReplicaMTLSClientKeyFile:      utils.GetStringOrDefault("RTCSFU_REPLICA_MTLS_KEY_FILE", ""),
+			ReplicaMTLSInsecureSkipVerify: utils.GetBoolOrDefault("RTCSFU_REPLICA_MTLS_INSECURE_SKIP_VERIFY", false),
+			ReplicaStaleSeconds:           utils.GetIntOrDefault("RTCSFU_REPLICA_STALE_SECONDS", 0),
+			ReplicaTouchHMACSecret:        utils.GetStringOrDefault("RTCSFU_REPLICA_TOUCH_HMAC_SECRET", ""),
+			ReplicaTouchTokenTTLSeconds:   utils.GetIntOrDefault("RTCSFU_REPLICA_TOUCH_TOKEN_TTL_SECONDS", 0),
 		},
 	}
 	GlobalStore = lingstorage.NewClient(&lingstorage.Config{

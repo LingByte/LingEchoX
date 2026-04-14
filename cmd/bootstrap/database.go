@@ -137,5 +137,7 @@ func RunMigrations(db *gorm.DB) error {
 		&models.DeviceErrorLog{},
 		&models.CallRecording{},
 		&models.Device{},
+		&models.RTCSFURoomAssignment{},
+		&models.RTCSFUMediaSession{},
 	})
 }
