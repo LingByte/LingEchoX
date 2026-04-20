@@ -30,10 +30,10 @@ const Login = () => {
   const { config } = useSiteConfig()
   const navigate = useNavigate()
   
-  const siteName = config?.SITE_NAME || '七牛云联络中心'
+  const siteName = config?.SITE_NAME || '灵语'
   const siteTermsUrl = config?.SITE_TERMS_URL || ''
   const siteUrl = config?.SITE_URL || ''
-  const logoUrl = buildLogoUrl(config?.SITE_LOGO_URL || '/static/img/favicon.png')
+  const logoUrl = buildLogoUrl(config?.SITE_LOGO_URL || '/icon-lingyu.png')
   const shouldUpgradeDB = config?.SHOULD_UPGRADE_DB || false
 
   const handleCaptchaVerify = (id: string, type: string, data: any) => {
@@ -217,7 +217,7 @@ const Login = () => {
               transition={{ delay: 0.3 }}
               className="text-3xl font-bold bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 bg-clip-text mb-2"
             >
-              七牛云联络中心
+              {siteName}
             </motion.h1>
             <motion.p
               initial={{ opacity: 0, y: 10 }}

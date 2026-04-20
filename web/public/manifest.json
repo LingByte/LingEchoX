@@ -1,13 +1,13 @@
 {
-  "name": "LingStorage Admin",
-  "short_name": "LingStorage",
+  "name": "灵语",
+  "short_name": "灵语",
   "start_url": "/admin",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#3b82f6",
   "icons": [
     {
-      "src": "/static/img/favicon.png",
+      "src": "/icon-lingyu.png",
       "sizes": "192x192",
       "type": "image/png"
     }

@@ -14,7 +14,6 @@ import {
 import { useSidebar } from '@/contexts/SidebarContext'
 import { useSiteConfig } from '@/contexts/SiteConfigContext'
 import { cn } from '@/utils/cn'
-import { useThemeStore } from '@/stores/themeStore'
 import { useWebSeat } from '@/components/WebSeat/WebSeatContext'
 
 interface NavItem {
@@ -30,10 +29,9 @@ const AdminSidebar = () => {
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const location = useLocation()
   const { config } = useSiteConfig()
-  const { isDark } = useThemeStore()
   const { configured, wsState, wsStatusText, goOnline } = useWebSeat()
-  const siteName = config?.SITE_NAME || '七牛云联络中心'
-  const logoUrl = isDark ? '/logo-white.png' : '/logo-grey.png'
+  const siteName = config?.SITE_NAME || '灵语'
+  const logoUrl = '/icon-lingyu.png'
 
   const navigation: NavItem[] = [
     { name: 'SIP 用户', href: '/sip-users', icon: Users },
@@ -50,8 +48,8 @@ const AdminSidebar = () => {
 
   const SidebarContent = ({ showLogo = true }: { showLogo?: boolean }) => {
     const { config: sidebarConfig } = useSiteConfig()
-    const currentSiteName = sidebarConfig?.SITE_NAME || '七牛云联络中心'
-    const sidebarLogoUrl = (isDark ? '/logo-white.png' : '/logo-grey.png')
+    const currentSiteName = sidebarConfig?.SITE_NAME || '灵语'
+    const sidebarLogoUrl = '/icon-lingyu.png'
     
     return (
       <>

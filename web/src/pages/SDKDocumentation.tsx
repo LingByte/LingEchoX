@@ -63,14 +63,14 @@ const SDKDocumentation = () => {
   )
 
   return (
-    <AdminLayout title="SDK 文档" description="七牛云联络中心 API 文档和集成指南">
+    <AdminLayout title="SDK 文档" description="灵语 API 文档和集成指南">
       <div className="space-y-6 animate-in fade-in-0 slide-in-from-bottom-4 duration-500">
         {/* 概述 */}
         <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}>
           <Card className="p-6">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">概述</h2>
             <p className="text-slate-600 dark:text-slate-400 mb-4">
-              七牛云联络中心 SDK 提供了简单易用的 API 接口，让您可以轻松集成文件存储、上传、下载等功能到您的应用中。
+              灵语 SDK 提供了简单易用的 API 接口，让您可以轻松集成文件存储、上传、下载等功能到您的应用中。
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="p-4">

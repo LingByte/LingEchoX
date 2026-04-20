@@ -1,4 +1,4 @@
-import { get, post, put, del, patch } from '@/utils/request'
+import { get, post, put, del } from '@/utils/request'
 import { getApiBaseURL } from '@/config/apiConfig'
 import { handleConfigCacheUpdate } from '@/utils/siteConfigCache'
 
@@ -798,8 +798,6 @@ export interface SiteConfig {
   SITE_TERMS_URL: string
   SITE_URL: string
   SITE_LOGO_URL: string
-  SHOULD_UPGRADE_DB: boolean
-  CENSOR_ENABLED: boolean
 }
 
 export const getSiteConfig = async (): Promise<SiteConfig> => {
