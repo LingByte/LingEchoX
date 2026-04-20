@@ -35,12 +35,9 @@ export const SiteConfigProvider = ({ children }: { children: ReactNode }) => {
     return (now - cacheTimestamp) < CACHE_DURATION
   }
 
-  // 根据主题更新 head logo（favicon / apple-touch-icon）
+  // 更新 head logo（favicon / apple-touch-icon）
   const applyThemeHeadLogo = () => {
-    const isDark =
-      document.documentElement.classList.contains('dark') ||
-      window.matchMedia('(prefers-color-scheme: dark)').matches
-    const logoUrl = isDark ? '/logo-white.png' : '/logo-grey.png'
+    const logoUrl = '/icon-lingyu.png'
 
     let faviconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null
     if (!faviconLink) {
@@ -81,11 +78,11 @@ export const SiteConfigProvider = ({ children }: { children: ReactNode }) => {
 
   // 获取默认配置
   const getDefaultConfig = (): SiteConfig => ({
-    SITE_NAME: '七牛云联络中心',
+    SITE_NAME: '灵语',
     SITE_DESCRIPTION: '管理后台登录',
     SITE_TERMS_URL: '',
     SITE_URL: '',
-      SITE_LOGO_URL: '/logo-grey.png',
+    SITE_LOGO_URL: '/icon-lingyu.png',
   })
 
   const fetchConfig = async (forceRefresh = false) => {

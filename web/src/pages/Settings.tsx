@@ -10,7 +10,7 @@ import { showAlert } from '@/utils/notification'
 
 const Settings = () => {
   const [settings, setSettings] = useState({
-    siteName: '七牛云联络中心',
+    siteName: '灵语',
     siteDescription: 'Ling Global File Storage Gateway',
     emailNotifications: true,
     pushNotifications: false,
