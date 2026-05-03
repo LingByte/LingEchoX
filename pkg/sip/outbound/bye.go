@@ -20,7 +20,7 @@ func buildBYE(inv inviteParams, toHeader200, requestURI string, cseq int, branch
 		Version:    "SIP/2.0",
 	}
 	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
-		nonEmpty(inv.SIPHost, "127.0.0.1"), nonZero(inv.SIPPort, 5060), branch)
+		nonEmpty(inv.SIPHost, "127.0.0.1"), nonZero(inv.SIPPort, 6050), branch)
 	msg.SetHeader("Via", via)
 	msg.SetHeader("Max-Forwards", "70")
 	msg.SetHeader("From", formatOutboundFromHeader(inv.FromDisplayName, inv.FromUser, inv.SIPHost, inv.SIPPort, inv.FromTag))

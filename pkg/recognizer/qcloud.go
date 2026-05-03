@@ -40,6 +40,9 @@ type QCloudASROption struct {
 	ModelType   string    `json:"modelType" yaml:"model_type" env:"QCLOUD_MODEL_TYPE" default:"16k_zh"`
 	ReqChanSize int       `json:"reqChanSize" yaml:"req_chan_size" default:"128"`
 	HotWords    []HotWord `json:"hotWords" yaml:"hot_words"`
+	// SentenceNotify is invoked on each Tencent OnSentenceEnd (fragment = 本句增量, cumulative = 当前累计).
+	// Optional; used by offline streaming consumers (e.g. call analysis WebSocket).
+	SentenceNotify func(fragment string, cumulative string) `json:"-" yaml:"-"`
 }
 
 func NewQcloudASROption(appId string, secretId string, secretKey string) QCloudASROption {
@@ -164,6 +167,9 @@ func (asq *QCloudASR) OnSentenceEnd(response *asr.SpeechRecognitionResponse) {
 	asq.sliceType = response.Result.SliceType
 	asq.startTime = response.Result.StartTime
 	asq.endTime = response.Result.EndTime
+	if asq.opt.SentenceNotify != nil {
+		asq.opt.SentenceNotify(response.Result.VoiceTextStr, asq.sentence)
+	}
 	if asq.transcribeResult != nil {
 		asq.transcribeResult(asq.sentence, false, time.Since(*asq.sendReqTime), asq.dialogID)
 		return

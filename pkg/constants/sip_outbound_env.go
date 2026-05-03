@@ -28,6 +28,5 @@ const (
 	EnvSIPMediaTXQueueSize = "SIP_MEDIA_TX_QUEUE_SIZE"
 
 	// EnvSIPRegisterPassword: when non-empty, REGISTER (including Expires:0 unregister) must carry the
-	// same value in the X-SIP-Register-Password header or the server responds 403 and does not change bindings.
 	EnvSIPRegisterPassword = "SIP_PASSWORD"
 )

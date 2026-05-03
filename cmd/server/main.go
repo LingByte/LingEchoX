@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -58,7 +60,7 @@ func main() {
 	mode := flag.String("mode", "", "running environment (development, test, production)")
 	initSQL := flag.String("init-sql", "", "path to database init .sql script (optional)")
 	sipHost := flag.String("sip-host", "0.0.0.0", "embedded SIP UDP listen host")
-	sipPort := flag.Int("sip-port", 5060, "embedded SIP UDP listen port")
+	sipPort := flag.Int("sip-port", 6050, "embedded SIP UDP listen port")
 	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "SDP c= line IP (RTP reachable from SIP peers)")
 	flag.Parse()
 	// 3. Set Environment Variables
@@ -75,7 +77,15 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
+	port := 50400
+	if ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferPort)); ps != "" {
+		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
+			port = p
+			logger.Info("parse ture", zap.Int("port", port))
+		} else {
+			logger.Error("parse error", zap.Error(err))
+		}
+	}
 	// 6. Print Configuration
 	bootstrap.LogConfigInfo()
 
@@ -168,11 +178,14 @@ func main() {
 		zap.String("sip_local_ip", *sipLocalIP))
 	// 22. Start HTTP/HTTPS Server
 
+	// 长耗时接口（如 sip-center/call-analysis：1× 实时 ASR + LLM）在返回前可能数分钟无写出；
+	// WriteTimeout 过小会导致服务端提前断连，客户端表现为超时或空响应。
+	const httpLongRun = 45 * time.Minute
 	httpServer := &http.Server{
 		Addr:           addr,
 		Handler:        r,
-		ReadTimeout:    300 * time.Second, // 5分钟，适合语音会话的长静音期
-		WriteTimeout:   30 * time.Second,
+		ReadTimeout:    httpLongRun,
+		WriteTimeout:   httpLongRun,
 		IdleTimeout:    120 * time.Second,
 		MaxHeaderBytes: 1 << 20, // 1MB
 	}

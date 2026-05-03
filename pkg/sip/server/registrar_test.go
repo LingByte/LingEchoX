@@ -11,7 +11,7 @@ func TestParseURIUserHost_nameAddr(t *testing.T) {
 	}{
 		{`"bob" <sip:bob@192.168.72.149>`, "bob", "192.168.72.149", true},
 		{`<sip:bob@192.168.72.149>`, "bob", "192.168.72.149", true},
-		{`sip:bob@192.168.72.149:5060`, "bob", "192.168.72.149", true},
+		{`sip:bob@192.168.72.149:6050`, "bob", "192.168.72.149", true},
 		{`sip:bob@192.168.72.149;user=phone`, "bob", "192.168.72.149", true},
 	}
 	for _, tc := range cases {

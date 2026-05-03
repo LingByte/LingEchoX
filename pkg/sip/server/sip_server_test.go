@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 )
 
 func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
@@ -41,7 +41,7 @@ func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
 
 	raw := strings.Join([]string{
 		"INVITE sip:user@domain.com SIP/2.0",
-		"Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK776asdhds",
+		"Via: SIP/2.0/UDP client.com:6050;branch=z9hG4bK776asdhds",
 		"To: <sip:user@domain.com>",
 		"From: <sip:caller@client.com>;tag=1928301774",
 		"Call-ID: a84b4c76e66710@client.com",
@@ -57,7 +57,7 @@ func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
 		t.Fatalf("Parse invite failed: %v", err)
 	}
 
-	resp := srv.StartInviteHandler(msg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5060})
+	resp := srv.StartInviteHandler(msg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 6050})
 	if resp == nil {
 		t.Fatalf("expected response, got nil")
 	}
@@ -114,7 +114,7 @@ func TestSIPServer_HandleBye_ClosesSession(t *testing.T) {
 
 	rawInvite := strings.Join([]string{
 		"INVITE sip:user@domain.com SIP/2.0",
-		"Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK776asdhds",
+		"Via: SIP/2.0/UDP client.com:6050;branch=z9hG4bK776asdhds",
 		"To: <sip:user@domain.com>",
 		"From: <sip:caller@client.com>;tag=1928301774",
 		"Call-ID: callbye-1",
@@ -130,11 +130,11 @@ func TestSIPServer_HandleBye_ClosesSession(t *testing.T) {
 		t.Fatalf("Parse invite failed: %v", err)
 	}
 
-	_ = srv.StartInviteHandler(inviteMsg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5060})
+	_ = srv.StartInviteHandler(inviteMsg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 6050})
 
 	byeRaw := strings.Join([]string{
 		"BYE sip:user@domain.com SIP/2.0",
-		"Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK776asdhds",
+		"Via: SIP/2.0/UDP client.com:6050;branch=z9hG4bK776asdhds",
 		"To: <sip:user@domain.com>;tag=a6c85cf",
 		"From: <sip:caller@client.com>;tag=1928301774",
 		"Call-ID: callbye-1",
@@ -148,7 +148,7 @@ func TestSIPServer_HandleBye_ClosesSession(t *testing.T) {
 		t.Fatalf("Parse bye failed: %v", err)
 	}
 
-	resp := srv.StartByeHandler(byeMsg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5060})
+	resp := srv.StartByeHandler(byeMsg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 6050})
 	if resp == nil {
 		t.Fatalf("expected response, got nil")
 	}
@@ -157,9 +157,8 @@ func TestSIPServer_HandleBye_ClosesSession(t *testing.T) {
 	}
 
 	// Second BYE should not panic; it should return 200 anyway.
-	resp2 := srv.StartByeHandler(byeMsg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5060})
+	resp2 := srv.StartByeHandler(byeMsg, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 6050})
 	if resp2 == nil || resp2.StatusCode != 200 {
 		t.Fatalf("expected 200 on second BYE")
 	}
 }
-

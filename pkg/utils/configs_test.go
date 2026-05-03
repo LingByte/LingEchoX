@@ -275,6 +275,13 @@ INVALID_LINE
 	assert.True(t, found)
 	assert.Equal(t, "test_value_from_env", value, "环境变量应该优先于.env文件中的值")
 
+	// Empty process env should not block .env (deployment placeholders)
+	os.Setenv("TEST_ENV_KEY_FROM_FILE", "")
+	defer os.Unsetenv("TEST_ENV_KEY_FROM_FILE")
+	value, found = LookupEnv("TEST_ENV_KEY_FROM_FILE")
+	assert.True(t, found)
+	assert.Equal(t, "test_value_from_file", value)
+
 	// Test non-existent key
 	os.Unsetenv("NON_EXISTENT_KEY")
 	defer os.Unsetenv("NON_EXISTENT_KEY")
@@ -282,6 +289,101 @@ INVALID_LINE
 	value, found = LookupEnv("NON_EXISTENT_KEY")
 	assert.False(t, found)
 	assert.Equal(t, "", value)
+}
+
+func TestLookupEnv_SearchesUpwardsAndTrimsQuotes(t *testing.T) {
+	// Ensure process env doesn't mask file lookup
+	os.Unsetenv("SIP_TRANSFER_PORT")
+	defer os.Unsetenv("SIP_TRANSFER_PORT")
+
+	// Create a temp dir structure: parent/.env and parent/child (cwd)
+	parent := t.TempDir()
+	child := parent + string(os.PathSeparator) + "child"
+	err := os.MkdirAll(child, 0o755)
+	assert.NoError(t, err)
+
+	envContent := `
+SIP_TRANSFER_PORT="50400"
+SOME_OTHER_KEY=abc
+`
+	err = os.WriteFile(parent+string(os.PathSeparator)+".env", []byte(envContent), 0o644)
+	assert.NoError(t, err)
+
+	// Switch working dir to child, so LookupEnv must walk upwards.
+	origWD, err := os.Getwd()
+	assert.NoError(t, err)
+	defer func() { _ = os.Chdir(origWD) }()
+	err = os.Chdir(child)
+	assert.NoError(t, err)
+
+	// Purge any cached value from previous tests
+	if envCache != nil {
+		envCache.Purge()
+	}
+
+	v, ok := LookupEnv("SIP_TRANSFER_PORT")
+	assert.True(t, ok)
+	assert.Equal(t, "50400", v)
+}
+
+func TestLookupEnv_SupportsExportAndInlineComment(t *testing.T) {
+	os.Unsetenv("SIP_TRANSFER_PORT")
+	defer os.Unsetenv("SIP_TRANSFER_PORT")
+
+	parent := t.TempDir()
+	child := parent + string(os.PathSeparator) + "child"
+	err := os.MkdirAll(child, 0o755)
+	assert.NoError(t, err)
+
+	envContent := `
+export SIP_TRANSFER_PORT=50400 # comment here
+`
+	err = os.WriteFile(parent+string(os.PathSeparator)+".env", []byte(envContent), 0o644)
+	assert.NoError(t, err)
+
+	origWD, err := os.Getwd()
+	assert.NoError(t, err)
+	defer func() { _ = os.Chdir(origWD) }()
+	err = os.Chdir(child)
+	assert.NoError(t, err)
+
+	if envCache != nil {
+		envCache.Purge()
+	}
+
+	v, ok := LookupEnv("SIP_TRANSFER_PORT")
+	assert.True(t, ok)
+	assert.Equal(t, "50400", v)
+}
+
+func TestLookupEnv_DoesNotTruncateHashInsideValue(t *testing.T) {
+	os.Unsetenv("DSN")
+	defer os.Unsetenv("DSN")
+
+	parent := t.TempDir()
+	child := parent + string(os.PathSeparator) + "child"
+	err := os.MkdirAll(child, 0o755)
+	assert.NoError(t, err)
+
+	// Mimic real-world DSN where password may contain '#'
+	// (e.g. "ct288...##@tcp(host:port)/db?...").
+	envContent := "DSN=root:pass##word@tcp(127.0.0.1:3306)/testdb?charset=utf8mb4\n"
+	err = os.WriteFile(parent+string(os.PathSeparator)+".env", []byte(envContent), 0o644)
+	assert.NoError(t, err)
+
+	origWD, err := os.Getwd()
+	assert.NoError(t, err)
+	defer func() { _ = os.Chdir(origWD) }()
+	err = os.Chdir(child)
+	assert.NoError(t, err)
+
+	if envCache != nil {
+		envCache.Purge()
+	}
+
+	v, ok := LookupEnv("DSN")
+	assert.True(t, ok)
+	assert.Equal(t, "root:pass##word@tcp(127.0.0.1:3306)/testdb?charset=utf8mb4", v)
 }
 
 func TestGetBoolEnv(t *testing.T) {

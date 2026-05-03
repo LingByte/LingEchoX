@@ -9,6 +9,7 @@ import {
   FileText,
   Headphones,
   Menu,
+  Sparkles,
   X,
 } from 'lucide-react'
 import { useSidebar } from '@/contexts/SidebarContext'
@@ -36,6 +37,7 @@ const AdminSidebar = () => {
   const navigation: NavItem[] = [
     { name: 'SIP 用户', href: '/sip-users', icon: Users },
     { name: '通话记录', href: '/call-records', icon: Phone },
+    { name: '通话 AI 分析', href: '/call-analysis', icon: Sparkles },
     { name: '号码池', href: '/number-pool', icon: Hash },
     { name: '外呼任务', href: '/outbound-tasks', icon: PhoneCall },
     { name: '脚本管理', href: '/script-manager', icon: FileText },

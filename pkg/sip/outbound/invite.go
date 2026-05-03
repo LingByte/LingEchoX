@@ -48,7 +48,7 @@ func sipEscapeQuotedDisplay(s string) string {
 func formatOutboundFromHeader(displayName, user, host string, port int, tag string) string {
 	user = sanitizeSIPUser(user)
 	host = nonEmpty(host, "127.0.0.1")
-	port = nonZero(port, 5060)
+	port = nonZero(port, 6050)
 	uri := fmt.Sprintf("<sip:%s@%s:%d>", user, host, port)
 	dn := strings.TrimSpace(displayName)
 	if dn == "" {
@@ -60,7 +60,7 @@ func formatOutboundFromHeader(displayName, user, host string, port int, tag stri
 func formatOutboundContact(user, host string, port int) string {
 	user = sanitizeSIPUser(user)
 	host = nonEmpty(host, "127.0.0.1")
-	port = nonZero(port, 5060)
+	port = nonZero(port, 6050)
 	return fmt.Sprintf("<sip:%s@%s:%d>", user, host, port)
 }
 
@@ -86,7 +86,7 @@ func sanitizeSIPUser(user string) string {
 
 func buildINVITE(p inviteParams) *protocol.Message {
 	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
-		nonEmpty(p.SIPHost, "127.0.0.1"), nonZero(p.SIPPort, 5060), p.Branch)
+		nonEmpty(p.SIPHost, "127.0.0.1"), nonZero(p.SIPPort, 6050), p.Branch)
 
 	from := formatOutboundFromHeader(p.FromDisplayName, p.FromUser, p.SIPHost, p.SIPPort, p.FromTag)
 	to := formatToHeader(p.RequestURI)
@@ -137,13 +137,14 @@ func nonZero(n, def int) int {
 	return n
 }
 
-// defaultOfferCodecs orders wideband first so many carriers answer with Opus or G.722 instead of
-// locking to 8 kHz PCMU (muffled recordings). PCMU remains as a narrowband fallback.
+// defaultOfferCodecs orders codecs for the initial outbound offer.
+// Prefer G.711 PCMA first for maximum carrier interoperability; keep wideband codecs as fallback.
 func defaultOfferCodecs() []protocol.SDPCodec {
 	return []protocol.SDPCodec{
-		{PayloadType: 111, Name: "opus", ClockRate: 48000, Channels: 1},
-		{PayloadType: 9, Name: "g722", ClockRate: 8000, Channels: 1},
+		{PayloadType: 8, Name: "pcma", ClockRate: 8000, Channels: 1},
 		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
+		{PayloadType: 9, Name: "g722", ClockRate: 8000, Channels: 1},
+		{PayloadType: 111, Name: "opus", ClockRate: 48000, Channels: 1},
 		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000, Channels: 1},
 	}
 }
@@ -153,6 +154,7 @@ func defaultOfferCodecs() []protocol.SDPCodec {
 // Opus/48k (caller) ↔ PCM ↔ PCMU/8k (agent), avoiding brittle Opus↔Opus transcoding.
 func transferAgentBridgeOfferCodecs() []protocol.SDPCodec {
 	return []protocol.SDPCodec{
+		{PayloadType: 8, Name: "pcma", ClockRate: 8000, Channels: 1},
 		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
 		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000, Channels: 1},
 	}

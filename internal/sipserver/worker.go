@@ -403,7 +403,7 @@ func (s *CampaignService) resolveRegisteredDialTarget(ctx context.Context, phone
 		return outbound.DialTarget{}, false
 	}
 	domain := effectiveDialDomain(row.Domain, row.RemoteIP)
-	reqURI := fmt.Sprintf("sip:%s@%s:5060", row.Username, domain)
+	reqURI := fmt.Sprintf("sip:%s@%s:6050", row.Username, domain)
 	sig := row.RemoteIP + ":" + strconv.Itoa(row.RemotePort)
 	return outbound.DialTarget{RequestURI: reqURI, SignalingAddr: sig}, true
 }
@@ -507,7 +507,7 @@ func buildDialTarget(c models.SIPCampaign, ct models.SIPCampaignContact) (outbou
 	if host == "" {
 		return outbound.DialTarget{}, fmt.Errorf("SIP_OUTBOUND_HOST is required")
 	}
-	port := 5060
+	port := 6050
 	if s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundPort)); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 65535 {
 			port = n

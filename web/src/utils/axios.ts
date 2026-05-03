@@ -6,7 +6,7 @@ import { getApiBaseURL } from '../config/apiConfig'
 const axiosInstance: AxiosInstance = axios.create({
   // 统一走配置的后端地址；当 url 为绝对地址时 axios 会优先使用 url 本身
   baseURL: getApiBaseURL(),
-  timeout: 100000,
+  timeout: 1000000,
   headers: {
     'Content-Type': 'application/json',
   },

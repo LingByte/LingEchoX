@@ -87,10 +87,12 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 		return nil, fmt.Errorf("sip: empty sdp codecs")
 	}
 	preferredCodecs := map[string]int{
-		"opus": 0,
-		"g722": 1,
-		"pcmu": 2,
-		"pcma": 3,
+		// Prefer narrowband G.711 A-law first for best PSTN/carrier interoperability.
+		// Order matters when multiple codecs are offered; we pick the first supported.
+		"pcma": 0,
+		"pcmu": 1,
+		"g722": 2,
+		"opus": 3,
 	}
 	codecs := make([]sipprotocol.SDPCodec, len(sdpCodecs))
 	copy(codecs, sdpCodecs)

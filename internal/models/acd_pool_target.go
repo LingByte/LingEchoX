@@ -103,10 +103,10 @@ func NormalizeACDWorkState(s string) string {
 	}
 }
 
-// NormalizeACDTrunkPort returns a valid SIP port or 5060.
+// NormalizeACDTrunkPort returns a valid SIP port or 6050.
 func NormalizeACDTrunkPort(p int) int {
 	if p <= 0 || p >= 65536 {
-		return 5060
+		return 6050
 	}
 	return p
 }

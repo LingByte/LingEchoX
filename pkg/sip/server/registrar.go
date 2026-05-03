@@ -137,10 +137,10 @@ func parseContactUDPAddr(contact string, src *net.UDPAddr) *net.UDPAddr {
 	}
 	host, pstr, err := net.SplitHostPort(hostport)
 	if err != nil {
-		// no port in URI — use default 5060 for SIP
+		// no port in URI — use default 6050 for SIP
 		ip := net.ParseIP(hostport)
 		if ip != nil {
-			return &net.UDPAddr{IP: ip, Port: 5060}
+			return &net.UDPAddr{IP: ip, Port: 6050}
 		}
 		if src != nil {
 			return src
@@ -149,7 +149,7 @@ func parseContactUDPAddr(contact string, src *net.UDPAddr) *net.UDPAddr {
 	}
 	port, err := strconv.Atoi(pstr)
 	if err != nil || port <= 0 {
-		port = 5060
+		port = 6050
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -252,7 +252,7 @@ func prependProxyVia(msg *protocol.Message, sipHost string, sipPort int) {
 		return
 	}
 	if sipPort <= 0 {
-		sipPort = 5060
+		sipPort = 6050
 	}
 	h := strings.TrimSpace(sipHost)
 	if h == "" {

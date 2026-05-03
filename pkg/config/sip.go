@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/utils"
+	"go.uber.org/zap"
 )
 
 // SIPDialEnv holds outbound dial fields parsed from environment. Callers map this to
@@ -44,10 +46,13 @@ func DialTargetFromEnv() (t SIPDialEnv, ok bool) {
 		return SIPDialEnv{}, false
 	}
 
-	port := 5060
+	port := 6050
 	if ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundPort)); ps != "" {
 		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
 			port = p
+			logger.Info("parse ture", zap.Int("port", port))
+		} else {
+			logger.Error("parse error", zap.Error(err))
 		}
 	}
 
@@ -97,7 +102,15 @@ func TransferDialTargetFromEnv() (t SIPDialEnv, ok bool) {
 	reqURI := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferReqURI))
 	sig := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferSigAddr))
 
+	debugEnv := utils.GetBoolEnv("SIP_DEBUG_ENV")
+
 	if reqURI != "" {
+		if debugEnv {
+			logger.Info("sip transfer env: using explicit request uri + signaling addr (overrides host/port)",
+				zap.String("SIP_TRANSFER_REQUEST_URI", reqURI),
+				zap.String("SIP_TRANSFER_SIGNALING_ADDR", sig),
+			)
+		}
 		if sig == "" {
 			return SIPDialEnv{}, false
 		}
@@ -115,11 +128,24 @@ func TransferDialTargetFromEnv() (t SIPDialEnv, ok bool) {
 		return SIPDialEnv{}, false
 	}
 
-	port := 5060
-	if ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferPort)); ps != "" {
+	port := 50400
+	ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferPort))
+	if ps != "" {
 		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
 			port = p
+			logger.Info("parse ture", zap.Int("port", port))
+		} else {
+			logger.Error("parse error", zap.Error(err))
 		}
+	}
+	if debugEnv {
+		logger.Info("sip transfer env: using number + host + port",
+			zap.String("SIP_TRANSFER_NUMBER", num),
+			zap.String("SIP_TRANSFER_HOST", host),
+			zap.String("SIP_TRANSFER_PORT", ps),
+			zap.Int("chosen_port", port),
+			zap.String("SIP_TRANSFER_SIGNALING_ADDR", sig),
+		)
 	}
 
 	t.RequestURI = fmt.Sprintf("sip:%s@%s:%d", num, host, port)

@@ -15,8 +15,8 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
-	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
 	"go.uber.org/zap"
 )
 
@@ -155,8 +155,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		cfg.FromUser = "soulnexus"
 	}
 	return &Manager{
-		cfg:     cfg,
-		legs:    make(map[string]*outLeg),
+		cfg:      cfg,
+		legs:     make(map[string]*outLeg),
 		legsByTx: make(map[string]*outLeg),
 	}
 }
@@ -223,7 +223,7 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 
 	localPort := m.cfg.SIPPort
 	if localPort <= 0 {
-		localPort = 5060
+		localPort = 6050
 	}
 	lh := strings.TrimSpace(m.cfg.SIPHost)
 	if lh != "" && addr.IP != nil && addr.Port == localPort {
@@ -262,7 +262,7 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 	}
 	port := m.cfg.SIPPort
 	if port <= 0 {
-		port = 5060
+		port = 6050
 	}
 
 	fromUser := m.cfg.FromUser

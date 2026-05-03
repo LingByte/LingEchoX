@@ -63,6 +63,11 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		g.GET("/campaigns/metrics", h.getSIPCampaignMetrics)
 		g.GET("/campaigns/worker-metrics", h.getSIPCampaignWorkerMetrics)
 		g.GET("/campaigns/:id/logs", h.getSIPCampaignLogs)
+
+		g.POST("/call-analysis", h.createCallAnalysis)
+		g.GET("/call-analysis/ws", h.callAnalysisWebSocket)
+		g.GET("/call-analysis/:id", h.getCallAnalysis)
+		g.GET("/call-analysis/:id/export.json", h.exportCallAnalysisJSON)
 	}
 }
 

@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"github.com/LingByte/SoulNexus/internal/sipserver"
+	"github.com/LingByte/SoulNexus/pkg/callanalysis"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/gin-gonic/gin"
@@ -12,13 +13,15 @@ import (
 )
 
 type Handlers struct {
-	db          *gorm.DB
-	campaignSvc *sipserver.CampaignService
+	db                *gorm.DB
+	campaignSvc       *sipserver.CampaignService
+	callAnalysisStore *callanalysis.Store
 }
 
 func NewHandlers(db *gorm.DB) *Handlers {
 	return &Handlers{
-		db: db,
+		db:                db,
+		callAnalysisStore: callanalysis.NewStore(),
 	}
 }
 

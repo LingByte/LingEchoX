@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -261,6 +262,24 @@ func errorsIsCtxDone(err error) bool {
 	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
+// sipTransferGoodbyeTailWait is extra wall time after the last goodbye PCM frame is queued, so playout
+// can finish before BYE (RTP jitter buffer / far-end playout). Override with SIP_TRANSFER_GOODBYE_TAIL_MS (milliseconds).
+func sipTransferGoodbyeTailWait() time.Duration {
+	const defaultMS = 900
+	raw := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_GOODBYE_TAIL_MS"))
+	if raw == "" {
+		return defaultMS * time.Millisecond
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return defaultMS * time.Millisecond
+	}
+	if n > 120000 {
+		n = 120000
+	}
+	return time.Duration(n) * time.Millisecond
+}
+
 func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *zap.Logger) {
 	inbound := lookupInboundSession(inboundCallID)
 	if inbound == nil {
@@ -286,7 +305,19 @@ func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *z
 		RequestSIPHangup(inboundCallID)
 		return
 	}
-	runCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	// Allow full WAV plus margin; a short cap used to avoid hanging forever if the session never ends.
+	pcmSecs := len(pcm) / (16000 * 2)
+	if pcmSecs < 1 {
+		pcmSecs = 1
+	}
+	maxRun := time.Duration(pcmSecs)*time.Second + 25*time.Second
+	if maxRun < 45*time.Second {
+		maxRun = 45 * time.Second
+	}
+	if maxRun > 3*time.Minute {
+		maxRun = 3 * time.Minute
+	}
+	runCtx, cancel := context.WithTimeout(ctx, maxRun)
 	defer cancel()
 	bytesPerFrame := 16000 * 2 * 20 / 1000
 	if bytesPerFrame <= 0 {
@@ -316,6 +347,14 @@ func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *z
 			Payload:       frame,
 			IsSynthesized: true,
 		})
+	}
+	tail := sipTransferGoodbyeTailWait()
+	timer := time.NewTimer(tail)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-runCtx.Done():
+	case <-ms.GetContext().Done():
 	}
 	RequestSIPHangup(inboundCallID)
 }

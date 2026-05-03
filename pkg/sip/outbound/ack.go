@@ -26,7 +26,7 @@ func buildACK(inv inviteParams, resp200 *protocol.Message, requestURI string) *p
 	}
 	// Via must match INVITE (single Via for our client)
 	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
-		nonEmpty(inv.SIPHost, "127.0.0.1"), nonZero(inv.SIPPort, 5060), inv.Branch)
+		nonEmpty(inv.SIPHost, "127.0.0.1"), nonZero(inv.SIPPort, 6050), inv.Branch)
 	msg.SetHeader("Via", via)
 	msg.SetHeader("Max-Forwards", "70")
 

@@ -5,6 +5,7 @@ package utils
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -89,34 +90,109 @@ func GetIntEnvWithDefault(key string, defaultValue int) int {
 func LookupEnv(key string) (value string, found bool) {
 	key = strings.ToUpper(key)
 	if v, ok := os.LookupEnv(key); ok {
-		if envCache != nil {
-			envCache.Add(key, v)
+		if strings.TrimSpace(v) != "" {
+			if envCache != nil {
+				envCache.Add(key, v)
+			}
+			return v, true
 		}
-		return v, true
+		// Variable is set in the process environment but empty (e.g. systemd placeholder).
+		// Drop any stale cache entry so .env can supply the value below.
+		if envCache != nil {
+			envCache.Remove(key)
+		}
 	}
 	if envCache != nil {
 		if v, ok := envCache.Get(key); ok {
 			return v, true
 		}
 	}
-	data, err := os.ReadFile(".env")
-	if err == nil {
-		lines := strings.Split(string(data), "\n")
-		for i := 0; i < len(lines); i++ {
-			v := strings.TrimSpace(lines[i])
-			if v == "" || v[0] == '#' || !strings.Contains(v, "=") {
-				continue
-			}
-			vs := strings.SplitN(v, "=", 2)
-			k, vv := strings.ToUpper(strings.TrimSpace(vs[0])), strings.TrimSpace(vs[1])
+	if p, ok := findEnvFileUpwards(".env"); ok {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			lines := strings.Split(string(data), "\n")
+			for i := 0; i < len(lines); i++ {
+				v := strings.TrimSpace(lines[i])
+				if v == "" || v[0] == '#' || !strings.Contains(v, "=") {
+					continue
+				}
+				vs := strings.SplitN(v, "=", 2)
+				k, vv := normalizeEnvKey(vs[0]), trimEnvValue(strings.TrimSpace(vs[1]))
+				if k == "" {
+					continue
+				}
 
-			if envCache != nil {
-				envCache.Add(k, vv)
-			}
-			if k == key {
-				return vv, true
+				if envCache != nil {
+					envCache.Add(k, vv)
+				}
+				if k == key {
+					return vv, true
+				}
 			}
 		}
+	}
+	return "", false
+}
+
+func trimEnvValue(v string) string {
+	v = strings.TrimSpace(v)
+	// If the value is not quoted, strip trailing inline comments.
+	// Common .env style: KEY=value # comment
+	if v != "" && v[0] != '"' && v[0] != '\'' {
+		// Only treat # as comment when preceded by whitespace, so values like passwords
+		// containing '#' (e.g. "pass##word") are not truncated.
+		for i := 0; i < len(v); i++ {
+			if v[i] != '#' {
+				continue
+			}
+			if i > 0 && (v[i-1] == ' ' || v[i-1] == '\t') {
+				v = strings.TrimSpace(v[:i])
+				break
+			}
+		}
+	}
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+			return strings.TrimSpace(v[1 : len(v)-1])
+		}
+	}
+	return v
+}
+
+func normalizeEnvKey(k string) string {
+	k = strings.TrimSpace(k)
+	if k == "" {
+		return ""
+	}
+	// Support "export KEY=VALUE" style.
+	if strings.HasPrefix(strings.ToLower(k), "export ") {
+		k = strings.TrimSpace(k[len("export "):])
+	}
+	return strings.ToUpper(strings.TrimSpace(k))
+}
+
+// findEnvFileUpwards searches for filename from the current working directory upwards.
+// This makes .env discovery robust when the process starts from a subdirectory (e.g. cmd/server).
+func findEnvFileUpwards(filename string) (path string, ok bool) {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		return "", false
+	}
+	dir, err := os.Getwd()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return "", false
+	}
+	dir = filepath.Clean(dir)
+	for {
+		cand := filepath.Join(dir, filename)
+		if st, err := os.Stat(cand); err == nil && st != nil && !st.IsDir() {
+			return cand, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return "", false
 }
@@ -284,7 +360,10 @@ func LoadEnv(env string) error {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
+		if strings.HasPrefix(strings.ToLower(key), "export ") {
+			key = strings.TrimSpace(key[len("export "):])
+		}
+	value := trimEnvValue(strings.TrimSpace(parts[1]))
 		os.Setenv(key, value)
 	}
 

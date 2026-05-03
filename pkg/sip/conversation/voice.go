@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LingByte/SoulNexus/pkg/intentonnx"
 	"github.com/LingByte/SoulNexus/pkg/llm"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/media"
@@ -81,23 +82,6 @@ func consumeSIPTransferPending(callID string) bool {
 	v := sipTransferPendingByCallID[callID]
 	delete(sipTransferPendingByCallID, callID)
 	return v
-}
-
-func shouldFallbackTransferByText(userText string) bool {
-	s := strings.TrimSpace(userText)
-	if s == "" {
-		return false
-	}
-	// 简单兜底：用户明确要求“转人工/转客服/真人客服”等时，即使模型未触发 tool 也执行转接。
-	keywords := []string{
-		"转人工", "转接人工", "人工客服", "真人客服", "转客服", "找人工",
-	}
-	for _, kw := range keywords {
-		if strings.Contains(s, kw) {
-			return true
-		}
-	}
-	return false
 }
 
 // VoiceEnv holds SIP voice pipeline settings read with utils.GetEnv (see SoulNexus .env).
@@ -502,10 +486,15 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				zap.String("trigger", trigger),
 			)
 
+			routeText := intentonnx.NormalizeTranscript(userText)
+
 			var reply string
 			var err error
 			pipelineT0 := time.Now()
 			var streamMeta StreamTurnTimings
+			var usedIntentONNX bool
+			var usedTwoPhaseTTS bool // ONNX short line then LLM (sequential, no overlap)
+			var intentRoutedName string // ONNX classified intent (for persist) even when answer comes from LLM
 			if scriptMode {
 				// Persist only on ASR final to avoid duplicate sip_calls.turns rows when partial ASR is enabled.
 				if asrIsFinal {
@@ -527,7 +516,65 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				}()
 				ttsPlaying.Store(true)
 				ttsStartedAtNS.Store(time.Now().UnixNano())
-				reply, streamMeta, err = streamLLMToTTS(ms.GetContext(), llmProvider, llmModel, userText, ttsPipe, lg)
+				if eng, icfg, ok := sipIntentEngine(lg); ok {
+					out, ierr := eng.Route(routeText, icfg, sipIntentRouteOptions())
+					if ierr == nil && out != nil {
+						out = sipIntentEnforceTransferLiteral(routeText, out, lg)
+					}
+					if ierr != nil {
+						lg.Warn("sip intent onnx route", zap.Error(ierr))
+						reply, streamMeta, err = streamLLMToTTS(ms.GetContext(), llmProvider, llmModel, userText, ttsPipe, lg)
+					} else if out.Channel == intentonnx.AnswerChannelIntent && strings.TrimSpace(out.Reply) != "" {
+						intentRoutedName = out.Prediction.IntentName
+						wantCanned := sipIntentReplyUsesCannedOnly(out.Prediction.IntentName)
+						explicitOK := sipIntentExplicitCannedAllowed(out.Prediction.IntentName, routeText)
+						if wantCanned && explicitOK {
+							usedIntentONNX = true
+							lg.Info("sip voice intent onnx canned (no llm for this turn)",
+								zap.String("call_id", cs.CallID),
+								zap.String("intent", out.Prediction.IntentName),
+								zap.Float64("confidence", out.Prediction.Confidence),
+								zap.Bool("keyword_bias", out.Prediction.KeywordBiasApplied),
+							)
+							reply, streamMeta, err = streamPlainTextToTTS(ms.GetContext(), out.Reply, ttsPipe, lg)
+						} else {
+							if wantCanned && !explicitOK {
+								lg.Info("sip voice intent onnx strict canned: model intent without explicit user phrase, llm fallback",
+									zap.String("call_id", cs.CallID),
+									zap.String("intent", out.Prediction.IntentName),
+									zap.Float64("confidence", out.Prediction.Confidence),
+								)
+							}
+							llmIn := sipIntentAugmentUserTextForLLM(userText, out)
+							if sipIntentUsesTwoPhaseQueuedTTS(out.Prediction.IntentName) && strings.TrimSpace(out.Reply) != "" &&
+								sipIntentExplicitCannedAllowed(out.Prediction.IntentName, routeText) {
+								usedTwoPhaseTTS = true
+								lg.Info("sip voice intent two-phase tts: onnx line then llm (llm request overlaps phase1 tts)",
+									zap.String("call_id", cs.CallID),
+									zap.String("intent", out.Prediction.IntentName),
+									zap.Float64("confidence", out.Prediction.Confidence),
+									zap.Bool("llm_input_augmented", llmIn != userText),
+								)
+								reply, streamMeta, err = sipVoiceTwoPhaseIntentTTS(ms.GetContext(), out.Reply, llmIn, llmProvider, llmModel, ttsPipe, lg, func() {
+									ttsPlaying.Store(true)
+									ttsStartedAtNS.Store(time.Now().UnixNano())
+								})
+							} else {
+								lg.Info("sip voice intent onnx + llm (intent fed into LLM prompt, single TTS answer)",
+									zap.String("call_id", cs.CallID),
+									zap.String("intent", out.Prediction.IntentName),
+									zap.Float64("confidence", out.Prediction.Confidence),
+									zap.Bool("llm_input_augmented", llmIn != userText),
+								)
+								reply, streamMeta, err = streamLLMToTTS(ms.GetContext(), llmProvider, llmModel, llmIn, ttsPipe, lg)
+							}
+						}
+					} else {
+						reply, streamMeta, err = streamLLMToTTS(ms.GetContext(), llmProvider, llmModel, userText, ttsPipe, lg)
+					}
+				} else {
+					reply, streamMeta, err = streamLLMToTTS(ms.GetContext(), llmProvider, llmModel, userText, ttsPipe, lg)
+				}
 			}
 			if err != nil {
 				lg.Warn("sip voice llm/tts", zap.Error(err))
@@ -544,38 +591,47 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				// In script mode, output is controlled by script steps (say/llm_reply). Do not auto-play here.
 				return
 			}
+			explicitXfer := sipIntentExplicitTransferRequest(routeText)
+			transferNow := false
 			if ap, ok := llmProvider.(*llm.AlibabaProvider); ok {
 				if action := ap.ConsumePendingAction(); action == "transfer_to_agent" {
-					if ms != nil && ms.GetContext().Err() == nil {
-						lg.Info("sip voice: transfer after ai tts confirmation",
-							zap.String("call_id", cs.CallID),
-						)
-						TriggerTransferToAgent(context.Background(), cs.CallID, lg)
-					}
+					transferNow = true
+				} else if explicitXfer {
+					// Previously only tool path ran for Alibaba; explicit 「转人工」话术 never reached fallback.
+					transferNow = true
 				}
-			} else if consumeSIPTransferPending(cs.CallID) || shouldFallbackTransferByText(userText) {
-				if ms != nil && ms.GetContext().Err() == nil {
-					lg.Info("sip voice: transfer after ai tts confirmation (tool/fallback)",
-						zap.String("call_id", cs.CallID),
-					)
-					TriggerTransferToAgent(context.Background(), cs.CallID, lg)
-				}
+			} else if consumeSIPTransferPending(cs.CallID) || explicitXfer {
+				transferNow = true
+			}
+			if transferNow && ms != nil && ms.GetContext().Err() == nil {
+				lg.Info("sip voice: transfer after ai tts confirmation",
+					zap.String("call_id", cs.CallID),
+					zap.Bool("explicit_transfer_phrase", explicitXfer),
+				)
+				TriggerTransferToAgent(context.Background(), cs.CallID, lg)
 			}
 			if scriptMode {
 				lg.Info("sip voice llm reply (script no-autoplay)", zap.Int("reply_chars", len(reply)))
 			} else {
-				lg.Info("sip voice llm reply", zap.Int("reply_chars", len(reply)))
+				lg.Info("sip voice assistant reply", zap.Int("reply_chars", len(reply)), zap.Bool("intent_onnx_canned", usedIntentONNX), zap.Bool("intent_two_phase_tts", usedTwoPhaseTTS), zap.String("intent_route", intentRoutedName))
 			}
 			asrProv := "qcloud_asr"
 			if env.ASRModelType != "" {
 				asrProv = env.ASRModelType
 			}
-			go persistSIPTurn(context.Background(), cs.CallID, DialogTurn{
+			dtModel := llmModel
+			routeIntent := strings.TrimSpace(intentRoutedName)
+			if usedIntentONNX {
+				dtModel = "intent_onnx"
+			}
+			dt := DialogTurn{
 				ASRText: userText, LLMText: reply, ASRProvider: asrProv,
-				LLMModel: llmModel, TTSProvider: "qcloud_tts", Trigger: trigger,
-				LLMFirstMs: streamMeta.LLMFirstMs, LLMWallMs: streamMeta.LLMWallMs,
+				LLMModel: dtModel, TTSProvider: "qcloud_tts", Trigger: trigger,
+				RouteIntent: routeIntent,
+				LLMFirstMs:  streamMeta.LLMFirstMs, LLMWallMs: streamMeta.LLMWallMs,
 				TTSMs: streamMeta.TTSMs, PipelineMs: int(time.Since(pipelineT0).Milliseconds()),
-			})
+			}
+			go persistSIPTurn(context.Background(), cs.CallID, dt)
 		}(userText, asrIsFinal, trigger)
 	}
 
@@ -707,15 +763,20 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				pcmASR = out
 			}
 			// RMS VAD on 16 kHz PCM (same as media decode path); only while TTS is playing.
+			// Do not return early here: skipping ProcessPCM would drop user audio to ASR for the whole window.
+			allowBargeIn := true
 			if vadDet != nil && ttsPlaying.Load() {
-				// Ignore very early frames right after TTS starts; they are often acoustic echo artifacts.
 				if started := ttsStartedAtNS.Load(); started > 0 && time.Since(time.Unix(0, started)) < 700*time.Millisecond {
-					return nil
+					// Ignore barge-in only; still feed ASR below.
+					allowBargeIn = false
 				}
 			}
-			if vadDet != nil && ttsPlaying.Load() && vadDet.CheckBargeIn(pcm16, true) {
+			if allowBargeIn && vadDet != nil && ttsPlaying.Load() && vadDet.CheckBargeIn(pcm16, true) {
 				lg.Info("sip voice: RMS barge-in, stopping TTS", zap.String("call_id", cs.CallID))
 				ttsPipe.Stop()
+				// Stop() cancels the pipeline ctx used by Speak(); re-Start so a later Speak in the same turn
+				// (e.g. two-phase: LLM line after ONNX line) is not stuck on a dead context.
+				ttsPipe.Start(ms.GetContext())
 				ttsPlaying.Store(false)
 				ttsStartedAtNS.Store(0)
 			}
@@ -815,6 +876,163 @@ func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger,
 		})
 	}
 	return nil
+}
+
+// streamPlainTextToTTS speaks fixed text without calling an LLM (intent / script short-circuit).
+func streamPlainTextToTTS(ctx context.Context, text string, ttsPipe *siptts.Pipeline, lg *zap.Logger) (string, StreamTurnTimings, error) {
+	var meta StreamTurnTimings
+	if ttsPipe == nil {
+		return "", meta, fmt.Errorf("nil tts pipe")
+	}
+	text = normalizeTTSText(strings.TrimSpace(text))
+	if text == "" {
+		return "", meta, nil
+	}
+	t0 := time.Now()
+	if err := ttsPipe.Speak(text); err != nil {
+		meta.TTSMs = int(time.Since(t0).Milliseconds())
+		if errors.Is(err, context.Canceled) {
+			return text, meta, nil
+		}
+		return "", meta, err
+	}
+	meta.TTSMs = int(time.Since(t0).Milliseconds())
+	return text, meta, nil
+}
+
+// sipLLMQueryTextNoTTS runs LLM completion without speaking (used to overlap LLM latency with phase-1 TTS).
+func sipLLMQueryTextNoTTS(ctx context.Context, llmProvider llm.LLMProvider, model, userText string, lg *zap.Logger) (string, StreamTurnTimings, error) {
+	var meta StreamTurnTimings
+	if llmProvider == nil {
+		return "", meta, fmt.Errorf("nil llm provider")
+	}
+	if _, isAlibaba := llmProvider.(*llm.AlibabaProvider); isAlibaba {
+		t0 := time.Now()
+		reply, err := llmProvider.Query(userText, model)
+		meta.LLMWallMs = int(time.Since(t0).Milliseconds())
+		meta.LLMFirstMs = meta.LLMWallMs
+		if err != nil {
+			return "", meta, err
+		}
+		reply = normalizeTTSText(strings.TrimSpace(reply))
+		return reply, meta, nil
+	}
+	streamStart := time.Now()
+	gotFirst := false
+	var full strings.Builder
+	options := llm.QueryOptions{Model: model, Stream: true}
+	reply, err := llmProvider.QueryStream(userText, options, func(piece string, _ bool) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		piece = strings.TrimSpace(piece)
+		if piece == "" {
+			return nil
+		}
+		if !gotFirst {
+			meta.LLMFirstMs = int(time.Since(streamStart).Milliseconds())
+			gotFirst = true
+		}
+		full.WriteString(piece)
+		return nil
+	})
+	meta.LLMWallMs = int(time.Since(streamStart).Milliseconds())
+	if err != nil {
+		t0 := time.Now()
+		reply, err = llmProvider.Query(userText, model)
+		meta.LLMWallMs = int(time.Since(t0).Milliseconds())
+		meta.LLMFirstMs = meta.LLMWallMs
+		if err != nil {
+			return "", meta, err
+		}
+	}
+	out := strings.TrimSpace(reply)
+	if out == "" {
+		out = strings.TrimSpace(full.String())
+	}
+	out = normalizeTTSText(out)
+	return out, meta, nil
+}
+
+type sipTwoPhaseLLMResult struct {
+	text string
+	meta StreamTurnTimings
+	err  error
+}
+
+// sipVoiceTwoPhaseIntentTTS plays ONNX-configured short reply first, then LLM answer (sequential TTS, no overlap).
+// The LLM request starts in parallel with phase-1 playback so DashScope latency overlaps TTS wall time.
+// resumeTTSDetection is called immediately before the LLM TTS segment so RMS barge-in applies again after phase1.
+func sipVoiceTwoPhaseIntentTTS(ctx context.Context, phase1 string, llmIn string, llmProvider llm.LLMProvider, llmModel string, ttsPipe *siptts.Pipeline, lg *zap.Logger, resumeTTSDetection func()) (string, StreamTurnTimings, error) {
+	ch := make(chan sipTwoPhaseLLMResult, 1)
+	go func() {
+		t, m, e := sipLLMQueryTextNoTTS(ctx, llmProvider, llmModel, llmIn, lg)
+		ch <- sipTwoPhaseLLMResult{text: t, meta: m, err: e}
+	}()
+
+	var meta StreamTurnTimings
+	p1, m1, err1 := streamPlainTextToTTS(ctx, phase1, ttsPipe, lg)
+	lr := <-ch
+
+	if err1 != nil {
+		if errors.Is(err1, context.Canceled) {
+			return strings.TrimSpace(p1), m1, err1
+		}
+		if lg != nil {
+			lg.Warn("two-phase phase1 tts failed", zap.Error(err1))
+		}
+		if resumeTTSDetection != nil {
+			resumeTTSDetection()
+		}
+		if lr.err == nil && strings.TrimSpace(lr.text) != "" {
+			r2, m2, err2 := streamPlainTextToTTS(ctx, lr.text, ttsPipe, lg)
+			meta.TTSMs = m1.TTSMs + m2.TTSMs
+			meta.LLMFirstMs = lr.meta.LLMFirstMs
+			meta.LLMWallMs = lr.meta.LLMWallMs
+			reply := mergeTwoPhaseReply(p1, r2)
+			return reply, meta, err2
+		}
+		return streamLLMToTTS(ctx, llmProvider, llmModel, llmIn, ttsPipe, lg)
+	}
+	if ctx.Err() != nil {
+		meta.TTSMs = m1.TTSMs
+		meta.LLMFirstMs = lr.meta.LLMFirstMs
+		meta.LLMWallMs = lr.meta.LLMWallMs
+		return strings.TrimSpace(p1), meta, ctx.Err()
+	}
+	if resumeTTSDetection != nil {
+		resumeTTSDetection()
+	}
+	var r2 string
+	var m2 StreamTurnTimings
+	var err2 error
+	if lr.err != nil {
+		if lg != nil {
+			lg.Warn("two-phase parallel llm failed, streaming llm+tts", zap.Error(lr.err))
+		}
+		r2, m2, err2 = streamLLMToTTS(ctx, llmProvider, llmModel, llmIn, ttsPipe, lg)
+		meta.LLMFirstMs = m2.LLMFirstMs
+		meta.LLMWallMs = m2.LLMWallMs
+	} else {
+		r2, m2, err2 = streamPlainTextToTTS(ctx, lr.text, ttsPipe, lg)
+		meta.LLMFirstMs = lr.meta.LLMFirstMs
+		meta.LLMWallMs = lr.meta.LLMWallMs
+	}
+	meta.TTSMs = m1.TTSMs + m2.TTSMs
+	return mergeTwoPhaseReply(p1, r2), meta, err2
+}
+
+func mergeTwoPhaseReply(p1, r2 string) string {
+	p1s := strings.TrimSpace(p1)
+	r2s := strings.TrimSpace(r2)
+	reply := normalizeTTSText(strings.TrimSpace(p1s + " " + r2s))
+	if reply == "" {
+		reply = normalizeTTSText(p1s)
+		if reply == "" {
+			reply = normalizeTTSText(r2s)
+		}
+	}
+	return reply
 }
 
 func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, userText string, ttsPipe *siptts.Pipeline, lg *zap.Logger) (string, StreamTurnTimings, error) {

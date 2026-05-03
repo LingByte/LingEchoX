@@ -8,8 +8,8 @@ import (
 func TestParse_SIPRequest(t *testing.T) {
 	raw := strings.Join([]string{
 		"INVITE sip:user@domain.com SIP/2.0",
-		"Via: SIP/2.0/UDP a.example.com:5060;branch=z9hG4bK1",
-		"Via: SIP/2.0/UDP b.example.com:5060;branch=z9hG4bK2",
+		"Via: SIP/2.0/UDP a.example.com:6050;branch=z9hG4bK1",
+		"Via: SIP/2.0/UDP b.example.com:6050;branch=z9hG4bK2",
 		"Call-Id: abc123",
 		"Content-Type: application/sdp",
 		"Content-Length: 0",
@@ -136,6 +136,28 @@ func TestGenerateSDP_RoundTrip_CanParse(t *testing.T) {
 	}
 }
 
+func TestGenerateSDP_MAudioPayloadOrderPreserved(t *testing.T) {
+	codecs := []SDPCodec{
+		{PayloadType: 8, Name: "pcma", ClockRate: 8000},
+		{PayloadType: 111, Name: "opus", ClockRate: 48000, Channels: 1},
+		{PayloadType: 0, Name: "pcmu", ClockRate: 8000},
+		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000},
+	}
+	body := GenerateSDP("127.0.0.1", 5004, codecs)
+	info, err := ParseSDP(body)
+	if err != nil {
+		t.Fatalf("ParseSDP failed: %v", err)
+	}
+	if len(info.Codecs) != len(codecs) {
+		t.Fatalf("codec count mismatch: got=%d want=%d", len(info.Codecs), len(codecs))
+	}
+	for i := range codecs {
+		if info.Codecs[i].PayloadType != codecs[i].PayloadType || info.Codecs[i].Name != codecs[i].Name {
+			t.Fatalf("codec[%d] mismatch: got=%#v want=%#v", i, info.Codecs[i], codecs[i])
+		}
+	}
+}
+
 func TestIsSIPSignalingNoiseDatagram(t *testing.T) {
 	if !isSIPSignalingNoiseDatagram([]byte("\r\n\r\n")) {
 		t.Fatal("expected CRLFCRLF keepalive")
@@ -150,4 +172,3 @@ func TestIsSIPSignalingNoiseDatagram(t *testing.T) {
 		t.Fatal("empty is not noise (handled elsewhere)")
 	}
 }
-

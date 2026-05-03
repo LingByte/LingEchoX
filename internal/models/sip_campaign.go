@@ -43,9 +43,9 @@ type SIPCampaign struct {
 	MaxAttempts     int            `json:"maxAttempts" gorm:"default:3"`
 	MaxCallDuration int            `json:"maxCallDuration" gorm:"default:180"` // seconds
 	OutboundHost    string         `json:"outboundHost" gorm:"size:128"`
-	OutboundPort    int            `json:"outboundPort" gorm:"default:5060"`
+	OutboundPort    int            `json:"outboundPort" gorm:"default:6050"`
 	SignalingAddr   string         `json:"signalingAddr" gorm:"size:128"`
-	RequestURIFmt   string         `json:"requestUriFmt" gorm:"size:256"` // e.g. sip:%s@gw.local:5060
+	RequestURIFmt   string         `json:"requestUriFmt" gorm:"size:256"` // e.g. sip:%s@gw.local:6050
 
 	TaskConcurrency   int            `json:"taskConcurrency" gorm:"default:5"`
 	GlobalConcurrency int            `json:"globalConcurrency" gorm:"default:20"`
@@ -116,21 +116,21 @@ func (SIPCallAttempt) TableName() string {
 type SIPScriptRun struct {
 	BaseModel
 
-	CampaignID    uint           `json:"campaignId" gorm:"index;not null"`
-	ContactID     uint           `json:"contactId" gorm:"index"`
-	AttemptID     uint           `json:"attemptId" gorm:"index"`
-	CallID        string         `json:"callId" gorm:"size:128;index"`
-	CorrelationID string         `json:"correlationId" gorm:"size:128;index"`
-	ScriptID      string         `json:"scriptId" gorm:"size:128;index"`
-	ScriptVersion string         `json:"scriptVersion" gorm:"size:64"`
-	StepID        string         `json:"stepId" gorm:"size:128;index"`
-	StepType      string         `json:"stepType" gorm:"size:32"`
-	Result        string         `json:"result" gorm:"size:32"` // ok|timeout|retry|skipped|failed
-	InputText     string         `json:"inputText" gorm:"type:text"`
-	OutputText    string         `json:"outputText" gorm:"type:text"`
+	CampaignID    uint   `json:"campaignId" gorm:"index;not null"`
+	ContactID     uint   `json:"contactId" gorm:"index"`
+	AttemptID     uint   `json:"attemptId" gorm:"index"`
+	CallID        string `json:"callId" gorm:"size:128;index"`
+	CorrelationID string `json:"correlationId" gorm:"size:128;index"`
+	ScriptID      string `json:"scriptId" gorm:"size:128;index"`
+	ScriptVersion string `json:"scriptVersion" gorm:"size:64"`
+	StepID        string `json:"stepId" gorm:"size:128;index"`
+	StepType      string `json:"stepType" gorm:"size:32"`
+	Result        string `json:"result" gorm:"size:32"` // ok|timeout|retry|skipped|failed
+	InputText     string `json:"inputText" gorm:"type:text"`
+	OutputText    string `json:"outputText" gorm:"type:text"`
 	// DurationMs is wall time from step entry to this audit row (ms); Started rows are ~0.
-	DurationMs    int            `json:"durationMs" gorm:"column:duration_ms;default:0"`
-	Variables     datatypes.JSON `json:"variables" gorm:"type:json"`
+	DurationMs int            `json:"durationMs" gorm:"column:duration_ms;default:0"`
+	Variables  datatypes.JSON `json:"variables" gorm:"type:json"`
 }
 
 func (SIPScriptRun) TableName() string {
