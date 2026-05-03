@@ -15,7 +15,6 @@ const NumberPool = lazy(() => import('@/pages/NumberPool'))
 const OutboundTasks = lazy(() => import('@/pages/OutboundTasks'))
 const ScriptManager = lazy(() => import('@/pages/ScriptManager'))
 const WebAgents = lazy(() => import('@/pages/WebAgents'))
-const CallAnalysis = lazy(() => import('@/pages/CallAnalysis'))
 
 function App() {
   return (
@@ -33,7 +32,6 @@ function App() {
                     <Route path="/outbound-tasks" element={<OutboundTasks />} />
                     <Route path="/script-manager" element={<ScriptManager />} />
                     <Route path="/web-agents" element={<WebAgents />} />
-                    <Route path="/call-analysis" element={<CallAnalysis />} />
                     <Route path="/" element={<Navigate to="/sip-users" replace />} />
                     <Route path="*" element={<Navigate to="/sip-users" replace />} />
                   </Routes>

@@ -13,6 +13,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/task"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
@@ -395,7 +396,7 @@ func (s *CampaignService) resolveRegisteredDialTarget(ctx context.Context, phone
 	if s.db == nil {
 		return outbound.DialTarget{}, false
 	}
-	row, err := models.FindLatestOnlineSIPUserByUsername(ctx, s.db, username)
+	row, err := persist.FindLatestOnlineSIPUserByUsername(ctx, s.db, username)
 	if err != nil || row.RemoteIP == "" || row.RemotePort <= 0 {
 		return outbound.DialTarget{}, false
 	}

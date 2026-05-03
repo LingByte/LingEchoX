@@ -5,6 +5,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 )
 
 // HandlerFunc handles an incoming SIP request and returns a response message (or nil).
@@ -86,21 +88,6 @@ func (s *Server) Stop() error {
 	return c.Close()
 }
 
-// isSIPSignalingNoiseDatagram is true for payloads that are never valid SIP but often hit the UDP
-// signaling port: NAT / CRLF keepalives (e.g. "\r\n\r\n", RFC 5626 style), or whitespace-only pings.
-// Parsing them produces "sip: empty message" and spams logs; ignore silently.
-func isSIPSignalingNoiseDatagram(b []byte) bool {
-	if len(b) == 0 || len(b) > 64 {
-		return false
-	}
-	for _, c := range b {
-		if c != '\r' && c != '\n' && c != ' ' && c != '\t' {
-			return false
-		}
-	}
-	return true
-}
-
 func (s *Server) readLoop() {
 	buf := make([]byte, s.readBufSize)
 	for {
@@ -121,7 +108,7 @@ func (s *Server) readLoop() {
 		if s.OnDatagram != nil {
 			s.OnDatagram(rawBytes, addr)
 		}
-		if isSIPSignalingNoiseDatagram(rawBytes) {
+		if stack.IsSignalingNoiseDatagram(rawBytes) {
 			continue
 		}
 		if s.OnEvent != nil {

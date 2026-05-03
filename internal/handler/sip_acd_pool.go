@@ -11,6 +11,7 @@ import (
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/gin-gonic/gin"
 )
 
@@ -52,7 +53,7 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 	for _, row := range list {
 		item := acdPoolTargetListItem{ACDPoolTarget: row}
 		if models.ACDSipInternalLiveLineEligible(row) {
-			n, _ := models.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
+			n, _ := persist.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
 			item.LiveLineOnline = n > 0
 		} else if row.RouteType == models.ACDPoolRouteTypeWeb {
 			item.LiveLineOnline = models.WebSeatLastSeenFresh(row.WebSeatLastSeenAt)
@@ -75,7 +76,7 @@ func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 	}
 	item := acdPoolTargetListItem{ACDPoolTarget: row}
 	if models.ACDSipInternalLiveLineEligible(row) {
-		n, _ := models.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
+		n, _ := persist.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
 		item.LiveLineOnline = n > 0
 	} else if row.RouteType == models.ACDPoolRouteTypeWeb {
 		item.LiveLineOnline = models.WebSeatLastSeenFresh(row.WebSeatLastSeenAt)

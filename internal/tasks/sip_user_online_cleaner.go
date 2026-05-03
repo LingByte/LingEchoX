@@ -7,6 +7,7 @@ import (
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -60,7 +61,7 @@ func (c *SIPUserOnlineCleaner) Stop() {
 }
 
 func (c *SIPUserOnlineCleaner) sweep() {
-	rows, err := models.MarkExpiredSIPUsersOffline(context.Background(), c.db, time.Now())
+	rows, err := persist.MarkExpiredSIPUsersOffline(context.Background(), c.db, time.Now())
 	if err != nil {
 		if logger.Lg != nil {
 			logger.Lg.Warn("sip user online cleaner failed", zap.Error(err))

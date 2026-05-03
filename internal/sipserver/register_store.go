@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 
 	"gorm.io/gorm"
@@ -37,7 +37,7 @@ func (s *GormStore) SaveRegister(ctx context.Context, user, domain, contactURI s
 	}
 	now := time.Now()
 	exp := expiresAt
-	return models.UpsertSIPUserRegister(ctx, s.db, models.SIPUser{
+	return persist.UpsertSIPUserRegister(ctx, s.db, persist.SIPUser{
 		Username:   user,
 		Domain:     domain,
 		ContactURI: contactURI,
@@ -59,7 +59,7 @@ func (s *GormStore) DeleteRegister(ctx context.Context, user, domain string) err
 	if user == "" || domain == "" {
 		return nil
 	}
-	return models.MarkSIPUserOffline(ctx, s.db, user, domain)
+	return persist.MarkSIPUserOffline(ctx, s.db, user, domain)
 }
 
 func (s *GormStore) LookupRegister(ctx context.Context, user, domain string) (*net.UDPAddr, bool, error) {
@@ -71,7 +71,7 @@ func (s *GormStore) LookupRegister(ctx context.Context, user, domain string) (*n
 	if user == "" || domain == "" {
 		return nil, false, nil
 	}
-	row, err := models.FindOnlineSIPUserByAOR(ctx, s.db, user, domain)
+	row, err := persist.FindOnlineSIPUserByAOR(ctx, s.db, user, domain)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, false, nil
@@ -100,7 +100,7 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 		return zero, false
 	}
 	domain := strings.TrimSpace(utils.GetEnv(constants.EnvSIPDefaultDomain))
-	row, err := models.FindOnlineSIPUserByAOR(ctx, s.db, username, domain)
+	row, err := persist.FindOnlineSIPUserByAOR(ctx, s.db, username, domain)
 	if err != nil {
 		return zero, false
 	}

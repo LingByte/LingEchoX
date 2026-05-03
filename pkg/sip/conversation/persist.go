@@ -15,7 +15,7 @@ var warnTurnPersistOnce sync.Once
 // cmd/sip wires this to sipserver.Store.SaveConversationTurn.
 //
 // Call recording (inbound UAS and outbound UAC with CallSession registered):
-//   - pkg/sip/session.CallSession: OnInputRTP (user) + OnOutputRTP (AI) → SN2 blob.
+//   - pkg/sip/session.CallSession: OnInputRTP (user) + OnOutputRTP (AI) → SN3 blob (wall-clock + RTP meta).
 //   - BYE → TakeRecording → sipserver.OnBye → stereo WAV preferred (L=user R=AI per-leg decode, no mono ducking),
 //     falling back to legacy mono mix if stereo build fails; upload → recording_url.
 func SetSIPTurnPersist(fn func(ctx context.Context, callID string, turn DialogTurn)) {

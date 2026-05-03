@@ -10,4 +10,5 @@ const (
 	MethodCancel   = "CANCEL"
 	MethodInfo     = "INFO"
 	MethodPublish  = "PUBLISH"
+	MethodPrack    = "PRACK"
 )

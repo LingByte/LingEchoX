@@ -5,11 +5,19 @@ package encoder
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/hraban/opus"
 )
+
+func opusEncoderComplexity() int {
+	if runtime.NumCPU() < 4 {
+		return 5
+	}
+	return 10
+}
 
 // createOPUSDecode creates OPUS decoder
 // OPUS standard sample rate is 48000Hz, but also supports 8000, 12000, 16000, 24000, 48000
@@ -181,7 +189,7 @@ func createOPUSEncode(src, pcm media.CodecConfig) media.EncoderFunc {
 
 	// 设置复杂度为 10（最高质量，0-10）
 	// 更高的复杂度会提高音质但增加 CPU 使用
-	if err := encoder.SetComplexity(10); err != nil {
+	if err := encoder.SetComplexity(opusEncoderComplexity()); err != nil {
 		panic(fmt.Errorf("failed to set opus complexity: %w", err))
 	}
 

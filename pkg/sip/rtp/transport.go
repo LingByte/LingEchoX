@@ -12,6 +12,16 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 )
 
+// DefaultJitterPlaybackDelay is the default inbound playout delay (reorder + smoothing).
+const DefaultJitterPlaybackDelay = 80 * time.Millisecond
+
+const maxTelephoneEventPayload = 24
+
+type jbHeld struct {
+	pkt *RTPPacket
+	at  time.Time
+}
+
 // SIPRTPTransport adapts an RTP Session to the media.MediaTransport interface.
 //
 // It is direction-aware:
@@ -29,7 +39,7 @@ type SIPRTPTransport struct {
 	// Used when stopping the default MediaSession and handing media to an in-process bridge.
 	PreserveSessionOnClose bool
 
-	// OnInputPayload, if set, receives a copy of each incoming audio RTP payload (after PT filter).
+	// OnInputPayload, if set, receives a copy of each incoming RTP payload before DTMF heuristics.
 	OnInputPayload func([]byte)
 	// OnInputRTP, if set, receives RTP timing metadata + payload copy for recording/reconstruction.
 	OnInputRTP func(seq uint16, ts uint32, payload []byte)
@@ -38,6 +48,15 @@ type SIPRTPTransport struct {
 	// OnOutputRTP, if set, receives RTP timing metadata + payload copy for recording/reconstruction.
 	// seq/ts correspond to the packet values before Session.SendRTP increments counters.
 	OnOutputRTP func(seq uint16, ts uint32, payload []byte)
+
+	// JitterPlaybackDelay, if > 0 on DirectionInput, delays playout and absorbs reorder/jitter (see DefaultJitterPlaybackDelay).
+	JitterPlaybackDelay time.Duration
+
+	jbPending   map[uint16]jbHeld
+	jbNext      uint16
+	jbStarted   bool
+	jbLossWait  time.Time
+	jbHoleSkips int
 
 	attached *media.MediaSession
 }
@@ -53,6 +72,102 @@ func NewSIPRTPTransport(sess *Session, codec media.CodecConfig, direction string
 		codec:            codec,
 		direction:        direction,
 		telephoneEventPT: telephoneEventPT,
+	}
+}
+
+func cloneRTPPacketForJitter(p *RTPPacket) *RTPPacket {
+	if p == nil {
+		return nil
+	}
+	out := &RTPPacket{
+		Header:           p.Header,
+		ExtensionProfile: p.ExtensionProfile,
+	}
+	if len(p.CSRC) > 0 {
+		out.CSRC = append([]uint32(nil), p.CSRC...)
+	}
+	if len(p.ExtensionPayload) > 0 {
+		out.ExtensionPayload = append([]byte(nil), p.ExtensionPayload...)
+	}
+	if len(p.Payload) > 0 {
+		out.Payload = append([]byte(nil), p.Payload...)
+	}
+	return out
+}
+
+func (t *SIPRTPTransport) jbPush(pkt *RTPPacket, now time.Time) {
+	if t == nil || pkt == nil || t.JitterPlaybackDelay <= 0 {
+		return
+	}
+	seq := pkt.Header.SequenceNumber
+	if t.jbPending == nil {
+		t.jbPending = make(map[uint16]jbHeld)
+	}
+	if _, dup := t.jbPending[seq]; dup {
+		return
+	}
+	t.jbPending[seq] = jbHeld{pkt: cloneRTPPacketForJitter(pkt), at: now}
+	if !t.jbStarted {
+		t.jbNext = seq
+		t.jbStarted = true
+	}
+}
+
+func (t *SIPRTPTransport) jbTryPop(now time.Time) *RTPPacket {
+	if t == nil || t.JitterPlaybackDelay <= 0 || !t.jbStarted {
+		return nil
+	}
+	const lossSkipAfter = 120 * time.Millisecond
+	const maxHoleSkips = 64
+
+	for {
+		q, ok := t.jbPending[t.jbNext]
+		if ok {
+			if now.Sub(q.at) >= t.JitterPlaybackDelay {
+				delete(t.jbPending, t.jbNext)
+				pkt := q.pkt
+				t.jbNext++
+				t.jbLossWait = time.Time{}
+				t.jbHoleSkips = 0
+				return pkt
+			}
+			return nil
+		}
+		if t.jbLossWait.IsZero() {
+			t.jbLossWait = now
+		} else if now.Sub(t.jbLossWait) >= lossSkipAfter && t.jbHoleSkips < maxHoleSkips {
+			t.jbNext++
+			t.jbHoleSkips++
+			t.jbLossWait = now
+			continue
+		}
+		return nil
+	}
+}
+
+func (t *SIPRTPTransport) jbReset() {
+	if t == nil {
+		return
+	}
+	t.jbPending = nil
+	t.jbStarted = false
+	t.jbLossWait = time.Time{}
+	t.jbHoleSkips = 0
+}
+
+func (t *SIPRTPTransport) inputCallbacks(pkt *RTPPacket) {
+	if t == nil || pkt == nil || len(pkt.Payload) == 0 {
+		return
+	}
+	if t.OnInputPayload != nil {
+		cp := make([]byte, len(pkt.Payload))
+		copy(cp, pkt.Payload)
+		t.OnInputPayload(cp)
+	}
+	if t.OnInputRTP != nil {
+		cp := make([]byte, len(pkt.Payload))
+		copy(cp, pkt.Payload)
+		t.OnInputRTP(pkt.Header.SequenceNumber, pkt.Header.Timestamp, cp)
 	}
 }
 
@@ -97,6 +212,7 @@ func (t *SIPRTPTransport) Next(ctx context.Context) (media.MediaPacket, error) {
 	// be published into EventBus after it is closed.
 	if ctx != nil && ctx.Err() != nil {
 		t.clearReadDeadline()
+		t.jbReset()
 		return nil, nil
 	}
 
@@ -105,6 +221,7 @@ func (t *SIPRTPTransport) Next(ctx context.Context) (media.MediaPacket, error) {
 		// If the media session is shutting down, stop waiting.
 		if ctx != nil && ctx.Err() != nil {
 			t.clearReadDeadline()
+			t.jbReset()
 			return nil, nil
 		}
 
@@ -114,10 +231,19 @@ func (t *SIPRTPTransport) Next(ctx context.Context) (media.MediaPacket, error) {
 			_ = t.sess.Conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
 		}
 
+		jitter := t.JitterPlaybackDelay > 0 && t.direction == media.DirectionInput
+		if jitter {
+			if pkt := t.jbTryPop(time.Now()); pkt != nil {
+				t.clearReadDeadline()
+				return &media.AudioPacket{Payload: pkt.Payload}, nil
+			}
+		}
+
 		n, _, pkt, err := t.sess.ReceiveRTP(buf)
 		if err != nil {
 			if ctx != nil && ctx.Err() != nil {
 				t.clearReadDeadline()
+				t.jbReset()
 				return nil, nil
 			}
 			var ne net.Error
@@ -125,6 +251,9 @@ func (t *SIPRTPTransport) Next(ctx context.Context) (media.MediaPacket, error) {
 				continue
 			}
 			t.clearReadDeadline()
+			if jitter {
+				t.jbReset()
+			}
 			return nil, err
 		}
 		if pkt == nil {
@@ -133,33 +262,49 @@ func (t *SIPRTPTransport) Next(ctx context.Context) (media.MediaPacket, error) {
 				return nil, nil
 			}
 			t.clearReadDeadline()
+			if jitter {
+				t.jbReset()
+			}
 			return nil, fmt.Errorf("siprtp: got nil packet from ReceiveRTP")
 		}
 
-		// RFC 2833 telephone-event (out-of-band DTMF) — do not feed to audio decoder.
-		if t.telephoneEventPT != 0 && pkt.Header.PayloadType == t.telephoneEventPT {
+		// Recording / taps: always run first (large payloads on telephone-event PT must not be skipped).
+		t.inputCallbacks(pkt)
+
+		if jitter {
+			if pt := pkt.Header.PayloadType & 0x7F; pt >= 192 && pt <= 223 {
+				continue
+			}
+			if t.telephoneEventPT != 0 && pkt.Header.PayloadType == t.telephoneEventPT && len(pkt.Payload) <= maxTelephoneEventPayload {
+				digit, end, ok := dtmf.EventFromRFC2833(pkt.Payload)
+				if ok && end && digit != "" {
+					t.clearReadDeadline()
+					return &media.DTMFPacket{Digit: digit, End: end}, nil
+				}
+				continue
+			}
+			if t.codec.PayloadType != 0 && pkt.Header.PayloadType != t.codec.PayloadType {
+				continue
+			}
+			t.jbPush(pkt, time.Now())
+			continue
+		}
+
+		// RFC 2833 telephone-event — only when payload is short (real event frames are a few octets; audio is much larger).
+		if t.telephoneEventPT != 0 && pkt.Header.PayloadType == t.telephoneEventPT && len(pkt.Payload) <= maxTelephoneEventPayload {
 			digit, end, ok := dtmf.EventFromRFC2833(pkt.Payload)
 			if ok && end && digit != "" {
 				t.clearReadDeadline()
 				return &media.DTMFPacket{Digit: digit, End: end}, nil
 			}
-			continue
+			if ok && !end {
+				continue
+			}
 		}
 
-		// Only accept the negotiated audio RTP payload type.
+		// Only decode the negotiated audio RTP payload type into PCM for ASR/media.
 		if t.codec.PayloadType != 0 && pkt.Header.PayloadType != t.codec.PayloadType {
 			continue
-		}
-
-		if t.OnInputPayload != nil && len(pkt.Payload) > 0 {
-			cp := make([]byte, len(pkt.Payload))
-			copy(cp, pkt.Payload)
-			t.OnInputPayload(cp)
-		}
-		if t.OnInputRTP != nil && len(pkt.Payload) > 0 {
-			cp := make([]byte, len(pkt.Payload))
-			copy(cp, pkt.Payload)
-			t.OnInputRTP(pkt.Header.SequenceNumber, pkt.Header.Timestamp, cp)
 		}
 
 		t.clearReadDeadline()
@@ -277,4 +422,3 @@ func addrString(addr *net.UDPAddr) string {
 	}
 	return addr.String()
 }
-

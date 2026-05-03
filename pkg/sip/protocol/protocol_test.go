@@ -3,6 +3,8 @@ package protocol
 import (
 	"strings"
 	"testing"
+
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 )
 
 func TestParse_SIPRequest(t *testing.T) {
@@ -159,16 +161,16 @@ func TestGenerateSDP_MAudioPayloadOrderPreserved(t *testing.T) {
 }
 
 func TestIsSIPSignalingNoiseDatagram(t *testing.T) {
-	if !isSIPSignalingNoiseDatagram([]byte("\r\n\r\n")) {
+	if !stack.IsSignalingNoiseDatagram([]byte("\r\n\r\n")) {
 		t.Fatal("expected CRLFCRLF keepalive")
 	}
-	if !isSIPSignalingNoiseDatagram([]byte("\r\n")) {
+	if !stack.IsSignalingNoiseDatagram([]byte("\r\n")) {
 		t.Fatal("expected CRLF")
 	}
-	if isSIPSignalingNoiseDatagram([]byte("INVITE sip:a SIP/2.0\r\n")) {
+	if stack.IsSignalingNoiseDatagram([]byte("INVITE sip:a SIP/2.0\r\n")) {
 		t.Fatal("invite is not noise")
 	}
-	if isSIPSignalingNoiseDatagram(nil) || isSIPSignalingNoiseDatagram([]byte{}) {
+	if stack.IsSignalingNoiseDatagram(nil) || stack.IsSignalingNoiseDatagram([]byte{}) {
 		t.Fatal("empty is not noise (handled elsewhere)")
 	}
 }

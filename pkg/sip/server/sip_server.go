@@ -15,6 +15,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"go.uber.org/zap"
 )
@@ -44,6 +45,24 @@ type SIPServer struct {
 
 	dlgMu  sync.RWMutex
 	uasDlg map[string]*uasDialogState // inbound Call-ID -> dialog (for server-initiated BYE)
+
+	inviteAllowNets   []*net.IPNet
+	inviteRate        inviteRateState
+	inviteRatePerSec  float64
+	inviteBurst       int
+	inviteDigest      *sipDigestAuth
+
+	inviteEnv inviteEnvConfig
+
+	inviteFlights sync.Map // inviteFlightKey(req) -> *inviteFlightState (RFC 3262 / INVITE retransmit)
+	inviteByCall  sync.Map // Call-ID -> *inviteFlightState
+
+	// Final 200 OK replay for INVITE retransmissions (sync path and post-flight teardown).
+	inviteFinal200Raw     sync.Map // inviteFlightKey -> raw 200 OK message string
+	inviteFlightKeyByCall sync.Map // Call-ID -> inviteFlightKey (BYE clears cached final)
+
+	sigCtx    context.Context
+	sigCancel context.CancelFunc
 }
 
 var (
@@ -226,6 +245,7 @@ func New(cfg Config) *SIPServer {
 	s.proto.RegisterHandler(protocol.MethodInfo, s.handleInfo)
 	s.proto.RegisterHandler(protocol.MethodCancel, s.handleCancel)
 	s.proto.RegisterHandler(protocol.MethodPublish, s.handlePublish)
+	s.proto.RegisterHandler(protocol.MethodPrack, s.handlePrack)
 	s.proto.RegisterNoRoute(func(_ *protocol.Message, _ *net.UDPAddr) *protocol.Message {
 		// No route: respond 404.
 		return &protocol.Message{
@@ -235,6 +255,24 @@ func New(cfg Config) *SIPServer {
 			StatusText: "Not Found",
 		}
 	})
+
+	s.inviteAllowNets = parseIPCIDRList(strings.TrimSpace(os.Getenv("SIP_INVITE_ALLOW_CIDRS")))
+	if v := strings.TrimSpace(os.Getenv("SIP_INVITE_RATE_PER_SEC")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			s.inviteRatePerSec = f
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("SIP_INVITE_RATE_BURST")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			s.inviteBurst = n
+		}
+	}
+	s.inviteDigest = newSIPDigest(
+		os.Getenv("SIP_DIGEST_REALM"),
+		os.Getenv("SIP_DIGEST_USER"),
+		os.Getenv("SIP_DIGEST_PASSWORD"),
+	)
+	s.inviteEnv = parseInviteEnvConfig()
 	return s
 }
 
@@ -328,13 +366,34 @@ func newTag() string {
 	return hex.EncodeToString(b[:])
 }
 
+func (s *SIPServer) ensureSigCtx() {
+	if s == nil || s.sigCancel != nil {
+		return
+	}
+	s.sigCtx, s.sigCancel = context.WithCancel(context.Background())
+}
+
 func (s *SIPServer) Start() error {
-	return s.proto.Start()
+	if s == nil || s.proto == nil {
+		return fmt.Errorf("sip: server not ready")
+	}
+	s.ensureSigCtx()
+	if err := s.proto.Start(); err != nil {
+		return err
+	}
+	s.startSigTransportListeners()
+	return nil
 }
 
 func (s *SIPServer) Stop() error {
 	if s == nil {
 		return nil
+	}
+
+	if s.sigCancel != nil {
+		s.sigCancel()
+		s.sigCancel = nil
+		s.sigCtx = nil
 	}
 
 	s.mu.Lock()
@@ -377,10 +436,42 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 		return s.makeResponse(msg, 400, "Bad Request", "", "")
 	}
 
+	if addr != nil && addr.IP != nil {
+		if !ipAllowed(s.inviteAllowNets, addr.IP) {
+			return s.makeResponse(msg, 403, "Forbidden", "", "")
+		}
+		if !s.inviteRate.allow(addr.IP, s.inviteRatePerSec, s.inviteBurst) {
+			return s.makeResponse(msg, 503, "Service Unavailable", "", "")
+		}
+	}
+	if s.inviteDigest != nil && !s.inviteDigest.verifyINVITE(msg) {
+		resp, err := s.inviteDigest.challenge401(msg)
+		if err != nil || resp == nil {
+			return s.makeResponse(msg, 500, "Internal Server Error", "", "")
+		}
+		return resp
+	}
+
 	// Provisional response: 100 Trying (helps many clients' state machines).
 	if s.proto != nil && addr != nil {
 		trying := s.makeResponse(msg, 100, "Trying", "", "")
 		_ = s.proto.Send(trying, addr)
+	}
+
+	fk := inviteFlightKey(msg)
+	if fk != "" {
+		if raw, ok := s.inviteFinal200Raw.Load(fk); ok {
+			if rs, ok2 := raw.(string); ok2 && strings.TrimSpace(rs) != "" && s.proto != nil && addr != nil {
+				if m, err := protocol.Parse(rs); err == nil && m != nil {
+					_ = s.proto.Send(m, addr)
+				}
+			}
+			return nil
+		}
+		if v, ok := s.inviteFlights.Load(fk); ok {
+			s.resendInviteProgress(v.(*inviteFlightState), addr)
+			return nil
+		}
 	}
 
 	// Parse remote RTP endpoint from SDP.
@@ -446,10 +537,28 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 		}
 	}
 
+	needAsync := s.inviteNeedsAsync(msg)
+	var flight *inviteFlightState
+	if needAsync && fk != "" {
+		s.ensureSigCtx()
+		flight = &inviteFlightState{
+			flightKey: fk,
+			callID:    callID,
+			prackDone: make(chan struct{}, 1),
+		}
+		if v, loaded := s.inviteFlights.LoadOrStore(fk, flight); loaded {
+			s.resendInviteProgress(v.(*inviteFlightState), addr)
+			return nil
+		}
+	}
+
 	// Allocate RTP session by env policy:
 	// fixed port / range (for firewall-friendly deployments) or ephemeral fallback.
 	rtpSess, err := newInboundRTPSession()
 	if err != nil {
+		if flight != nil && fk != "" {
+			s.inviteFlights.Delete(fk)
+		}
 		return s.makeResponse(msg, 500, "Internal Server Error", "", "")
 	}
 	rtpSess.SetRemoteAddr(remoteAddr)
@@ -464,6 +573,9 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	if err != nil {
 		s.mu.Unlock()
 		_ = rtpSess.Close()
+		if flight != nil && fk != "" {
+			s.inviteFlights.Delete(fk)
+		}
 		logger.Warn("sip invite rejected (no supported codec)",
 			zap.String("call_id", callID),
 			zap.Any("offered_codecs", sdp.Codecs),
@@ -506,15 +618,6 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	// Use a single To-tag consistently across provisional/final responses.
 	toWithTag := ensureToTag(msg.GetHeader("To"))
 
-	// Provisional response: 180 Ringing (often expected by softphones).
-	if s.proto != nil && addr != nil {
-		ringing := s.makeResponse(msg, 180, "Ringing", "", toWithTag)
-		ringing.SetHeader("To", toWithTag)
-		ringing.SetHeader("Contact", fmt.Sprintf("<sip:server@%s:%d>", s.localIP, s.listenPort))
-		ringing.SetHeader("Content-Length", "0")
-		_ = s.proto.Send(ringing, addr)
-	}
-
 	respMsg := s.makeResponse(msg, 200, "OK", respSDP, toWithTag)
 	respMsg.SetHeader("Content-Type", "application/sdp")
 	respMsg.SetHeader("To", toWithTag)
@@ -529,6 +632,7 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 		protocol.MethodOptions,
 		protocol.MethodCancel,
 		protocol.MethodInfo,
+		protocol.MethodPrack,
 	}, ", "))
 	respMsg.SetHeader("Content-Length", strconv.Itoa(protocol.BodyBytesLen(respSDP)))
 
@@ -546,6 +650,36 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	if addr != nil {
 		s.rememberUASDialog(callID, addr, msg, toWithTag)
 	}
+
+	if needAsync && flight != nil {
+		reliable := inviteReliable(s.inviteEnv, msg)
+		sdp183 := ""
+		if reliable && s.inviteEnv.EarlyMediaSDP {
+			sdp183 = respSDP
+		}
+		flight.inviteCSeq = stack.ParseCSeqNum(msg.GetHeader("CSeq"))
+		if !reliable {
+			flight.awaitRSeq = 0
+		}
+		s.inviteByCall.Store(callID, flight)
+		go s.runInviteAsync(msg, addr, flight, respMsg, reliable, sdp183, callID)
+		return nil
+	}
+
+	// Provisional response: 180 Ringing (often expected by softphones).
+	if s.proto != nil && addr != nil {
+		ringing := s.makeResponse(msg, 180, "Ringing", "", toWithTag)
+		ringing.SetHeader("To", toWithTag)
+		ringing.SetHeader("Contact", fmt.Sprintf("<sip:server@%s:%d>", s.localIP, s.listenPort))
+		ringing.SetHeader("Content-Length", "0")
+		_ = s.proto.Send(ringing, addr)
+	}
+
+	if fk != "" {
+		s.inviteFinal200Raw.Store(fk, respMsg.String())
+		s.inviteFlightKeyByCall.Store(callID, fk)
+	}
+
 	return respMsg
 }
 
@@ -557,6 +691,8 @@ func (s *SIPServer) handleAck(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 	if callID == "" {
 		return nil
 	}
+
+	s.inviteAsyncEnd(callID)
 
 	s.mu.Lock()
 	cs := s.callStore[callID]
@@ -594,6 +730,7 @@ func (s *SIPServer) handleBye(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 	if callID == "" {
 		return s.makeResponse(msg, 400, "Bad Request", "", "")
 	}
+	defer s.inviteFinalRetransmitCleanup(callID)
 
 	if tb := conversation.HangupTransferBridgeIfAny(callID); tb != nil {
 		s.forgetUASDialog(callID)
@@ -661,6 +798,7 @@ func (s *SIPServer) handleOptions(msg *protocol.Message, _ *net.UDPAddr) *protoc
 		protocol.MethodOptions,
 		protocol.MethodCancel,
 		protocol.MethodInfo,
+		protocol.MethodPrack,
 	}, ", "))
 	resp.SetHeader("Content-Length", "0")
 	return resp

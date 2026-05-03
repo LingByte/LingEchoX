@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,17 +63,12 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		g.GET("/campaigns/metrics", h.getSIPCampaignMetrics)
 		g.GET("/campaigns/worker-metrics", h.getSIPCampaignWorkerMetrics)
 		g.GET("/campaigns/:id/logs", h.getSIPCampaignLogs)
-
-		g.POST("/call-analysis", h.createCallAnalysis)
-		g.GET("/call-analysis/ws", h.callAnalysisWebSocket)
-		g.GET("/call-analysis/:id", h.getCallAnalysis)
-		g.GET("/call-analysis/:id/export.json", h.exportCallAnalysisJSON)
 	}
 }
 
 func (h *Handlers) listSIPUsers(c *gin.Context) {
 	page, size := parsePageSize(c)
-	list, total, err := models.ListSIPUsersPage(h.db, page, size)
+	list, total, err := persist.ListSIPUsersPage(h.db, page, size)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -87,7 +82,7 @@ func (h *Handlers) getSIPUser(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetActiveSIPUserByID(h.db, uint(id))
+	row, err := persist.GetActiveSIPUserByID(h.db, uint(id))
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -101,7 +96,7 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	rows, err := models.SoftDeleteSIPUserByID(h.db, uint(id))
+	rows, err := persist.SoftDeleteSIPUserByID(h.db, uint(id))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -115,7 +110,7 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 
 func (h *Handlers) listSIPCalls(c *gin.Context) {
 	page, size := parsePageSize(c)
-	list, total, err := models.ListSIPCallsPage(h.db, page, size, c.Query("callId"), c.Query("state"))
+	list, total, err := persist.ListSIPCallsPage(h.db, page, size, c.Query("callId"), c.Query("state"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -129,7 +124,7 @@ func (h *Handlers) getSIPCall(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetActiveSIPCallByID(h.db, uint(id))
+	row, err := persist.GetActiveSIPCallByID(h.db, uint(id))
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return

@@ -41,7 +41,7 @@ type QCloudASROption struct {
 	ReqChanSize int       `json:"reqChanSize" yaml:"req_chan_size" default:"128"`
 	HotWords    []HotWord `json:"hotWords" yaml:"hot_words"`
 	// SentenceNotify is invoked on each Tencent OnSentenceEnd (fragment = 本句增量, cumulative = 当前累计).
-	// Optional; used by offline streaming consumers (e.g. call analysis WebSocket).
+	// Optional; used by offline streaming consumers that want per-sentence callbacks.
 	SentenceNotify func(fragment string, cumulative string) `json:"-" yaml:"-"`
 }
 

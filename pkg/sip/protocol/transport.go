@@ -6,10 +6,8 @@ import (
 	"net"
 )
 
-// DatagramTransport is the reserved abstraction for SIP message IO.
-//
-// Today we only implement UDP. For SIP over WebSocket, implement this interface
-// with a WS-backed transport that frames SIP messages as datagrams.
+// DatagramTransport abstracts SIP message IO over a packet-oriented transport.
+// Production signaling uses UDP via [UDPTransport].
 type DatagramTransport interface {
 	ReadFrom(ctx context.Context, buf []byte) (n int, addr *net.UDPAddr, err error)
 	WriteTo(ctx context.Context, p []byte, addr *net.UDPAddr) (n int, err error)
@@ -48,20 +46,3 @@ func (t *UDPTransport) Close() error {
 	}
 	return t.conn.Close()
 }
-
-// WebSocketTransport is a placeholder reserved for future SIP over WebSocket.
-// It is intentionally not implemented yet.
-type WebSocketTransport struct{}
-
-func (t *WebSocketTransport) String() string { return "WebSocketTransport(not-implemented)" }
-
-func (t *WebSocketTransport) ReadFrom(ctx context.Context, buf []byte) (int, *net.UDPAddr, error) {
-	return 0, nil, fmt.Errorf("sip: websocket transport not implemented")
-}
-
-func (t *WebSocketTransport) WriteTo(ctx context.Context, p []byte, addr *net.UDPAddr) (int, error) {
-	return 0, fmt.Errorf("sip: websocket transport not implemented")
-}
-
-func (t *WebSocketTransport) Close() error { return nil }
-

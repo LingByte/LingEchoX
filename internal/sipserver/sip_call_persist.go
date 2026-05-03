@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/LingByte/lingstorage-sdk-go"
@@ -39,11 +39,11 @@ func (s *Store) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
 	now := time.Now()
 	dir := p.Direction
 	if dir == "" {
-		dir = models.SIPCallDirectionInbound
+		dir = persist.DirectionInbound
 	}
-	row, err := models.FindSIPCallByCallID(ctx, s.db, p.CallID)
+	row, err := persist.FindSIPCallByCallID(ctx, s.db, p.CallID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		row = models.NewSIPCallRinging(
+		row = persist.NewSIPCallRinging(
 			p.CallID, p.From, p.To, p.CSeqInvite, p.RemoteSig, dir,
 			p.RemoteRTP, p.LocalRTP, p.PayloadType, p.Codec, p.ClockRate, now,
 		)
@@ -56,7 +56,7 @@ func (s *Store) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
 		s.lg.Warn("sippersist invite lookup", zap.String("call_id", p.CallID), zap.Error(err))
 		return
 	}
-	_ = s.db.WithContext(ctx).Model(&row).Updates(models.SIPCallInviteRefreshUpdateMap(
+	_ = s.db.WithContext(ctx).Model(&row).Updates(persist.SIPCallInviteRefreshUpdateMap(
 		p.From, p.To, p.RemoteSig, p.RemoteRTP, p.LocalRTP, p.Codec, p.PayloadType, p.ClockRate, now,
 	)).Error
 }
@@ -67,10 +67,10 @@ func (s *Store) OnEstablished(ctx context.Context, callID string) {
 		return
 	}
 	now := time.Now()
-	_ = s.db.WithContext(ctx).Model(&models.SIPCall{}).Where("call_id = ?", callID).Updates(models.SIPCallEstablishedUpdateMap(now)).Error
+	_ = s.db.WithContext(ctx).Model(&persist.SIPCall{}).Where("call_id = ?", callID).Updates(persist.SIPCallEstablishedUpdateMap(now)).Error
 }
 
-// OnBye finalizes SIPCall, optionally uploads SN2 recording as stereo WAV (L=user R=AI per-leg decode),
+// OnBye finalizes SIPCall, optionally uploads SN3/SN2 recording as stereo WAV (L=user R=AI per-leg decode),
 // falling back to legacy mono mix, via config.GlobalStore.
 func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	if s == nil || s.db == nil || p.CallID == "" {
@@ -85,15 +85,15 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	}
 
 	sipAgent, webSeat := conversation.TakeInboundTransferFlags(callID)
-	endStatus := models.SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
+	endStatus := persist.SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
 
 	now := time.Now()
 	durationSec := 0
-	var call models.SIPCall
+	var call persist.SIPCall
 	if err := s.db.WithContext(ctx).Where("call_id = ?", callID).First(&call).Error; err == nil {
-		durationSec = models.SIPCallDurationSince(call.AckAt, call.InviteAt, now)
+		durationSec = persist.SIPCallDurationSince(call.AckAt, call.InviteAt, now)
 	}
-	updates := models.SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
+	updates := persist.SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
 	if bi := strings.ToLower(strings.TrimSpace(initiator)); bi != "" {
 		updates["bye_initiator"] = bi
 	}
@@ -166,7 +166,7 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				updates["recording_wav_bytes"] = len(wav)
 				s.lg.Info("sippersist recording uploaded", zap.String("call_id", callID), zap.String("codec", codecName))
 			}
-		} else if len(raw) >= 3 && raw[0] == 'S' && raw[1] == 'N' && (raw[2] == '2' || raw[2] == '1') {
+		} else if len(raw) >= 3 && raw[0] == 'S' && raw[1] == 'N' && (raw[2] == '3' || raw[2] == '2' || raw[2] == '1') {
 			// WAV mux/decode failed or unsupported codec branch — still persist tagged RTP blob for forensics.
 			snKey := fmt.Sprintf("sip/recordings/%s_%d.sn2", sanitizeKey(callID), now.Unix())
 			res, err := config.GlobalStore.UploadBytes(&lingstorage.UploadBytesRequest{
@@ -182,7 +182,7 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				s.lg.Info("sippersist raw SN recording uploaded (no WAV)", zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 			}
 		} else if len(raw) > 0 {
-			s.lg.Warn("sippersist recording not converted to WAV and not SN1/SN2 tagged",
+			s.lg.Warn("sippersist recording not converted to WAV and not SN1/SN2/SN3 tagged",
 				zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 		}
 	} else if len(raw) > 0 && !bucketOK {
@@ -190,7 +190,7 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 			zap.String("call_id", callID), zap.String("codec", codecName))
 	}
 
-	if err := s.db.WithContext(ctx).Model(&models.SIPCall{}).Where("call_id = ?", callID).Updates(updates).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&persist.SIPCall{}).Where("call_id = ?", callID).Updates(updates).Error; err != nil {
 		s.lg.Warn("sippersist bye update", zap.String("call_id", callID), zap.Error(err))
 	}
 
@@ -210,7 +210,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conve
 	if !t.At.IsZero() {
 		now = t.At
 	}
-	turn := models.SIPCallDialogTurn{
+	turn := persist.SIPCallDialogTurn{
 		ASRText:      userText,
 		LLMText:      assistantText,
 		ASRProvider:  t.ASRProvider,
@@ -226,16 +226,16 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conve
 		PipelineMs:   t.PipelineMs,
 	}
 
-	row, err := models.FindActiveSIPCallByCallID(ctx, s.db, callID)
+	row, err := persist.FindActiveSIPCallByCallID(ctx, s.db, callID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		turnsBytes, jErr := models.MarshalSIPCallTurns([]models.SIPCallDialogTurn{turn})
+		turnsBytes, jErr := persist.MarshalSIPCallTurns([]persist.SIPCallDialogTurn{turn})
 		if jErr != nil {
 			s.lg.Warn("sippersist call turns marshal failed", zap.String("call_id", callID), zap.Error(jErr))
 			return
 		}
-		row = models.NewSIPCallMinimalEstablishedWithFirstTurn(callID, turnsBytes, now)
+		row = persist.NewSIPCallMinimalEstablishedWithFirstTurn(callID, turnsBytes, now)
 		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-			row, err = models.FindActiveSIPCallByCallID(ctx, s.db, callID)
+			row, err = persist.FindActiveSIPCallByCallID(ctx, s.db, callID)
 			if err != nil {
 				s.lg.Warn("sippersist call create/first for turn", zap.String("call_id", callID), zap.Error(err))
 				return
@@ -252,7 +252,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conve
 		return
 	}
 
-	upd, turnCount, uErr := models.SIPCallAppendTurnUpdateMap(row, turn, now)
+	upd, turnCount, uErr := persist.SIPCallAppendTurnUpdateMap(row, turn, now)
 	if uErr != nil {
 		s.lg.Warn("sippersist call turns merge failed", zap.String("call_id", callID), zap.Error(uErr))
 		return

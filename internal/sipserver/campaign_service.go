@@ -15,6 +15,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"github.com/LingByte/SoulNexus/pkg/task"
 	"github.com/LingByte/SoulNexus/pkg/utils"
@@ -548,7 +549,7 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 
 type turnFetchResult struct {
 	Index     int
-	Turn      models.SIPCallDialogTurn
+	Turn      persist.SIPCallDialogTurn
 	DTMFDigit string // non-empty when resolved via keypad (matched dtmf_transitions)
 }
 
@@ -606,11 +607,11 @@ func (s *CampaignService) fetchTurn(callID string, afterIndex int, notBefore tim
 	if s == nil || s.db == nil {
 		return turnFetchResult{}, false
 	}
-	row, err := models.SelectSIPCallTurnsByCallID(s.db, callID)
+	row, err := persist.SelectSIPCallTurnsByCallID(s.db, callID)
 	if err != nil {
 		return turnFetchResult{}, false
 	}
-	turns, err := models.UnmarshalSIPCallTurns(row.Turns)
+	turns, err := persist.UnmarshalSIPCallTurns(row.Turns)
 	if err != nil || len(turns) == 0 {
 		return turnFetchResult{}, false
 	}

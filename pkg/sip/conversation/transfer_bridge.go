@@ -170,6 +170,16 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 			br = nil
 		} else {
 			mode = "raw_rtp_forward"
+			if relay, ok := br.(*bridge.TwoLegPayloadRelay); ok {
+				relay.SetInboundRecording(
+					func(seq uint16, ts uint32, p []byte) {
+						inbound.AppendRecordingSample(sipSession.RecordingDirUser, seq, ts, p)
+					},
+					func(seq uint16, ts uint32, p []byte) {
+						inbound.AppendRecordingSample(sipSession.RecordingDirAI, seq, ts, p)
+					},
+				)
+			}
 		}
 	} else {
 		pcmReason = "codecs_not_eligible_for_raw_relay"
@@ -177,6 +187,7 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 	if br == nil {
 		callerRx := siprtp.NewSIPRTPTransport(inbound.RTPSession(), ccIn, media.DirectionInput, inbound.DTMFPayloadType())
 		callerTx := siprtp.NewSIPRTPTransport(inbound.RTPSession(), ccIn, media.DirectionOutput, 0)
+		inbound.WireTransferBridgeRecording(callerRx, callerTx)
 		agentRx := siprtp.NewSIPRTPTransport(outboundCS.RTPSession(), ccOut, media.DirectionInput, outboundCS.DTMFPayloadType())
 		agentTx := siprtp.NewSIPRTPTransport(outboundCS.RTPSession(), ccOut, media.DirectionOutput, 0)
 		br, err = bridge.NewTwoLegPCMBridge(callerRx, callerTx, agentRx, agentTx)

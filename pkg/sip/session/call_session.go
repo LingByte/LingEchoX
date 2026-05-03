@@ -20,14 +20,22 @@ import (
 
 const maxInboundRecordingBytes = 50 * 1024 * 1024
 
-// SIP recording blob format v2 (sippersist): magic "SN2" then repeated
-// [dir u8][seq u16LE][ts u32LE][len u16LE][payload].
-// Includes RTP sequence/timestamp to allow reordering and smoother offline reconstruction.
-const recBlobMagic = "SN2"
+// SIP recording blob format v3 (sippersist): magic "SN3" then repeated
+// [dir u8][seq u16LE][rtpTs u32LE][wallNs u64LE][len u16LE][payload].
+// wallNs is nanoseconds since the first captured frame (time.Since anchor): restores real gaps between
+// TTS phrases when RTP timestamps stay continuous across silence (unlike SN2 RTP-only placement).
+// Legacy "SN2" blobs remain readable in pkg/utils/sip_recording_wav.go.
+const recBlobMagic = "SN3"
 
 const (
 	recDirUser = 0
 	recDirAI   = 1
+)
+
+// RecordingDirUser / RecordingDirAI match SN3 dir bytes for AppendRecordingSample (e.g. SIP transfer raw relay).
+const (
+	RecordingDirUser = recDirUser
+	RecordingDirAI   = recDirAI
 )
 
 // EnvSIPMediaMaxSeconds caps the SIP AI voice pipeline (MediaSession) for one call, in seconds.
@@ -64,6 +72,7 @@ type CallSession struct {
 	rxTransport   *rtp.SIPRTPTransport // RTP transports and codec (same as used for MediaSession) for handoff to in-process PCM bridge.
 	txTransport   *rtp.SIPRTPTransport
 	srcCodec      media.CodecConfig
+	pcmSampleRate int // internal PCM bridge rate (matches InternalPCMSampleRate(src))
 	dtmfPT        uint8
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -73,6 +82,7 @@ type CallSession struct {
 	voiceAttached bool
 	recMu         sync.Mutex
 	recBuf        []byte
+	recTimeOrigin time.Time // first appendRecordingFrame sets anchor for wallNs (monotonic via time.Since)
 }
 
 // NewCallSession creates a call session with codec negotiation from SDP.
@@ -178,10 +188,10 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 		return nil, fmt.Errorf("sip: unsupported codec (need one of: opus/g722/pcmu/pcma)")
 	}
 
-	// Target PCM format for ASR/TTS pipelines.
+	pcmSR := InternalPCMSampleRate(src)
 	pcm := media.CodecConfig{
 		Codec:         "pcm",
-		SampleRate:    16000,
+		SampleRate:    pcmSR,
 		Channels:      1,
 		BitDepth:      16,
 		FrameDuration: "",
@@ -201,15 +211,17 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 
 	dtmfPT := telephoneEventPayloadType(sdpCodecs)
 	cs := &CallSession{
-		CallID:   callID,
-		rtpSess:  rtpSess,
-		neg:      negotiatedSDP,
-		srcCodec: src,
-		dtmfPT:   dtmfPT,
-		ctx:      ctx,
-		cancel:   cancel,
+		CallID:        callID,
+		rtpSess:       rtpSess,
+		neg:           negotiatedSDP,
+		srcCodec:      src,
+		pcmSampleRate: pcmSR,
+		dtmfPT:        dtmfPT,
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 	rxTransport := rtp.NewSIPRTPTransport(rtpSess, src, media.DirectionInput, dtmfPT)
+	rxTransport.JitterPlaybackDelay = rtp.DefaultJitterPlaybackDelay
 	rxTransport.OnInputRTP = func(seq uint16, ts uint32, p []byte) { cs.appendRecordingFrame(recDirUser, seq, ts, p) }
 	txTransport := rtp.NewSIPRTPTransport(rtpSess, src, media.DirectionOutput, 0)
 	txTransport.OnOutputRTP = func(seq uint16, ts uint32, p []byte) { cs.appendRecordingFrame(recDirAI, seq, ts, p) }
@@ -294,6 +306,14 @@ func (cs *CallSession) SourceCodec() media.CodecConfig {
 		return media.CodecConfig{}
 	}
 	return cs.srcCodec
+}
+
+// PCMSampleRate is the internal mono PCM rate produced by RTP decode (and fed to ASR processors).
+func (cs *CallSession) PCMSampleRate() int {
+	if cs == nil || cs.pcmSampleRate <= 0 {
+		return 16000
+	}
+	return cs.pcmSampleRate
 }
 
 // DTMFPayloadType is the negotiated telephone-event PT, or 0 if none.
@@ -389,6 +409,29 @@ func (cs *CallSession) Stop() {
 	}
 }
 
+// AppendRecordingSample appends one RTP payload to the SN3 blob (used during transfer bridge when
+// media bypasses the original rx/tx transports).
+func (cs *CallSession) AppendRecordingSample(dir byte, seq uint16, ts uint32, payload []byte) {
+	cs.appendRecordingFrame(dir, seq, ts, payload)
+}
+
+// WireTransferBridgeRecording attaches SN3 callbacks to PCM-bridge transports sharing inbound RTP session.
+func (cs *CallSession) WireTransferBridgeRecording(callerRx, callerTx *rtp.SIPRTPTransport) {
+	if cs == nil {
+		return
+	}
+	if callerRx != nil {
+		callerRx.OnInputRTP = func(seq uint16, ts uint32, p []byte) {
+			cs.appendRecordingFrame(recDirUser, seq, ts, p)
+		}
+	}
+	if callerTx != nil {
+		callerTx.OnOutputRTP = func(seq uint16, ts uint32, p []byte) {
+			cs.appendRecordingFrame(recDirAI, seq, ts, p)
+		}
+	}
+}
+
 func (cs *CallSession) appendRecordingFrame(dir byte, seq uint16, ts uint32, p []byte) {
 	if cs == nil || len(p) == 0 {
 		return
@@ -406,27 +449,30 @@ func (cs *CallSession) appendRecordingFrame(dir byte, seq uint16, ts uint32, p [
 	if rem <= 0 {
 		return
 	}
-	frameOverhead := 1 + 2 + 4 + 2 // dir + seq + ts + uint16 len
+	frameOverhead := 1 + 2 + 4 + 8 + 2 // dir + seq + rtpTs + wallNs + uint16 len
 	if len(cs.recBuf) == 0 {
 		if len(recBlobMagic) > rem {
 			return
 		}
+		cs.recTimeOrigin = time.Now()
 		cs.recBuf = append(cs.recBuf, recBlobMagic...)
 		rem = maxB - len(cs.recBuf)
 	}
 	if frameOverhead+len(p) > rem {
 		return
 	}
+	wallNs := uint64(time.Since(cs.recTimeOrigin))
 	cs.recBuf = append(cs.recBuf, dir)
-	var hdr [8]byte
+	var hdr [16]byte
 	binary.LittleEndian.PutUint16(hdr[0:2], seq)
 	binary.LittleEndian.PutUint32(hdr[2:6], ts)
-	binary.LittleEndian.PutUint16(hdr[6:8], uint16(len(p)))
+	binary.LittleEndian.PutUint64(hdr[6:14], wallNs)
+	binary.LittleEndian.PutUint16(hdr[14:16], uint16(len(p)))
 	cs.recBuf = append(cs.recBuf, hdr[:]...)
 	cs.recBuf = append(cs.recBuf, p...)
 }
 
-// TakeRecording returns buffered RTP recording (SN2 + per-frame dir/seq/ts/len/payload) and clears the buffer.
+// TakeRecording returns buffered RTP recording (SN3 …) and clears the buffer.
 func (cs *CallSession) TakeRecording() []byte {
 	if cs == nil {
 		return nil
@@ -439,6 +485,7 @@ func (cs *CallSession) TakeRecording() []byte {
 	out := make([]byte, len(cs.recBuf))
 	copy(out, cs.recBuf)
 	cs.recBuf = cs.recBuf[:0]
+	cs.recTimeOrigin = time.Time{}
 	return out
 }
 

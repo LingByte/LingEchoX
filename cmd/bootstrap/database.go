@@ -10,6 +10,7 @@ import (
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	sipPersist "github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -168,8 +169,8 @@ func RunMigrations(db *gorm.DB) error {
 	}
 	return utils.MakeMigrates(db, []any{
 		&utils.Config{},
-		&models.SIPUser{},
-		&models.SIPCall{},
+		&sipPersist.SIPUser{},
+		&sipPersist.SIPCall{},
 		&models.ACDPoolTarget{},
 		&models.SIPCampaign{},
 		&models.SIPCampaignContact{},

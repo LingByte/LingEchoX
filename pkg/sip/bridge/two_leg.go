@@ -28,6 +28,11 @@ type TwoLegPCMBridge struct {
 	callerRx, callerTx, agentRx, agentTx pcmBridgeLeg
 	c2aDec, c2aEnc, a2cDec, a2cEnc       media.EncoderFunc
 
+	midSampleRate int
+
+	tapMu sync.Mutex
+	tap   func([]byte) // mono PCM at midSampleRate (decoded bridge tap)
+
 	startOnce sync.Once
 	stopOnce  sync.Once
 }
@@ -69,20 +74,65 @@ func NewTwoLegPCMBridge(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &TwoLegPCMBridge{
-		ctx:      ctx,
-		cancel:   cancel,
-		callerRx: callerRx,
-		callerTx: callerTx,
-		agentRx:  agentRx,
-		agentTx:  agentTx,
-		c2aDec:   decCaller,
-		c2aEnc:   encAgent,
-		a2cDec:   decAgent,
-		a2cEnc:   encCaller,
+		ctx:           ctx,
+		cancel:        cancel,
+		callerRx:      callerRx,
+		callerTx:      callerTx,
+		agentRx:       agentRx,
+		agentTx:       agentTx,
+		c2aDec:        decCaller,
+		c2aEnc:        encAgent,
+		a2cDec:        decAgent,
+		a2cEnc:        encCaller,
+		midSampleRate: pcm.SampleRate,
 	}, nil
 }
 
-func runPCMBridgeHalf(ctx context.Context, rx, tx pcmBridgeLeg, dec, enc media.EncoderFunc) {
+// MidSampleRate is the bridge PCM sample rate (8 kHz dual G.711 or 16 kHz otherwise).
+func (b *TwoLegPCMBridge) MidSampleRate() int {
+	if b == nil {
+		return 0
+	}
+	return b.midSampleRate
+}
+
+// SetPCMRecordTap receives a copy of each decoded mono PCM frame from both bridge directions (caller→agent and agent→caller).
+func (b *TwoLegPCMBridge) SetPCMRecordTap(fn func([]byte)) {
+	if b == nil {
+		return
+	}
+	b.tapMu.Lock()
+	b.tap = fn
+	b.tapMu.Unlock()
+}
+
+func (b *TwoLegPCMBridge) invokeTap(pcm []byte) {
+	if b == nil || len(pcm) == 0 {
+		return
+	}
+	b.tapMu.Lock()
+	fn := b.tap
+	b.tapMu.Unlock()
+	if fn != nil {
+		fn(append([]byte(nil), pcm...))
+	}
+}
+
+func tapPCMFromDecodedMedia(dp media.MediaPacket, tap func([]byte)) {
+	if tap == nil || dp == nil {
+		return
+	}
+	switch v := dp.(type) {
+	case *media.DTMFPacket, *media.TextPacket, *media.ClosePacket:
+		return
+	case *media.AudioPacket:
+		if len(v.Payload) > 0 {
+			tap(v.Payload)
+		}
+	}
+}
+
+func runPCMBridgeHalf(ctx context.Context, rx, tx pcmBridgeLeg, dec, enc media.EncoderFunc, tap func([]byte)) {
 	if rx == nil || tx == nil || dec == nil || enc == nil {
 		return
 	}
@@ -104,6 +154,9 @@ func runPCMBridgeHalf(ctx context.Context, rx, tx pcmBridgeLeg, dec, enc media.E
 		for _, dp := range dps {
 			if dp == nil {
 				continue
+			}
+			if tap != nil {
+				tapPCMFromDecodedMedia(dp, tap)
 			}
 			eps, err := enc(dp)
 			if err != nil {
@@ -149,11 +202,11 @@ func (b *TwoLegPCMBridge) Start() {
 		b.wg.Add(2)
 		go func() {
 			defer b.wg.Done()
-			runPCMBridgeHalf(b.ctx, b.callerRx, b.agentTx, b.c2aDec, b.c2aEnc)
+			runPCMBridgeHalf(b.ctx, b.callerRx, b.agentTx, b.c2aDec, b.c2aEnc, b.invokeTap)
 		}()
 		go func() {
 			defer b.wg.Done()
-			runPCMBridgeHalf(b.ctx, b.agentRx, b.callerTx, b.a2cDec, b.a2cEnc)
+			runPCMBridgeHalf(b.ctx, b.agentRx, b.callerTx, b.a2cDec, b.a2cEnc, b.invokeTap)
 		}()
 	})
 }

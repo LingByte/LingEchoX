@@ -82,8 +82,24 @@ type TwoLegPayloadRelay struct {
 	clockCToA rtpRelayClock
 	clockAToC rtpRelayClock
 
+	recMu                sync.Mutex
+	onUserAudio          func(seq uint16, ts uint32, payload []byte)
+	onAgentToCallerAudio func(seq uint16, ts uint32, payload []byte)
+
 	startOnce sync.Once
 	stopOnce  sync.Once
+}
+
+// SetInboundRecording captures RTP audio forwarded during raw relay: user = caller→agent packets;
+// agentToCaller = agent→caller packets (written toward the original caller). Optional; nil skips.
+func (r *TwoLegPayloadRelay) SetInboundRecording(onUser, onAgentToCaller func(seq uint16, ts uint32, payload []byte)) {
+	if r == nil {
+		return
+	}
+	r.recMu.Lock()
+	r.onUserAudio = onUser
+	r.onAgentToCallerAudio = onAgentToCaller
+	r.recMu.Unlock()
 }
 
 type rtpRelayClock struct {
@@ -263,6 +279,32 @@ func (r *TwoLegPayloadRelay) runForward(fromCaller bool) {
 		newPT, ok := mapRelayPayloadType(buf[1], srcAudioPT, srcDTMF, dstAudioPT, dstDTMF)
 		if !ok {
 			continue
+		}
+
+		curAudioPT := buf[1] & 0x7F
+		recordAudio := false
+		if fromCaller {
+			recordAudio = curAudioPT == (srcAudioPT & 0x7F)
+		} else {
+			recordAudio = curAudioPT == (srcAudioPT & 0x7F)
+		}
+		if recordAudio {
+			pkt := &rtp.RTPPacket{}
+			if err := pkt.Unmarshal(buf[:n]); err == nil && len(pkt.Payload) > 0 {
+				p := append([]byte(nil), pkt.Payload...)
+				seq := pkt.Header.SequenceNumber
+				ts := pkt.Header.Timestamp
+				r.recMu.Lock()
+				fnU := r.onUserAudio
+				fnA := r.onAgentToCallerAudio
+				r.recMu.Unlock()
+				if fromCaller && fnU != nil {
+					fnU(seq, ts, p)
+				}
+				if !fromCaller && fnA != nil {
+					fnA(seq, ts, p)
+				}
+			}
 		}
 
 		if !rewriteHdr {

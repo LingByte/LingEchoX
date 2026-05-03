@@ -752,6 +752,7 @@ func (h *Hub) waitRemoteTrackAndBridge(
 	ccIn := inbound.SourceCodec()
 	callerRx := siprtp.NewSIPRTPTransport(inbound.RTPSession(), ccIn, media.DirectionInput, inbound.DTMFPayloadType())
 	callerTx := siprtp.NewSIPRTPTransport(inbound.RTPSession(), ccIn, media.DirectionOutput, 0)
+	inbound.WireTransferBridgeRecording(callerRx, callerTx)
 
 	br, err := bridge.NewTwoLegPCMBridge(callerRx, callerTx, wt, wt)
 	if err != nil {

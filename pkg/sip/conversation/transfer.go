@@ -210,11 +210,15 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 	if !filepath.IsAbs(path) {
 		path = filepath.Clean(path)
 	}
-	pcm, err := loadWAVAsPCM16Mono(path, 16000)
+	pcmSR := inbound.PCMSampleRate()
+	if pcmSR <= 0 {
+		pcmSR = 16000
+	}
+	pcm, err := loadWAVAsPCM16Mono(path, pcmSR)
 	if err != nil {
 		return fmt.Errorf("load transfer ringing wav: %w", err)
 	}
-	bytesPerFrame := 16000 * 2 * 20 / 1000
+	bytesPerFrame := pcmSR * 2 * 20 / 1000
 	if bytesPerFrame <= 0 {
 		bytesPerFrame = 640
 	}
@@ -295,7 +299,11 @@ func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *z
 	if !filepath.IsAbs(path) {
 		path = filepath.Clean(path)
 	}
-	pcm, err := loadWAVAsPCM16Mono(path, 16000)
+	pcmSR := inbound.PCMSampleRate()
+	if pcmSR <= 0 {
+		pcmSR = 16000
+	}
+	pcm, err := loadWAVAsPCM16Mono(path, pcmSR)
 	if err != nil {
 		if lg != nil {
 			lg.Warn("sip transfer: load goodbye wav failed, hangup directly",
@@ -306,7 +314,7 @@ func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *z
 		return
 	}
 	// Allow full WAV plus margin; a short cap used to avoid hanging forever if the session never ends.
-	pcmSecs := len(pcm) / (16000 * 2)
+	pcmSecs := len(pcm) / (pcmSR * 2)
 	if pcmSecs < 1 {
 		pcmSecs = 1
 	}
@@ -319,7 +327,7 @@ func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *z
 	}
 	runCtx, cancel := context.WithTimeout(ctx, maxRun)
 	defer cancel()
-	bytesPerFrame := 16000 * 2 * 20 / 1000
+	bytesPerFrame := pcmSR * 2 * 20 / 1000
 	if bytesPerFrame <= 0 {
 		bytesPerFrame = 640
 	}

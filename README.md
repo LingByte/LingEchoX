@@ -91,3 +91,81 @@ Key configuration is provided through `.env` (see `env.example`), including:
 
 This project includes an AGPL-3.0 license file (`LICENSE`).
 
+
+// Package sipenv documents environment variables consulted under pkg/sip (and tightly coupled outbound/script paths).
+//
+// Unless noted, variables are optional—omit them and the code uses the documented default.
+//
+// # Persistence (pkg/sip/persist)
+//
+//   - SIP_PERSIST: "json" or "file" → JSON file store under SIP_DATA_DIR; anything else → GORM (default).
+//   - SIP_DATA_DIR: directory for JSON mode (default "data", resolved to absolute when relative).
+//
+// # SIP server / RTP (pkg/sip/server, pkg/sip/session)
+//
+//   - SIP_RTP_PORT: fixed RTP listen port (>0).
+//   - SIP_RTP_PORT_START / SIP_RTP_PORT_END: allocate RTP from this UDP range (rotation).
+//   - SIP_MEDIA_TX_QUEUE_SIZE: outbound media queue depth (default 512, clamped 64–2048).
+//   - SIP_MEDIA_MAX_SECONDS: max AI media session duration per call in seconds (default 3600; 0 = unlimited).
+//
+// # Voice pipeline ASR / LLM / TTS (pkg/sip/conversation — credentials required for AI audio)
+//
+//   - ASR_APPID, ASR_SECRET_ID, ASR_SECRET_KEY, ASR_MODEL_TYPE
+//   - LLM_PROVIDER, LLM_BASEURL, LLM_APIKEY, LLM_MODEL, LLM_APP_ID (or ALIBABA_AI_APP_ID + ALIBABA_AI_API_KEY for alibaba)
+//   - TTS_APPID, TTS_SECRET_ID, TTS_SECRET_KEY, TTS_VOICE_TYPE, TTS_SPEED, TTS_SAMPLE_RATE (default 16000 when unset)
+//
+// # SIP conversation tuning (defaults apply when unset)
+//
+//   - SIP_AI_HANGUP_PHRASES: comma-separated phrases (default Chinese goodbye list).
+//   - SIP_VAD_BARGE_IN: 0/false/off/no disables RMS barge-in during TTS (default enabled).
+//   - SIP_VAD_THRESHOLD: RMS threshold (default 3200).
+//   - SIP_VAD_CONSEC_FRAMES: frames for barge-in (default 3).
+//   - SIP_ASR_TRIGGER_PARTIAL: enable partial ASR → LLM (default off).
+//   - SIP_ASR_PARTIAL_TIMEOUT_MS: fallback final trigger on partials (default 1200; min 300 when set).
+//   - SIP_WELCOME_WAIT_FIRST_RTP_MS: delay before welcome WAV (default 2000; 0 disables wait).
+//   - SIP_WELCOME_WAV_PATH: optional welcome clip path.
+//   - SIP_WELCOME_BARGE_IN_THRESHOLD: RMS for welcome barge-in (pkg/sip/siputil, default 1800).
+//
+// # Transfer / bridge (pkg/sip/conversation, pkg/sip/bridge)
+//
+//   - SIP_TRANSFER_RINGING_WAV_PATH: clip during transfer ringback.
+//   - SIP_TRANSFER_GOODBYE_TAIL_MS: tail timing for transfer goodbye.
+//   - SIP_TRANSFER_RELAY_REWRITE_RTP: legacy RTP SSRC/seq rewrite for raw relay (see bridge/two_leg_relay.go).
+//
+// # WebSeat WebRTC (pkg/sip/webseat)
+//
+//   - SIP_WEBSEAT_WS_TOKEN: shared secret for browser WS (empty = accept any; dev only).
+//   - SIP_WEBSEAT_JOIN_TIMEOUT: browser join deadline.
+//   - SIP_WEBSEAT_TRACK_WAIT: wait for first audio track after SDP answer.
+//   - SIP_WEBSEAT_ICE_SERVERS: JSON ICE server list for peer connection.
+//
+// # Registrar / presence
+//
+//   - CONVERSATION_WEBSEAT_SIP_DOMAIN: SIP domain hint for WebSeat-related registrar rows (pkg/sip/persist/sip_user.go).
+//
+// # Intent ONNX (pkg/sip/conversation/voice_intent_onnx.go)
+//
+//   - SIP_INTENT_ONNX_ENABLED, SIP_INTENT_ONNX_COREML, SIP_INTENT_ONNX_MODEL, SIP_INTENT_ONNX_TOKENIZER,
+//     SIP_INTENT_ONNX_LIB, ONNXRUNTIME_SHARED_LIBRARY_PATH, SIP_INTENT_ONNX_SEQ, SIP_INTENT_ONNX_CONFIG,
+//     SIP_INTENT_TRANSFER_LITERAL_ONLY, SIP_INTENT_TRANSFER_LITERAL_INTENT_NAME,
+//     SIP_INTENT_ONNX_CANNED_INTENTS, SIP_INTENT_STRICT_CANNED_NAMES,
+//     SIP_INTENT_TRANSFER_EXPLICIT_PHRASES, SIP_INTENT_TWO_PHASE_TTS, SIP_INTENT_TWO_PHASE_NAMES,
+//     SIP_INTENT_ONNX_LLM_PREFIX
+//
+// # Hotword ASR corrections (pkg/sip/conversation/hotword_rms_compat.go)
+//
+//   - SIP_HOTWORD_CORRECTIONS_JSON, SIP_HOTWORD_CORRECTIONS
+//
+// # Outbound / ACD / hybrid script (pkg/sip/outbound, pkg/constants)
+//
+//   - SIP_OUTBOUND_HOST, SIP_OUTBOUND_PORT, SIP_SIGNALING_ADDR, SIP_OUTBOUND_REQUEST_URI,
+//     SIP_OUTBOUND_AUTO_DIAL, SIP_TARGET_NUMBER, SIP_CALLER_ID, SIP_CALLER_DISPLAY_NAME,
+//     SIP_DEFAULT_DOMAIN, SIP_DEFAULT_URI_PORT, SIP_PASSWORD (REGISTER auth),
+//     SIP_TRANSFER_* (host/port/sig/request-uri/number),
+//     SIP_SCRIPT_LISTEN_AFTER_TTS_TAIL, SIP_SCRIPT_LISTEN_TAIL_MS_MAX/MIN, SIP_SCRIPT_LISTEN_POLL_MS,
+//     SIP_SCRIPT_LLM_FAIL_PROMPT,
+//     CHECK_LLM_PROVIDER, CHECK_LLM_BASEURL, CHECK_LLM_APIKEY, CHECK_LLM_MODEL,
+//     CHECK_LLM_ROUTE_TIMEOUT_MS, CHECK_LLM_ROUTE_DISABLED, CHECK_LLM_ROUTE_LEGACY_JSON, CHECK_LLM_ROUTE_MAX_TOKENS
+//
+// Credentials and routing keys above have no safe default; tuning keys use defaults in code when unset.
+package sipenv

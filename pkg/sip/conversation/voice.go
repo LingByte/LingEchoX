@@ -19,12 +19,12 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/recognizer"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
-	"github.com/LingByte/SoulNexus/pkg/sip"
-	sipasr "github.com/LingByte/SoulNexus/pkg/sip/asr"
+	sipasr "github.com/LingByte/SoulNexus/pkg/voice/asr"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
-	siptts "github.com/LingByte/SoulNexus/pkg/sip/tts"
+	siptts "github.com/LingByte/SoulNexus/pkg/voice/tts"
+	sipvad "github.com/LingByte/SoulNexus/pkg/sip/vad"
 	"github.com/LingByte/SoulNexus/pkg/synthesizer"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
@@ -103,6 +103,30 @@ type VoiceEnv struct {
 	TTSVoiceType  int64
 	TTSSpeed      int64
 	TTSSampleRate int
+}
+
+// sipVoicePCMBridgeRate is the negotiated PCM rate between RTP decode and encode (must match MediaSession).
+func sipVoicePCMBridgeRate(cs *sipSession.CallSession) int {
+	if cs == nil {
+		return 16000
+	}
+	sr := cs.PCMSampleRate()
+	if sr <= 0 {
+		return 16000
+	}
+	return sr
+}
+
+// sipVoiceTTSCloudSampleRate chooses QCloud output rate; when TTS_SAMPLE_RATE is unset, match the SIP PCM bridge.
+func sipVoiceTTSCloudSampleRate(env VoiceEnv, pcmBridgeSR int) int {
+	sr := env.TTSSampleRate
+	if sr > 0 {
+		return sr
+	}
+	if pcmBridgeSR > 0 {
+		return pcmBridgeSR
+	}
+	return 16000
 }
 
 func voiceEnvFromProcess() VoiceEnv {
@@ -198,46 +222,6 @@ func sipHangupPhrasesFromEnv() []string {
 	return out
 }
 
-// sipVADBargeInEnabled is true unless SIP_VAD_BARGE_IN is 0/false/off/no.
-func sipVADBargeInEnabled() bool {
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv("SIP_VAD_BARGE_IN")))
-	switch v {
-	case "", "1", "true", "yes", "on":
-		return true
-	case "0", "false", "off", "no":
-		return false
-	default:
-		return true
-	}
-}
-
-// sipVADDefaultThreshold RMS 上限（16-bit PCM 与 pkg/voice 一致）：默认提高到更保守值，降低TTS/线路回声误触发。
-const sipVADDefaultThreshold = 3200.0
-
-func sipVADThresholdFromEnv() float64 {
-	s := strings.TrimSpace(utils.GetEnv("SIP_VAD_THRESHOLD"))
-	if s == "" {
-		return 0
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || f <= 0 {
-		return 0
-	}
-	return f
-}
-
-func sipVADConsecutiveFramesFromEnv() int {
-	s := strings.TrimSpace(utils.GetEnv("SIP_VAD_CONSEC_FRAMES"))
-	if s == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 {
-		return 0
-	}
-	return n
-}
-
 // sipASRTriggerPartialEnabled controls whether non-final ASR hypotheses can trigger LLM.
 // Default false to avoid premature responses ("抢话") that sound like stutter/choppy dialog.
 func sipASRTriggerPartialEnabled() bool {
@@ -328,9 +312,20 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	}
 	asrSvc := recognizer.NewQcloudASR(asrOpt)
 
+	asrOutRate := 16000
+	if strings.Contains(strings.ToLower(asrOpt.ModelType), "8k") {
+		asrOutRate = 8000
+	}
+	asrInRate := cs.PCMSampleRate()
+	if asrInRate <= 0 {
+		asrInRate = 16000
+	}
+	pcmBridgeSR := sipVoicePCMBridgeRate(cs)
+	ttsCloudSR := sipVoiceTTSCloudSampleRate(env, pcmBridgeSR)
+
 	pipe, err := sipasr.New(sipasr.Options{
 		ASR:        asrSvc,
-		SampleRate: 16000,
+		SampleRate: asrOutRate,
 		Channels:   1,
 		Logger:     lg,
 	})
@@ -358,10 +353,14 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		zap.String("llm_endpoint_or_app_id", llmEndpointOrAppID),
 		zap.String("asr_model", asrOpt.ModelType),
 		zap.Int64("tts_speed", env.TTSSpeed),
-		zap.Int("tts_sample_rate", env.TTSSampleRate),
+		zap.Int("pcm_bridge_hz", pcmBridgeSR),
+		zap.Int("tts_cloud_hz", ttsCloudSR),
+		zap.Int("tts_sample_rate_env", env.TTSSampleRate),
 	)
-	if strings.Contains(strings.ToLower(asrOpt.ModelType), "8k") {
-		lg.Warn("sip voice: ASR is 8k; media PCM is 16k so audio is resampled. For better quality set ASR_MODEL_TYPE=16k_zh",
+	if asrInRate != asrOutRate {
+		lg.Info("sip voice: resampling decode PCM for ASR",
+			zap.Int("pcm_decode_hz", asrInRate),
+			zap.Int("asr_hz", asrOutRate),
 			zap.String("asr_model", asrOpt.ModelType),
 		)
 	}
@@ -370,7 +369,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	if voiceType == 0 {
 		voiceType = 101007 // 知性女声（智娜）
 	}
-	ttsCfg := synthesizer.NewQcloudTTSConfig(env.TTSAppID, env.TTSSecretID, env.TTSSecretKey, voiceType, "pcm", env.TTSSampleRate)
+	ttsCfg := synthesizer.NewQcloudTTSConfig(env.TTSAppID, env.TTSSecretID, env.TTSSecretKey, voiceType, "pcm", ttsCloudSR)
 	ttsCfg.Speed = env.TTSSpeed
 	qcTTS := synthesizer.NewQCloudService(ttsCfg)
 	ttsStream := &qcloudTTSStream{svc: qcTTS}
@@ -396,7 +395,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	const partialTimeoutFinalDedupeWindow = 12 * time.Second
 	ttsPipe, err := siptts.New(siptts.Config{
 		Service:       ttsStream,
-		SampleRate:    env.TTSSampleRate,
+		SampleRate:    ttsCloudSR,
 		Channels:      1,
 		FrameDuration: 20 * time.Millisecond,
 		// Match RTP real-time pacing so the far end does not receive whole replies in a few ms bursts.
@@ -405,8 +404,14 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			if len(frame) == 0 {
 				return nil
 			}
+			pcmOut := frame
+			if ttsCloudSR != pcmBridgeSR && len(frame) >= 2 {
+				if out, err := media.ResamplePCM(frame, ttsCloudSR, pcmBridgeSR); err == nil && len(out) > 0 {
+					pcmOut = out
+				}
+			}
 			pkt := &media.AudioPacket{
-				Payload:       frame,
+				Payload:       pcmOut,
 				IsSynthesized: true,
 			}
 			ms.SendToOutput("sip-voice-tts", pkt)
@@ -423,35 +428,20 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	var welcomePlaying atomic.Bool
 	var welcomeCancelMu sync.Mutex
 	var welcomeCancel context.CancelFunc
-	var vadDet *sip.VADDetector
-	if sipVADBargeInEnabled() {
-		vadDet = sip.NewVADDetector()
+	var vadDet *sipvad.Detector
+	if sipvad.BargeInEnabled() {
+		vadDet = sipvad.NewDetector()
 		vadDet.SetLogger(lg)
-		thrEnv := sipVADThresholdFromEnv()
-		thr := sipVADDefaultThreshold
-		if thrEnv > 0 {
-			thr = thrEnv
-		}
+		thr := sipvad.ThresholdFromEnv()
 		vadDet.SetThreshold(thr)
-		cf := sipVADConsecutiveFramesFromEnv()
-		if cf < 1 {
-			// ~20ms/frame; use shorter window so barge-in feels responsive.
-			cf = 3
-		}
+		cf := sipvad.ConsecutiveFramesFromEnv()
 		vadDet.SetConsecutiveFrames(cf)
 		lg.Info("sip voice: RMS VAD barge-in enabled (TTS playback only)",
 			zap.Float64("threshold_effective", thr),
-			zap.Float64("threshold_env_override", thrEnv),
 			zap.Int("consecutive_frames", cf),
 		)
 	} else {
 		lg.Info("sip voice: RMS VAD barge-in disabled (SIP_VAD_BARGE_IN)")
-	}
-
-	asrInRate := 16000
-	asrOutRate := 16000
-	if strings.Contains(strings.ToLower(asrOpt.ModelType), "8k") {
-		asrOutRate = 8000
 	}
 
 	// Same incremental strategy as pkg/hardware: ASRStateManager extracts new sentences from
@@ -816,7 +806,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				welcomeCancel = nil
 				welcomeCancelMu.Unlock()
 			}()
-			if err := playWelcomeWav(welcomeCtx, ms, lg, env.TTSSampleRate); err != nil {
+			if err := playWelcomeWav(welcomeCtx, ms, lg, pcmBridgeSR); err != nil {
 				lg.Warn("sip voice welcome playback failed", zap.String("call_id", cs.CallID), zap.Error(err))
 				return
 			}
@@ -1185,18 +1175,20 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 	if env.TTSAppID == "" || env.TTSSecretID == "" || env.TTSSecretKey == "" {
 		return fmt.Errorf("sip conversation: missing TTS credentials")
 	}
+	pcmBridgeSR := sipVoicePCMBridgeRate(cs)
+	ttsCloudSR := sipVoiceTTSCloudSampleRate(env, pcmBridgeSR)
 	voiceType := env.TTSVoiceType
 	if voiceType == 0 {
 		voiceType = 101007 // 知性女声（智娜）
 	}
-	ttsCfg := synthesizer.NewQcloudTTSConfig(env.TTSAppID, env.TTSSecretID, env.TTSSecretKey, voiceType, "pcm", env.TTSSampleRate)
+	ttsCfg := synthesizer.NewQcloudTTSConfig(env.TTSAppID, env.TTSSecretID, env.TTSSecretKey, voiceType, "pcm", ttsCloudSR)
 	ttsCfg.Speed = env.TTSSpeed
 	qcTTS := synthesizer.NewQCloudService(ttsCfg)
 	ttsStream := &qcloudTTSStream{svc: qcTTS}
 
 	ttsPipe, err := siptts.New(siptts.Config{
 		Service:       ttsStream,
-		SampleRate:    env.TTSSampleRate,
+		SampleRate:    ttsCloudSR,
 		Channels:      1,
 		FrameDuration: 20 * time.Millisecond,
 		PaceRealtime:  true,
@@ -1204,8 +1196,14 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 			if len(frame) == 0 {
 				return nil
 			}
+			pcmOut := frame
+			if ttsCloudSR != pcmBridgeSR && len(frame) >= 2 {
+				if out, err := media.ResamplePCM(frame, ttsCloudSR, pcmBridgeSR); err == nil && len(out) > 0 {
+					pcmOut = out
+				}
+			}
 			ms.SendToOutput("sip-script-say", &media.AudioPacket{
-				Payload:       frame,
+				Payload:       pcmOut,
 				IsSynthesized: true,
 			})
 			return nil
