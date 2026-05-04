@@ -13,12 +13,11 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
 	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
-	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
 	"go.uber.org/zap"
 )
 
@@ -31,7 +30,7 @@ import (
 // On ACK, inbound media attaches the HTTP WebSocket dialogue bridge (pkg/sip/voicedialog) only — no embedded
 // SIP-side LLM pipeline on inbound.
 type SIPServer struct {
-	proto *protocol.Server
+	ep *stack.Endpoint
 
 	localIP    string
 	listenHost string
@@ -49,11 +48,11 @@ type SIPServer struct {
 	dlgMu  sync.RWMutex
 	uasDlg map[string]*uasDialogState // inbound Call-ID -> dialog (for server-initiated BYE)
 
-	inviteAllowNets   []*net.IPNet
-	inviteRate        inviteRateState
-	inviteRatePerSec  float64
-	inviteBurst       int
-	inviteDigest      *sipDigestAuth
+	inviteAllowNets  []*net.IPNet
+	inviteRate       inviteRateState
+	inviteRatePerSec float64
+	inviteBurst      int
+	inviteDigest     *sipDigestAuth
 
 	inviteEnv inviteEnvConfig
 
@@ -163,7 +162,7 @@ type Config struct {
 
 	// OnSIPResponse is optional: SIP responses on the listen socket (UAC / outbound legs).
 	// Typically set to outbound.Manager.HandleSIPResponse.
-	OnSIPResponse func(resp *protocol.Message, addr *net.UDPAddr)
+	OnSIPResponse func(resp *stack.Message, addr *net.UDPAddr)
 }
 
 func New(cfg Config) *SIPServer {
@@ -178,84 +177,86 @@ func New(cfg Config) *SIPServer {
 		s.localIP = "127.0.0.1"
 	}
 
-	s.proto = protocol.NewServer(cfg.Host, cfg.Port)
-	s.proto.OnSIPResponse = func(resp *protocol.Message, addr *net.UDPAddr) {
-		if resp != nil && logger.Lg != nil {
-			status := resp.StatusCode
-			if status >= 180 || status >= 300 {
-				logger.Lg.Info("sip response dispatch",
-					zap.String("remote", addrString(addr)),
-					zap.String("call_id", resp.GetHeader("Call-ID")),
-					zap.String("cseq", resp.GetHeader("CSeq")),
-					zap.Int("status", status),
-					zap.String("reason", strings.TrimSpace(resp.StatusText)),
-					zap.String("content_type", strings.TrimSpace(resp.GetHeader("Content-Type"))),
-					zap.Int("content_length", len(resp.Body)),
-					zap.String("body_preview", preview(resp.Body, 500)),
-				)
+	epCfg := stack.EndpointConfig{
+		Host: cfg.Host,
+		Port: cfg.Port,
+		OnSIPResponse: func(resp *stack.Message, addr *net.UDPAddr) {
+			if resp != nil && logger.Lg != nil {
+				status := resp.StatusCode
+				if status >= 180 || status >= 300 {
+					logger.Lg.Info("sip response dispatch",
+						zap.String("remote", addrString(addr)),
+						zap.String("call_id", resp.GetHeader("Call-ID")),
+						zap.String("cseq", resp.GetHeader("CSeq")),
+						zap.Int("status", status),
+						zap.String("reason", strings.TrimSpace(resp.StatusText)),
+						zap.String("content_type", strings.TrimSpace(resp.GetHeader("Content-Type"))),
+						zap.Int("content_length", len(resp.Body)),
+						zap.String("body_preview", preview(resp.Body, 500)),
+					)
+				}
 			}
-		}
-		if cfg.OnSIPResponse != nil {
-			cfg.OnSIPResponse(resp, addr)
-		}
-	}
-	// Default protocol-level logs for visibility during development.
-	s.proto.OnEvent = func(e protocol.Event) {
-		switch e.Type {
-		case protocol.EventDatagramReceived:
-			logger.Debug("sip datagram received",
-				zap.String("remote", addrString(e.Addr)),
-				zap.Int("bytes", len(e.Raw)),
-			)
-		case protocol.EventParseError:
-			logger.Warn("sip parse error",
-				zap.String("remote", addrString(e.Addr)),
-				zap.Int("bytes", len(e.Raw)),
-				zap.Error(e.Err),
-			)
-		case protocol.EventRequestReceived:
-			req := e.Request
-			logger.Info("sip request received",
-				zap.String("remote", addrString(e.Addr)),
-				zap.String("method", safe(req, func(m *protocol.Message) string { return m.Method })),
-				zap.String("uri", safe(req, func(m *protocol.Message) string { return m.RequestURI })),
-				zap.String("call_id", safe(req, func(m *protocol.Message) string { return m.GetHeader("Call-ID") })),
-				zap.String("from", safe(req, func(m *protocol.Message) string { return m.GetHeader("From") })),
-				zap.String("to", safe(req, func(m *protocol.Message) string { return m.GetHeader("To") })),
-				zap.String("cseq", safe(req, func(m *protocol.Message) string { return m.GetHeader("CSeq") })),
-			)
-		case protocol.EventResponseSent:
-			req := e.Request
-			resp := e.Response
-			logger.Info("sip response sent",
-				zap.String("remote", addrString(e.Addr)),
-				zap.String("method", safe(req, func(m *protocol.Message) string { return m.Method })),
-				zap.String("call_id", safe(req, func(m *protocol.Message) string { return m.GetHeader("Call-ID") })),
-				zap.Int("status", safeI(resp, func(m *protocol.Message) int { return m.StatusCode })),
-				zap.String("reason", safe(resp, func(m *protocol.Message) string { return m.StatusText })),
-			)
-		case protocol.EventResponseReceived:
-			if e.Response != nil {
-				logger.Debug("sip response received",
+			if cfg.OnSIPResponse != nil {
+				cfg.OnSIPResponse(resp, addr)
+			}
+		},
+		OnEvent: func(e stack.Event) {
+			switch e.Type {
+			case stack.EventDatagramReceived:
+				logger.Debug("sip datagram received",
 					zap.String("remote", addrString(e.Addr)),
-					zap.String("call_id", e.Response.GetHeader("Call-ID")),
-					zap.Int("status", e.Response.StatusCode),
+					zap.Int("bytes", len(e.Raw)),
 				)
+			case stack.EventParseError:
+				logger.Warn("sip parse error",
+					zap.String("remote", addrString(e.Addr)),
+					zap.Int("bytes", len(e.Raw)),
+					zap.Error(e.Err),
+				)
+			case stack.EventRequestReceived:
+				req := e.Request
+				logger.Info("sip request received",
+					zap.String("remote", addrString(e.Addr)),
+					zap.String("method", safe(req, func(m *stack.Message) string { return m.Method })),
+					zap.String("uri", safe(req, func(m *stack.Message) string { return m.RequestURI })),
+					zap.String("call_id", safe(req, func(m *stack.Message) string { return m.GetHeader("Call-ID") })),
+					zap.String("from", safe(req, func(m *stack.Message) string { return m.GetHeader("From") })),
+					zap.String("to", safe(req, func(m *stack.Message) string { return m.GetHeader("To") })),
+					zap.String("cseq", safe(req, func(m *stack.Message) string { return m.GetHeader("CSeq") })),
+				)
+			case stack.EventResponseSent:
+				req := e.Request
+				resp := e.Response
+				logger.Info("sip response sent",
+					zap.String("remote", addrString(e.Addr)),
+					zap.String("method", safe(req, func(m *stack.Message) string { return m.Method })),
+					zap.String("call_id", safe(req, func(m *stack.Message) string { return m.GetHeader("Call-ID") })),
+					zap.Int("status", safeI(resp, func(m *stack.Message) int { return m.StatusCode })),
+					zap.String("reason", safe(resp, func(m *stack.Message) string { return m.StatusText })),
+				)
+			case stack.EventResponseReceived:
+				if e.Response != nil {
+					logger.Debug("sip response received",
+						zap.String("remote", addrString(e.Addr)),
+						zap.String("call_id", e.Response.GetHeader("Call-ID")),
+						zap.Int("status", e.Response.StatusCode),
+					)
+				}
 			}
-		}
+		},
 	}
-	s.proto.RegisterHandler(protocol.MethodInvite, s.handleInvite)
-	s.proto.RegisterHandler(protocol.MethodAck, s.handleAck)
-	s.proto.RegisterHandler(protocol.MethodBye, s.handleBye)
-	s.proto.RegisterHandler(protocol.MethodOptions, s.handleOptions)
-	s.proto.RegisterHandler(protocol.MethodRegister, s.handleRegister)
-	s.proto.RegisterHandler(protocol.MethodInfo, s.handleInfo)
-	s.proto.RegisterHandler(protocol.MethodCancel, s.handleCancel)
-	s.proto.RegisterHandler(protocol.MethodPublish, s.handlePublish)
-	s.proto.RegisterHandler(protocol.MethodPrack, s.handlePrack)
-	s.proto.RegisterNoRoute(func(_ *protocol.Message, _ *net.UDPAddr) *protocol.Message {
-		// No route: respond 404.
-		return &protocol.Message{
+	s.ep = stack.NewEndpoint(epCfg)
+	s.ep.RegisterHandler(stack.MethodInvite, s.handleInvite)
+	s.ep.RegisterHandler(stack.MethodAck, s.handleAck)
+	s.ep.RegisterHandler(stack.MethodBye, s.handleBye)
+	s.ep.RegisterHandler(stack.MethodOptions, s.handleOptions)
+	s.ep.RegisterHandler(stack.MethodRegister, s.handleRegister)
+	s.ep.RegisterHandler(stack.MethodInfo, s.handleInfo)
+	s.ep.RegisterHandler(stack.MethodCancel, s.handleCancel)
+	s.ep.RegisterHandler(stack.MethodPublish, s.handlePublish)
+	s.ep.RegisterHandler(stack.MethodPrack, s.handlePrack)
+	s.ep.SetNoRouteHandler(func(_ *stack.Message, _ *net.UDPAddr) *stack.Message {
+		return &stack.Message{
 			IsRequest:  false,
 			Version:    "SIP/2.0",
 			StatusCode: 404,
@@ -329,14 +330,14 @@ func addrString(a *net.UDPAddr) string {
 	return a.String()
 }
 
-func safe(m *protocol.Message, f func(*protocol.Message) string) string {
+func safe(m *stack.Message, f func(*stack.Message) string) string {
 	if m == nil || f == nil {
 		return ""
 	}
 	return f(m)
 }
 
-func safeI(m *protocol.Message, f func(*protocol.Message) int) int {
+func safeI(m *stack.Message, f func(*stack.Message) int) int {
 	if m == nil || f == nil {
 		return 0
 	}
@@ -381,13 +382,21 @@ func (s *SIPServer) ensureSigCtx() {
 }
 
 func (s *SIPServer) Start() error {
-	if s == nil || s.proto == nil {
+	if s == nil || s.ep == nil {
 		return fmt.Errorf("sip: server not ready")
 	}
 	s.ensureSigCtx()
-	if err := s.proto.Start(); err != nil {
-		return err
+	if err := s.ep.Open(); err != nil {
+		return fmt.Errorf("sip: endpoint open: %w", err)
 	}
+	if la := s.ep.ListenAddr(); la != nil {
+		if u, ok := la.(*net.UDPAddr); ok && u != nil && u.Port > 0 {
+			s.listenPort = u.Port
+		}
+	}
+	go func() {
+		_ = s.ep.Serve(s.sigCtx)
+	}()
 	s.startSigTransportListeners()
 	return nil
 }
@@ -413,27 +422,27 @@ func (s *SIPServer) Stop() error {
 	}
 	s.mu.Unlock()
 
-	if s.proto != nil {
-		return s.proto.Stop()
+	if s.ep != nil {
+		_ = s.ep.Close()
 	}
 	return nil
 }
 
 // StartInviteHandler is exported for unit tests.
-func (s *SIPServer) StartInviteHandler(msg *protocol.Message, addr *net.UDPAddr) *protocol.Message {
+func (s *SIPServer) StartInviteHandler(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	return s.handleInvite(msg, addr)
 }
 
 // StartByeHandler is exported for unit tests.
-func (s *SIPServer) StartByeHandler(msg *protocol.Message, addr *net.UDPAddr) *protocol.Message {
+func (s *SIPServer) StartByeHandler(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	return s.handleBye(msg, addr)
 }
 
-func (s *SIPServer) StartAckHandler(msg *protocol.Message, addr *net.UDPAddr) *protocol.Message {
+func (s *SIPServer) StartAckHandler(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	return s.handleAck(msg, addr)
 }
 
-func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *protocol.Message {
+func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != "INVITE" {
 		return nil
 	}
@@ -461,17 +470,17 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	}
 
 	// Provisional response: 100 Trying (helps many clients' state machines).
-	if s.proto != nil && addr != nil {
+	if s.ep != nil && addr != nil {
 		trying := s.makeResponse(msg, 100, "Trying", "", "")
-		_ = s.proto.Send(trying, addr)
+		_ = s.ep.Send(trying, addr)
 	}
 
 	fk := inviteFlightKey(msg)
 	if fk != "" {
 		if raw, ok := s.inviteFinal200Raw.Load(fk); ok {
-			if rs, ok2 := raw.(string); ok2 && strings.TrimSpace(rs) != "" && s.proto != nil && addr != nil {
-				if m, err := protocol.Parse(rs); err == nil && m != nil {
-					_ = s.proto.Send(m, addr)
+			if rs, ok2 := raw.(string); ok2 && strings.TrimSpace(rs) != "" && s.ep != nil && addr != nil {
+				if m, err := stack.Parse(rs); err == nil && m != nil {
+					_ = s.ep.Send(m, addr)
 				}
 			}
 			return nil
@@ -493,6 +502,16 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 			zap.String("sdp_preview", preview(msg.Body, 800)),
 		)
 		return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+	}
+
+	if strings.Contains(strings.ToUpper(offer.Proto), "SAVP") {
+		if _, ok := sdp.PickAESCM128Offer(offer.CryptoOffers); !ok {
+			logger.Warn("sip invite rejected (SRTP media without usable a=crypto)",
+				zap.String("call_id", callID),
+				zap.String("proto", offer.Proto),
+			)
+			return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+		}
 	}
 
 	// REGISTERed AOR: proxy INVITE to that UA (same host: different user in Request-URI).
@@ -571,6 +590,53 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	}
 	rtpSess.SetRemoteAddr(remoteAddr)
 
+	var sdpExtras []string
+	if co, ok := sdp.PickAESCM128Offer(offer.CryptoOffers); ok && strings.Contains(strings.ToUpper(offer.Proto), "SAVP") {
+		rk, rsalt, err := sdp.DecodeSDESInline(co.KeyParams)
+		if err != nil {
+			_ = rtpSess.Close()
+			if flight != nil && fk != "" {
+				s.inviteFlights.Delete(fk)
+			}
+			logger.Warn("sip invite rejected (invalid SRTP inline)", zap.String("call_id", callID), zap.Error(err))
+			return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+		}
+		lk := make([]byte, 16)
+		lsalt := make([]byte, 14)
+		if _, err := rand.Read(lk); err != nil {
+			_ = rtpSess.Close()
+			if flight != nil && fk != "" {
+				s.inviteFlights.Delete(fk)
+			}
+			return s.makeResponse(msg, 500, "Internal Server Error", "", "")
+		}
+		if _, err := rand.Read(lsalt); err != nil {
+			_ = rtpSess.Close()
+			if flight != nil && fk != "" {
+				s.inviteFlights.Delete(fk)
+			}
+			return s.makeResponse(msg, 500, "Internal Server Error", "", "")
+		}
+		cryptoLine, err := sdp.FormatCryptoLine(co.Tag, sdp.SuiteAESCM128HMACSHA180, lk, lsalt)
+		if err != nil {
+			_ = rtpSess.Close()
+			if flight != nil && fk != "" {
+				s.inviteFlights.Delete(fk)
+			}
+			logger.Warn("sip invite rejected (SRTP answer crypto)", zap.String("call_id", callID), zap.Error(err))
+			return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+		}
+		sdpExtras = append(sdpExtras, cryptoLine)
+		if err := rtpSess.EnableSDESSRTP(rk, rsalt, lk, lsalt); err != nil {
+			_ = rtpSess.Close()
+			if flight != nil && fk != "" {
+				s.inviteFlights.Delete(fk)
+			}
+			logger.Warn("sip invite SRTP enable failed", zap.String("call_id", callID), zap.Error(err))
+			return s.makeResponse(msg, 500, "Internal Server Error", "", "")
+		}
+	}
+
 	// Store session for BYE.
 	s.mu.Lock()
 	// If a session already exists for this call, stop it first (idempotency-ish).
@@ -607,17 +673,17 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	if p := s.callPersistStore(); p != nil {
 		neg := cs.NegotiatedCodec()
 		p.OnInvite(context.Background(), InvitePersistParams{
-			CallID:        callID,
-			From:          msg.GetHeader("From"),
-			To:            msg.GetHeader("To"),
-			RemoteSig:     addr.String(),
-			RemoteRTP:     remoteAddr.String(),
-			LocalRTP:      fmt.Sprintf("%s:%d", s.localIP, localPort),
-			Codec:         neg.Name,
-			PayloadType:   neg.PayloadType,
-			ClockRate:     neg.ClockRate,
-			CSeqInvite:    msg.GetHeader("CSeq"),
-			Direction:     "inbound",
+			CallID:      callID,
+			From:        msg.GetHeader("From"),
+			To:          msg.GetHeader("To"),
+			RemoteSig:   addr.String(),
+			RemoteRTP:   remoteAddr.String(),
+			LocalRTP:    fmt.Sprintf("%s:%d", s.localIP, localPort),
+			Codec:       neg.Name,
+			PayloadType: neg.PayloadType,
+			ClockRate:   neg.ClockRate,
+			CSeqInvite:  msg.GetHeader("CSeq"),
+			Direction:   "inbound",
 		})
 	}
 
@@ -627,7 +693,7 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	if te, ok := sdp.PickTelephoneEventFromOffer(offer.Codecs, neg.ClockRate); ok {
 		codecs = append(codecs, te)
 	}
-	respSDP := sdp.GenerateWithProto(s.localIP, localPort, offer.Proto, codecs)
+	respSDP := sdp.GenerateWithProtoExtras(s.localIP, localPort, offer.Proto, codecs, sdpExtras)
 
 	// Use a single To-tag consistently across provisional/final responses.
 	toWithTag := ensureToTag(msg.GetHeader("To"))
@@ -639,16 +705,16 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	// Use SDP local-ip as a reachable contact host.
 	respMsg.SetHeader("Contact", fmt.Sprintf("<sip:server@%s:%d>", s.localIP, s.listenPort))
 	respMsg.SetHeader("Allow", strings.Join([]string{
-		protocol.MethodInvite,
-		protocol.MethodAck,
-		protocol.MethodBye,
-		protocol.MethodRegister,
-		protocol.MethodOptions,
-		protocol.MethodCancel,
-		protocol.MethodInfo,
-		protocol.MethodPrack,
+		stack.MethodInvite,
+		stack.MethodAck,
+		stack.MethodBye,
+		stack.MethodRegister,
+		stack.MethodOptions,
+		stack.MethodCancel,
+		stack.MethodInfo,
+		stack.MethodPrack,
 	}, ", "))
-	respMsg.SetHeader("Content-Length", strconv.Itoa(protocol.BodyBytesLen(respSDP)))
+	respMsg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(respSDP)))
 
 	logger.Info("sip invite negotiated",
 		zap.String("call_id", callID),
@@ -656,10 +722,6 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 		zap.String("answer_proto", offer.Proto),
 		zap.Any("offered_codecs", offer.Codecs),
 		zap.Any("negotiated_codec", neg),
-		zap.String("answer_sdp_preview", preview(respSDP, 800)),
-		zap.Int("answer_content_length", len(respSDP)),
-		zap.Int("answer_raw_bytes", len(respMsg.String())),
-		zap.String("answer_raw_preview", preview(respMsg.String(), 1200)),
 	)
 	if addr != nil {
 		s.rememberUASDialog(callID, addr, msg, toWithTag)
@@ -681,12 +743,12 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	}
 
 	// Provisional response: 180 Ringing (often expected by softphones).
-	if s.proto != nil && addr != nil {
+	if s.ep != nil && addr != nil {
 		ringing := s.makeResponse(msg, 180, "Ringing", "", toWithTag)
 		ringing.SetHeader("To", toWithTag)
 		ringing.SetHeader("Contact", fmt.Sprintf("<sip:server@%s:%d>", s.localIP, s.listenPort))
 		ringing.SetHeader("Content-Length", "0")
-		_ = s.proto.Send(ringing, addr)
+		_ = s.ep.Send(ringing, addr)
 	}
 
 	if fk != "" {
@@ -697,8 +759,8 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	return respMsg
 }
 
-func (s *SIPServer) handleAck(msg *protocol.Message, _ *net.UDPAddr) *protocol.Message {
-	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != protocol.MethodAck {
+func (s *SIPServer) handleAck(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodAck {
 		return nil
 	}
 	callID := msg.GetHeader("Call-ID")
@@ -745,7 +807,7 @@ func (s *SIPServer) handleAck(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 	return nil
 }
 
-func (s *SIPServer) handleBye(msg *protocol.Message, _ *net.UDPAddr) *protocol.Message {
+func (s *SIPServer) handleBye(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != "BYE" {
 		return nil
 	}
@@ -808,28 +870,28 @@ func (s *SIPServer) handleBye(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 	return s.makeResponse(msg, 200, "OK", "", "")
 }
 
-func (s *SIPServer) handleOptions(msg *protocol.Message, _ *net.UDPAddr) *protocol.Message {
-	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != protocol.MethodOptions {
+func (s *SIPServer) handleOptions(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodOptions {
 		return nil
 	}
 	resp := s.makeResponse(msg, 200, "OK", "", "")
 	// Minimal Allow capability.
 	resp.SetHeader("Allow", strings.Join([]string{
-		protocol.MethodInvite,
-		protocol.MethodAck,
-		protocol.MethodBye,
-		protocol.MethodRegister,
-		protocol.MethodOptions,
-		protocol.MethodCancel,
-		protocol.MethodInfo,
-		protocol.MethodPrack,
+		stack.MethodInvite,
+		stack.MethodAck,
+		stack.MethodBye,
+		stack.MethodRegister,
+		stack.MethodOptions,
+		stack.MethodCancel,
+		stack.MethodInfo,
+		stack.MethodPrack,
 	}, ", "))
 	resp.SetHeader("Content-Length", "0")
 	return resp
 }
 
-func (s *SIPServer) handleRegister(msg *protocol.Message, addr *net.UDPAddr) *protocol.Message {
-	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != protocol.MethodRegister {
+func (s *SIPServer) handleRegister(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
+	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodRegister {
 		return nil
 	}
 	if !registerPasswordOK(msg) {
@@ -854,8 +916,8 @@ func (s *SIPServer) handleRegister(msg *protocol.Message, addr *net.UDPAddr) *pr
 	return resp
 }
 
-func (s *SIPServer) handleInfo(msg *protocol.Message, _ *net.UDPAddr) *protocol.Message {
-	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != protocol.MethodInfo {
+func (s *SIPServer) handleInfo(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodInfo {
 		return nil
 	}
 	callID := msg.GetHeader("Call-ID")
@@ -870,8 +932,8 @@ func (s *SIPServer) handleInfo(msg *protocol.Message, _ *net.UDPAddr) *protocol.
 	return resp
 }
 
-func (s *SIPServer) handleCancel(msg *protocol.Message, _ *net.UDPAddr) *protocol.Message {
-	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != protocol.MethodCancel {
+func (s *SIPServer) handleCancel(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodCancel {
 		return nil
 	}
 	// Minimal behavior: 200 OK for CANCEL. (Full SIP transaction mapping omitted.)
@@ -880,7 +942,7 @@ func (s *SIPServer) handleCancel(msg *protocol.Message, _ *net.UDPAddr) *protoco
 	return resp
 }
 
-func (s *SIPServer) handlePublish(msg *protocol.Message, _ *net.UDPAddr) *protocol.Message {
+func (s *SIPServer) handlePublish(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != "PUBLISH" {
 		return nil
 	}
@@ -892,8 +954,8 @@ func (s *SIPServer) handlePublish(msg *protocol.Message, _ *net.UDPAddr) *protoc
 
 // makeResponse builds a response by copying dialog/transaction headers and allowing
 // method-specific behavior. If toOverride is provided, it replaces the To header.
-func (s *SIPServer) makeResponse(req *protocol.Message, code int, text string, body string, toOverride string) *protocol.Message {
-	resp := &protocol.Message{
+func (s *SIPServer) makeResponse(req *stack.Message, code int, text string, body string, toOverride string) *stack.Message {
+	resp := &stack.Message{
 		IsRequest:    false,
 		Version:      "SIP/2.0",
 		StatusCode:   code,
@@ -931,7 +993,7 @@ func (s *SIPServer) makeResponse(req *protocol.Message, code int, text string, b
 	}
 
 	// Always emit explicit Content-Length (many clients expect it even for empty body).
-	resp.SetHeader("Content-Length", strconv.Itoa(protocol.BodyBytesLen(body)))
+	resp.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(body)))
 	return resp
 }
 
@@ -941,11 +1003,11 @@ func (s *SIPServer) String() string {
 
 // SendSIP sends a raw SIP request or response on the server's UDP socket.
 // Used by the outbound module to send INVITE/ACK/BYE for UAC legs.
-func (s *SIPServer) SendSIP(msg *protocol.Message, addr *net.UDPAddr) error {
-	if s == nil || s.proto == nil {
+func (s *SIPServer) SendSIP(msg *stack.Message, addr *net.UDPAddr) error {
+	if s == nil || s.ep == nil {
 		return fmt.Errorf("sip: server not ready")
 	}
-	return s.proto.Send(msg, addr)
+	return s.ep.Send(msg, addr)
 }
 
 // ListenAddr returns the UDP listen address (host:port) for Contact/Via headers.

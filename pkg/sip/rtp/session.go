@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/pion/srtp/v2"
 	"go.uber.org/zap"
 )
 
@@ -19,6 +20,9 @@ import (
 var ErrRTPDiscard = errors.New("rtp: discard packet")
 
 // Session is a minimal RTP-over-UDP session.
+//
+// RTCP (and SRTCP) is not generated or parsed; SDP may still advertise a=rtcp for peer stacks.
+// Optional SRTP (SDES) encrypts/decrypts RTP payloads only ([Session.EnableSDESSRTP]).
 //
 // It is intentionally protocol-agnostic:
 // - Timestamp increments are provided by the caller via `samples` argument.
@@ -64,6 +68,11 @@ type Session struct {
 	mirrorMu           sync.RWMutex
 	mirrorRemotes      []mirrorRemote
 	mirrorErrLastLogNs int64 // atomic unix nano — rate-limit mirror write error logs
+
+	srtpMu sync.Mutex
+	// SRTP SDES (RFC 3711 + RFC 4568): optional; when set, ReceiveRTP decrypts and SendRTP encrypts.
+	srtpDecrypt *srtp.Context
+	srtpEncrypt *srtp.Context
 }
 
 type mirrorRemote struct {
@@ -235,10 +244,21 @@ func (s *Session) SendRTP(payload []byte, payloadType uint8, samples uint32) err
 		return fmt.Errorf("rtp: marshal: %w", err)
 	}
 
-	if _, err := s.Conn.WriteToUDP(data, s.RemoteAddr); err != nil {
+	out := data
+	if s.srtpEncrypt != nil {
+		s.srtpMu.Lock()
+		enc, encErr := s.srtpEncrypt.EncryptRTP(nil, data, nil)
+		s.srtpMu.Unlock()
+		if encErr != nil {
+			return fmt.Errorf("rtp: srtp encrypt: %w", encErr)
+		}
+		out = enc
+	}
+
+	if _, err := s.Conn.WriteToUDP(out, s.RemoteAddr); err != nil {
 		return fmt.Errorf("rtp: send: %w", err)
 	}
-	s.sendMirrorRTP(data, s.RemoteAddr)
+	s.sendMirrorRTP(out, s.RemoteAddr)
 	atomic.AddUint64(&s.txPackets, 1)
 	atomic.AddUint64(&s.txBytes, uint64(len(payload)))
 	nowUnix := time.Now().UnixNano()
@@ -315,8 +335,19 @@ func (s *Session) ReceiveRTP(buffer []byte) (n int, from *net.UDPAddr, packet *R
 		}
 	}
 
+	work := buffer[:n]
+	if s.srtpDecrypt != nil {
+		s.srtpMu.Lock()
+		plain, derr := s.srtpDecrypt.DecryptRTP(nil, work, nil)
+		s.srtpMu.Unlock()
+		if derr != nil {
+			return n, addr, nil, ErrRTPDiscard
+		}
+		work = plain
+	}
+
 	pkt := &RTPPacket{}
-	if err := pkt.Unmarshal(buffer[:n]); err != nil {
+	if err := pkt.Unmarshal(work); err != nil {
 		return n, addr, nil, fmt.Errorf("rtp: unmarshal: %w", err)
 	}
 

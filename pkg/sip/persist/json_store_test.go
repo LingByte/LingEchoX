@@ -15,13 +15,13 @@ func TestJSONStoresRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	c := &SIPCall{
-		CallID:     "cid-1",
-		Direction:  DirectionInbound,
-		State:      SIPCallStateRinging,
-		InviteAt:   &now,
-		EndStatus:  SIPCallEndUnknown,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		CallID:    "cid-1",
+		Direction: DirectionInbound,
+		State:     SIPCallStateRinging,
+		InviteAt:  &now,
+		EndStatus: SIPCallEndUnknown,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if err := st.Calls.CreateSIPCall(ctx, c); err != nil {
 		t.Fatal(err)

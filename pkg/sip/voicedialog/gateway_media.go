@@ -9,15 +9,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/recognizer"
-	"github.com/LingByte/SoulNexus/pkg/synthesizer"
+	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 	sipvad "github.com/LingByte/SoulNexus/pkg/sip/vad"
+	"github.com/LingByte/SoulNexus/pkg/synthesizer"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	sipasr "github.com/LingByte/SoulNexus/pkg/voice/asr"
 	siptts "github.com/LingByte/SoulNexus/pkg/voice/tts"
-	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 )
 
@@ -41,6 +44,50 @@ func gatewayTTSCloudSR(ttsSampleRate int, pcmBridge int) int {
 	}
 	return 16000
 }
+
+// gatewayQcloudTTSStream adapts synthesizer.QCloudService to siptts.Service (streaming PCM chunks).
+type gatewayQcloudTTSStream struct {
+	svc *synthesizer.QCloudService
+}
+
+func (q *gatewayQcloudTTSStream) SynthesizeStream(ctx context.Context, text string, callback func(pcm []byte) error) error {
+	if q == nil || q.svc == nil {
+		return fmt.Errorf("voicedialog gateway: nil tts")
+	}
+	done := make(chan error, 1)
+	go func() {
+		h := &gatewayTTSStreamHandler{callback: callback, ctx: ctx}
+		done <- q.svc.Synthesize(context.Background(), h, text)
+	}()
+	select {
+	case <-ctx.Done():
+		return context.Canceled
+	case err := <-done:
+		return err
+	}
+}
+
+type gatewayTTSStreamHandler struct {
+	ctx        context.Context
+	callback   func([]byte) error
+	firstChunk bool
+}
+
+func (h *gatewayTTSStreamHandler) OnMessage(data []byte) {
+	if h == nil || len(data) == 0 {
+		return
+	}
+	if h.ctx != nil && h.ctx.Err() != nil {
+		return
+	}
+	if !h.firstChunk {
+		h.firstChunk = true
+		data = encoder.StripWavHeader(data)
+	}
+	_ = h.callback(data)
+}
+
+func (h *gatewayTTSStreamHandler) OnTimestamp(_ synthesizer.SentenceTimestamp) {}
 
 // attachGatewayMedia wires ASR→WebSocket events and WebSocket tts.speak→TTS→RTP on the SIP leg.
 func attachGatewayMedia(sess *dialogSession) error {
@@ -79,6 +126,12 @@ func attachGatewayMedia(sess *dialogSession) error {
 		asrOpt.ModelType = asrModelType
 	}
 	asrSvc := recognizer.NewQcloudASR(asrOpt)
+
+	asrProvLabel := "qcloud_asr"
+	if strings.TrimSpace(asrOpt.ModelType) != "" {
+		asrProvLabel = strings.TrimSpace(asrOpt.ModelType)
+	}
+	sess.voicedialogASRProv = asrProvLabel
 
 	asrOutRate := 16000
 	if strings.Contains(strings.ToLower(asrOpt.ModelType), "8k") {
@@ -143,14 +196,15 @@ func attachGatewayMedia(sess *dialogSession) error {
 	var ttsStartedAtNS atomic.Int64
 
 	var vadDet *sipvad.Detector
-	if sipvad.BargeInEnabled() {
+	if config.GlobalConfig.SIP.SIPVADBargeIn {
 		vadDet = sipvad.NewDetector()
 		vadDet.SetLogger(zlg)
-		vadDet.SetThreshold(sipvad.ThresholdFromEnv())
-		vadDet.SetConsecutiveFrames(sipvad.ConsecutiveFramesFromEnv())
+		vadDet.SetThreshold(config.GlobalConfig.SIP.SIPVADThreshold)
+		vadDet.SetConsecutiveFrames(config.GlobalConfig.SIP.SIPVADConsecFrames)
 		logger.Info("voicedialog gateway RMS barge-in enabled",
 			zap.String(KeyCallID, sess.meta.CallID),
-			zap.Float64("threshold", sipvad.ThresholdFromEnv()),
+			zap.Float64("threshold", config.GlobalConfig.SIP.SIPVADThreshold),
+			zap.Int("consecutive_frames", config.GlobalConfig.SIP.SIPVADConsecFrames),
 		)
 	}
 
@@ -163,6 +217,9 @@ func attachGatewayMedia(sess *dialogSession) error {
 		trimmed := strings.TrimSpace(text)
 		if trimmed == "" {
 			return
+		}
+		if isFinal {
+			sess.setLastASRFinal(trimmed)
 		}
 		evType := EvASRPartial
 		if isFinal {
@@ -295,9 +352,40 @@ func (sess *dialogSession) stopGatewayTTSPlayback() {
 	}
 }
 
+func (sess *dialogSession) setLastASRFinal(text string) {
+	sess.dialogTurnMu.Lock()
+	defer sess.dialogTurnMu.Unlock()
+	sess.lastASRFinal = strings.TrimSpace(text)
+}
+
+func (sess *dialogSession) lastASRFinalSnapshot() string {
+	sess.dialogTurnMu.Lock()
+	defer sess.dialogTurnMu.Unlock()
+	return sess.lastASRFinal
+}
+
+func (sess *dialogSession) setPendingLoopbackLLM(model string, llmWallMs int) {
+	sess.pendingTurnMu.Lock()
+	defer sess.pendingTurnMu.Unlock()
+	sess.pendingLLMModel = strings.TrimSpace(model)
+	sess.pendingLLMWallMs = llmWallMs
+}
+
+func (sess *dialogSession) takePendingLLMMeta() (model string, llmWallMs int) {
+	sess.pendingTurnMu.Lock()
+	defer sess.pendingTurnMu.Unlock()
+	model = sess.pendingLLMModel
+	llmWallMs = sess.pendingLLMWallMs
+	sess.pendingLLMModel = ""
+	sess.pendingLLMWallMs = 0
+	return model, llmWallMs
+}
+
 func (sess *dialogSession) handleTTSSpeak(text, utteranceID string) {
 	sess.ttsSpeakMu.Lock()
 	defer sess.ttsSpeakMu.Unlock()
+
+	pipelineT0 := time.Now()
 
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -334,7 +422,9 @@ func (sess *dialogSession) handleTTSSpeak(text, utteranceID string) {
 	}
 
 	pipe.Start(ms.GetContext())
+	ttsT0 := time.Now()
 	err := pipe.Speak(text)
+	ttsMs := int(time.Since(ttsT0).Milliseconds())
 	pipe.Stop()
 
 	if sess.ttsPlayingPtr != nil {
@@ -360,6 +450,23 @@ func (sess *dialogSession) handleTTSSpeak(text, utteranceID string) {
 			zap.String(KeyCallID, sess.meta.CallID),
 			zap.String(KeyUtteranceID, utteranceID),
 		)
+		asrSnap := sess.lastASRFinalSnapshot()
+		asrProv := strings.TrimSpace(sess.voicedialogASRProv)
+		if asrProv == "" {
+			asrProv = "qcloud_asr"
+		}
+		llmModel, llmWall := sess.takePendingLLMMeta()
+		go conversation.RecordDialogTurn(context.Background(), sess.meta.CallID, conversation.DialogTurn{
+			ASRText:     asrSnap,
+			LLMText:     text,
+			ASRProvider: asrProv,
+			TTSProvider: "qcloud_tts",
+			LLMModel:    llmModel,
+			Trigger:     "final",
+			LLMWallMs:   llmWall,
+			TTSMs:       ttsMs,
+			PipelineMs:  int(time.Since(pipelineT0).Milliseconds()),
+		})
 	}
 }
 

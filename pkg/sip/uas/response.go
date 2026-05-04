@@ -12,10 +12,10 @@ import (
 // body and contentType may be empty for no body (Content-Length: 0).
 func NewResponse(req *stack.Message, status int, reason, body, contentType string) (*stack.Message, error) {
 	if req == nil || !req.IsRequest {
-		return nil, fmt.Errorf("sip1/uas: need a SIP request")
+		return nil, fmt.Errorf("sip/uas: need a SIP request")
 	}
 	if status < 100 || status > 699 {
-		return nil, fmt.Errorf("sip1/uas: invalid status %d", status)
+		return nil, fmt.Errorf("sip/uas: invalid status %d", status)
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {

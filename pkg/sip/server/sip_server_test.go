@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
 )
 
@@ -53,7 +53,7 @@ func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
 		sdpBody,
 	}, "\r\n")
 
-	msg, err := protocol.Parse(raw)
+	msg, err := stack.Parse(raw)
 	if err != nil {
 		t.Fatalf("Parse invite failed: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestSIPServer_HandleBye_ClosesSession(t *testing.T) {
 		sdp,
 	}, "\r\n")
 
-	inviteMsg, err := protocol.Parse(rawInvite)
+	inviteMsg, err := stack.Parse(rawInvite)
 	if err != nil {
 		t.Fatalf("Parse invite failed: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestSIPServer_HandleBye_ClosesSession(t *testing.T) {
 		"",
 	}, "\r\n")
 
-	byeMsg, err := protocol.Parse(byeRaw)
+	byeMsg, err := stack.Parse(byeRaw)
 	if err != nil {
 		t.Fatalf("Parse bye failed: %v", err)
 	}

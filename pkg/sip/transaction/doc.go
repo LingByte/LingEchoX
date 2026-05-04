@@ -14,5 +14,9 @@
 //
 // Keys: InviteTransactionKey(branch, Call-ID); NonInviteServerKey(req) for non-INVITE map.
 //
-// Not implemented: full server transaction for every edge case, TCP/TLS, forked responses.
+// TCP/TLS signaling is handled at pkg/sip/server (per-connection framing via stack.ReadMessage);
+// this package still lacks RFC 3261 connection reuse / outbound TX mirroring for TCP.
+//
+// Not implemented: forked responses, full PRACK/re-INVITE state machines beyond invite_rfc3262 hooks,
+// every non-INVITE server-transaction edge case.
 package transaction

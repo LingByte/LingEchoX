@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/intentonnx"
 	"github.com/LingByte/SoulNexus/pkg/llm"
 	"github.com/LingByte/SoulNexus/pkg/logger"
@@ -19,14 +20,13 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/recognizer"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
-	sipasr "github.com/LingByte/SoulNexus/pkg/voice/asr"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
-	siptts "github.com/LingByte/SoulNexus/pkg/voice/tts"
 	sipvad "github.com/LingByte/SoulNexus/pkg/sip/vad"
 	"github.com/LingByte/SoulNexus/pkg/synthesizer"
 	"github.com/LingByte/SoulNexus/pkg/utils"
+	sipasr "github.com/LingByte/SoulNexus/pkg/voice/asr"
+	siptts "github.com/LingByte/SoulNexus/pkg/voice/tts"
 	"go.uber.org/zap"
 )
 
@@ -429,16 +429,14 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	var welcomeCancelMu sync.Mutex
 	var welcomeCancel context.CancelFunc
 	var vadDet *sipvad.Detector
-	if sipvad.BargeInEnabled() {
+	if config.GlobalConfig.SIP.SIPVADBargeIn {
 		vadDet = sipvad.NewDetector()
 		vadDet.SetLogger(lg)
-		thr := sipvad.ThresholdFromEnv()
-		vadDet.SetThreshold(thr)
-		cf := sipvad.ConsecutiveFramesFromEnv()
-		vadDet.SetConsecutiveFrames(cf)
+		vadDet.SetThreshold(config.GlobalConfig.SIP.SIPVADThreshold)
+		vadDet.SetConsecutiveFrames(config.GlobalConfig.SIP.SIPVADConsecFrames)
 		lg.Info("sip voice: RMS VAD barge-in enabled (TTS playback only)",
-			zap.Float64("threshold_effective", thr),
-			zap.Int("consecutive_frames", cf),
+			zap.Float64("threshold_effective", config.GlobalConfig.SIP.SIPVADThreshold),
+			zap.Int("consecutive_frames", config.GlobalConfig.SIP.SIPVADConsecFrames),
 		)
 	} else {
 		lg.Info("sip voice: RMS VAD barge-in disabled (SIP_VAD_BARGE_IN)")
@@ -483,7 +481,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			pipelineT0 := time.Now()
 			var streamMeta StreamTurnTimings
 			var usedIntentONNX bool
-			var usedTwoPhaseTTS bool // ONNX short line then LLM (sequential, no overlap)
+			var usedTwoPhaseTTS bool    // ONNX short line then LLM (sequential, no overlap)
 			var intentRoutedName string // ONNX classified intent (for persist) even when answer comes from LLM
 			if scriptMode {
 				// Persist only on ASR final to avoid duplicate sip_calls.turns rows when partial ASR is enabled.
@@ -492,7 +490,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 					if env.ASRModelType != "" {
 						asrProv = env.ASRModelType
 					}
-					go persistSIPTurn(context.Background(), cs.CallID, DialogTurn{
+					go RecordDialogTurn(context.Background(), cs.CallID, DialogTurn{
 						ASRText: userText, ASRProvider: asrProv, Trigger: trigger,
 						PipelineMs: int(time.Since(pipelineT0).Milliseconds()),
 					})
@@ -621,7 +619,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				LLMFirstMs:  streamMeta.LLMFirstMs, LLMWallMs: streamMeta.LLMWallMs,
 				TTSMs: streamMeta.TTSMs, PipelineMs: int(time.Since(pipelineT0).Milliseconds()),
 			}
-			go persistSIPTurn(context.Background(), cs.CallID, dt)
+			go RecordDialogTurn(context.Background(), cs.CallID, dt)
 		}(userText, asrIsFinal, trigger)
 	}
 
@@ -727,8 +725,8 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			}
 			pcm16 := ap.Payload
 			if welcomePlaying.Load() {
-				// Allow user to barge in welcome prompt by speaking above configured RMS.
-				if siputil.RMSPCM16LE(pcm16) > siputil.WelcomeBargeInThresholdFromEnv() {
+				// Same RMS VAD path as TTS barge-in (requires SIP_VAD_BARGE_IN enabled).
+				if vadDet != nil && vadDet.CheckBargeIn(pcm16, true) {
 					welcomeCancelMu.Lock()
 					if welcomeCancel != nil {
 						welcomeCancel()
@@ -736,7 +734,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 					welcomeCancelMu.Unlock()
 					welcomePlaying.Store(false)
 					if lg != nil {
-						lg.Info("sip voice: welcome interrupted by user speech",
+						lg.Info("sip voice: welcome interrupted by user speech (VAD)",
 							zap.String("call_id", cs.CallID))
 					}
 				} else {

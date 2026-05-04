@@ -36,3 +36,9 @@ func persistSIPTurn(ctx context.Context, callID string, turn DialogTurn) {
 	}
 	sipTurnPersist(ctx, callID, turn)
 }
+
+// RecordDialogTurn appends one ASR→assistant turn to sip_calls.turns when SetSIPTurnPersist is wired
+// (outbound AttachVoicePipeline and inbound voicedialog gateway after each successful tts.speak).
+func RecordDialogTurn(ctx context.Context, callID string, turn DialogTurn) {
+	persistSIPTurn(ctx, callID, turn)
+}

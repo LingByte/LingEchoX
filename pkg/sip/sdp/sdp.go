@@ -22,6 +22,8 @@ type Info struct {
 	Port   int
 	Proto  string
 	Codecs []Codec
+	// CryptoOffers lists a=crypto attributes from the first m=audio section (RFC 4568 SDES), if present.
+	CryptoOffers []CryptoOffer
 }
 
 var (
@@ -76,11 +78,16 @@ func Parse(body string) (*Info, error) {
 
 	var payloadTypes []uint8
 	var mediaProto string
+	inAudioSection := false
 	lines := strings.Split(body, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
+		}
+
+		if strings.HasPrefix(line, "m=") {
+			inAudioSection = strings.HasPrefix(strings.ToLower(line), "m=audio")
 		}
 
 		if strings.HasPrefix(line, "m=audio") {
@@ -104,6 +111,23 @@ func Parse(body string) (*Info, error) {
 						continue
 					}
 					payloadTypes = append(payloadTypes, uint8(ptInt))
+				}
+			}
+			continue
+		}
+
+		if inAudioSection && strings.HasPrefix(strings.ToLower(line), "a=crypto:") {
+			rest := strings.TrimSpace(line[len("a=crypto:"):])
+			sp := strings.Fields(rest)
+			if len(sp) >= 3 {
+				if tag, err := strconv.ParseUint(sp[0], 10, 32); err == nil {
+					suite := strings.TrimSpace(sp[1])
+					keyParams := strings.TrimSpace(strings.Join(sp[2:], " "))
+					info.CryptoOffers = append(info.CryptoOffers, CryptoOffer{
+						Tag:       uint32(tag),
+						Suite:     suite,
+						KeyParams: keyParams,
+					})
 				}
 			}
 		}
@@ -156,10 +180,6 @@ func Parse(body string) (*Info, error) {
 				})
 			}
 		}
-	}
-
-	if mediaProto != "" && strings.Contains(mediaProto, "SAVP") {
-		return nil, fmt.Errorf("sip1/sdp: unsupported media proto: %s", mediaProto)
 	}
 
 	if len(payloadTypes) > 0 {
@@ -227,8 +247,13 @@ func Generate(localIP string, localPort int, codecs []Codec) string {
 	return GenerateWithProto(localIP, localPort, "RTP/AVP", codecs)
 }
 
-// GenerateWithProto builds minimal audio SDP with a given m=audio proto (e.g. RTP/AVP, RTP/AVPF).
+// GenerateWithProto builds minimal audio SDP with a given m=audio proto (e.g. RTP/AVP, RTP/AVPF, RTP/SAVPF).
 func GenerateWithProto(localIP string, localPort int, proto string, codecs []Codec) string {
+	return GenerateWithProtoExtras(localIP, localPort, proto, codecs, nil)
+}
+
+// GenerateWithProtoExtras is like GenerateWithProto but appends extra SDP lines (e.g. a=crypto) after fmtp.
+func GenerateWithProtoExtras(localIP string, localPort int, proto string, codecs []Codec, extraLines []string) string {
 	if localPort <= 0 {
 		localPort = 49172
 	}
@@ -267,6 +292,17 @@ func GenerateWithProto(localIP string, localPort int, proto string, codecs []Cod
 		}
 		if strings.EqualFold(c.Name, "telephone-event") {
 			b.WriteString(fmt.Sprintf("a=fmtp:%d 0-15\r\n", c.PayloadType))
+		}
+	}
+	for _, ex := range extraLines {
+		ex = strings.TrimSpace(ex)
+		if ex == "" {
+			continue
+		}
+		if strings.HasSuffix(ex, "\r\n") {
+			b.WriteString(ex)
+		} else {
+			b.WriteString(ex + "\r\n")
 		}
 	}
 	return b.String()

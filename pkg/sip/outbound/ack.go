@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
-	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 )
 
 // buildACK builds a SIP ACK for a completed INVITE transaction (200 OK with SDP answer).
-func buildACK(inv inviteParams, resp200 *protocol.Message, requestURI string) *protocol.Message {
+func buildACK(inv inviteParams, resp200 *stack.Message, requestURI string) *stack.Message {
 	if resp200 == nil {
 		return nil
 	}
@@ -18,9 +17,9 @@ func buildACK(inv inviteParams, resp200 *protocol.Message, requestURI string) *p
 		reqURI = inv.RequestURI
 	}
 
-	msg := &protocol.Message{
+	msg := &stack.Message{
 		IsRequest:  true,
-		Method:     protocol.MethodAck,
+		Method:     stack.MethodAck,
 		RequestURI: reqURI,
 		Version:    "SIP/2.0",
 	}
@@ -37,13 +36,13 @@ func buildACK(inv inviteParams, resp200 *protocol.Message, requestURI string) *p
 		msg.SetHeader("To", inv.RequestURI)
 	}
 	msg.SetHeader("Call-ID", inv.CallID)
-	msg.SetHeader("CSeq", siputil.WithCSeqACK(inv.CSeq))
+	msg.SetHeader("CSeq", stack.WithCSeqACK(inv.CSeq))
 	msg.SetHeader("Content-Length", "0")
 	return msg
 }
 
 // ackRequestURI prefers Contact from 200 OK (RFC 3261).
-func ackRequestURI(resp200 *protocol.Message, fallback string) string {
+func ackRequestURI(resp200 *stack.Message, fallback string) string {
 	if resp200 == nil {
 		return fallback
 	}

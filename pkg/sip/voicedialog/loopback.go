@@ -165,7 +165,9 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 					zap.String(KeyCallID, callID),
 					zap.Int("user_text_len", len([]rune(user))),
 				)
+				llmT0 := time.Now()
 				reply, err := conversation.VoicedialogLoopbackLLMQuery(ctx, prov, model, user)
+				llmWall := int(time.Since(llmT0).Milliseconds())
 				if err != nil {
 					logger.Warn("voicedialog loopback LLM failed", zap.String(KeyCallID, callID), zap.Error(err))
 					return
@@ -173,6 +175,14 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 				reply = strings.TrimSpace(reply)
 				if reply == "" {
 					return
+				}
+				if defaultHub != nil {
+					defaultHub.mu.Lock()
+					ds := defaultHub.sessions[strings.TrimSpace(callID)]
+					defaultHub.mu.Unlock()
+					if ds != nil {
+						ds.setPendingLoopbackLLM(model, llmWall)
+					}
 				}
 				out := map[string]any{
 					KeyType:        CmdTTSSpeak,

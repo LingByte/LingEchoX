@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"github.com/LingByte/SoulNexus/pkg/sip/uas"
 )
 
@@ -66,7 +66,7 @@ func (d *sipDigestAuth) issueNonce() string {
 	return n
 }
 
-func (d *sipDigestAuth) challenge401(req *protocol.Message) (*protocol.Message, error) {
+func (d *sipDigestAuth) challenge401(req *stack.Message) (*stack.Message, error) {
 	if d == nil || req == nil {
 		return nil, fmt.Errorf("sip/server: digest")
 	}
@@ -119,7 +119,7 @@ func parseDigestAuth(h string) map[string]string {
 	return out
 }
 
-func (d *sipDigestAuth) verifyINVITE(req *protocol.Message) bool {
+func (d *sipDigestAuth) verifyINVITE(req *stack.Message) bool {
 	if d == nil || req == nil {
 		return false
 	}

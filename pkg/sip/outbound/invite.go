@@ -7,8 +7,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 )
 
 // inviteParams carries dialog fields needed for INVITE and later ACK.
@@ -85,16 +84,16 @@ func sanitizeSIPUser(user string) string {
 	return s
 }
 
-func buildINVITE(p inviteParams) *protocol.Message {
+func buildINVITE(p inviteParams) *stack.Message {
 	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
 		nonEmpty(p.SIPHost, "127.0.0.1"), nonZero(p.SIPPort, 6050), p.Branch)
 
 	from := formatOutboundFromHeader(p.FromDisplayName, p.FromUser, p.SIPHost, p.SIPPort, p.FromTag)
 	to := formatToHeader(p.RequestURI)
 
-	msg := &protocol.Message{
+	msg := &stack.Message{
 		IsRequest:  true,
-		Method:     protocol.MethodInvite,
+		Method:     stack.MethodInvite,
 		RequestURI: p.RequestURI,
 		Version:    "SIP/2.0",
 		Body:       p.SDPBody,
@@ -109,7 +108,7 @@ func buildINVITE(p inviteParams) *protocol.Message {
 	msg.SetHeader("User-Agent", "SoulNexus-SIP/1.0")
 	msg.SetHeader("Content-Type", "application/sdp")
 	msg.SetHeader("Allow", "INVITE, ACK, BYE, CANCEL, OPTIONS")
-	msg.SetHeader("Content-Length", strconv.Itoa(protocol.BodyBytesLen(p.SDPBody)))
+	msg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(p.SDPBody)))
 	return msg
 }
 
@@ -136,29 +135,6 @@ func nonZero(n, def int) int {
 		return def
 	}
 	return n
-}
-
-// defaultOfferCodecs orders codecs for the initial outbound offer.
-// Prefer G.711 PCMA first for maximum carrier interoperability; keep wideband codecs as fallback.
-func defaultOfferCodecs() []sdp.Codec {
-	return []sdp.Codec{
-		{PayloadType: 8, Name: "pcma", ClockRate: 8000, Channels: 1},
-		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
-		{PayloadType: 9, Name: "g722", ClockRate: 8000, Channels: 1},
-		{PayloadType: 111, Name: "opus", ClockRate: 48000, Channels: 1},
-		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000, Channels: 1},
-	}
-}
-
-// transferAgentBridgeOfferCodecs is the INVITE offer for the human/agent leg after transfer.
-// Matches typical voice-server behavior (narrowband G.711 on the agent leg) so the bridge is
-// Opus/48k (caller) ↔ PCM ↔ PCMU/8k (agent), avoiding brittle Opus↔Opus transcoding.
-func transferAgentBridgeOfferCodecs() []sdp.Codec {
-	return []sdp.Codec{
-		{PayloadType: 8, Name: "pcma", ClockRate: 8000, Channels: 1},
-		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
-		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000, Channels: 1},
-	}
 }
 
 func newCallID(localIP string) string {

@@ -124,7 +124,6 @@ This project includes an AGPL-3.0 license file (`LICENSE`).
 //   - SIP_ASR_PARTIAL_TIMEOUT_MS: fallback final trigger on partials (default 1200; min 300 when set).
 //   - SIP_WELCOME_WAIT_FIRST_RTP_MS: delay before welcome WAV (default 2000; 0 disables wait).
 //   - SIP_WELCOME_WAV_PATH: optional welcome clip path.
-//   - SIP_WELCOME_BARGE_IN_THRESHOLD: RMS for welcome barge-in (pkg/sip/siputil, default 1800).
 //
 // # Transfer / bridge (pkg/sip/conversation, pkg/sip/bridge)
 //

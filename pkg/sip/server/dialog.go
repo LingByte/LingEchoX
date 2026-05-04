@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 )
 
 type uasDialogState struct {
@@ -71,7 +71,7 @@ func requestURIFromContact(contact string) string {
 	return c
 }
 
-func (s *SIPServer) rememberUASDialog(callID string, remote *net.UDPAddr, inv *protocol.Message, ourToWithTag string) {
+func (s *SIPServer) rememberUASDialog(callID string, remote *net.UDPAddr, inv *stack.Message, ourToWithTag string) {
 	if s == nil || callID == "" || inv == nil || remote == nil {
 		return
 	}
@@ -108,7 +108,7 @@ func (s *SIPServer) ForgetUASDialog(callID string) {
 	s.forgetUASDialog(callID)
 }
 
-func (s *SIPServer) buildUASBye(callID string) (*protocol.Message, *net.UDPAddr, error) {
+func (s *SIPServer) buildUASBye(callID string) (*stack.Message, *net.UDPAddr, error) {
 	if s == nil || callID == "" {
 		return nil, nil, fmt.Errorf("sip: invalid hangup")
 	}
@@ -124,9 +124,9 @@ func (s *SIPServer) buildUASBye(callID string) (*protocol.Message, *net.UDPAddr,
 	branch := randomHexBranch()
 	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
 		strings.TrimSpace(s.localIP), s.listenPort, branch)
-	msg := &protocol.Message{
+	msg := &stack.Message{
 		IsRequest:  true,
-		Method:     protocol.MethodBye,
+		Method:     stack.MethodBye,
 		RequestURI: d.byeReqURI,
 		Version:    "SIP/2.0",
 	}

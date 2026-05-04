@@ -11,12 +11,12 @@ import (
 )
 
 type callsDisk struct {
-	Version int                   `json:"version"`
+	Version int                 `json:"version"`
 	Calls   map[string]*SIPCall `json:"calls"`
 }
 
 type usersDisk struct {
-	Version int                   `json:"version"`
+	Version int                 `json:"version"`
 	Users   map[string]*SIPUser `json:"users"`
 }
 

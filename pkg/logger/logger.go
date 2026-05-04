@@ -210,31 +210,50 @@ func getLogWriter(filename string, maxSize, maxBackup, maxAge int, daily bool) z
 
 // Info 通用 info 日志方法（跳过本包封装帧，caller 指向业务调用处）
 func Info(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		return
+	}
 	Lg.WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
 }
 
 // Warn 通用 warn 日志方法
 func Warn(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		return
+	}
 	Lg.WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
 }
 
 // Error 通用 error 日志方法
 func Error(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		return
+	}
 	Lg.WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
 }
 
 // Debug 通用 debug 日志方法
 func Debug(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		return
+	}
 	Lg.WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
 }
 
 // Fatal 通用 fatal 日志方法
 func Fatal(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(1)
+	}
 	Lg.WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
 }
 
 // Panic 通用 panic 日志方法
 func Panic(msg string, fields ...zap.Field) {
+	if Lg == nil {
+		panic(msg)
+	}
 	Lg.WithOptions(zap.AddCallerSkip(1)).Panic(msg, fields...)
 }
 

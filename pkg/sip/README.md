@@ -34,8 +34,8 @@ LingEchoX 的嵌入式 SIP 协议栈，提供从信令到媒体处理、再到 A
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                              持久化层                                          │
 │                    ┌─────────────┐  ┌─────────────┐                          │
-│                    │   persist   │  │   siputil   │                          │
-│                    │ (用户/通话)  │  │  (工具函数)  │                          │
+│                    │   persist   │  │   stack     │                          │
+│                    │ (用户/通话)  │  │ (解析/UDP)   │                          │
 │                    └─────────────┘  └─────────────┘                          │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -44,12 +44,7 @@ LingEchoX 的嵌入式 SIP 协议栈，提供从信令到媒体处理、再到 A
 
 ### 1. 信令层
 
-#### `protocol/` - 底层 SIP 协议
-- **职责**: UDP 数据包收发、SIP 消息解析/序列化
-- **关键文件**: `server.go` (UDP服务器), `events.go` (事件定义)
-- **特点**: 最底层，无状态，仅处理字节流与消息结构转换
-
-#### `stack/` - SIP 协议栈
+#### `stack/` - SIP 解析与 UDP Endpoint
 - **职责**: RFC 3261 风格的消息解析、端点抽象、请求分发
 - **关键文件**: 
   - `endpoint.go`: 核心端点，管理监听与请求路由
@@ -124,7 +119,8 @@ LingEchoX 的嵌入式 SIP 协议栈，提供从信令到媒体处理、再到 A
 - **职责**: SDP 解析与生成
 - **关键文件**: `sdp.go`
 - **支持**: RTP/AVP, RTP/AVPF, a=rtpmap, 静态 payload type (0/8/9)
-- **拒绝**: SRTP-only (SAVP/SAVPF)
+- **SRTP**: Inbound UAS negotiates RTP/SAVP(F)+`a=crypto` SDES (AES_CM_128_HMAC_SHA1_80). Outbound UAC **always** offers `RTP/SAVPF` with the same suite (per-call random inline material); if the peer answers plain RTP/AVP, media stays plaintext.
+- **RTCP**: Not sent or decrypted; SDP `a=rtcp` is cosmetic for interoperability.
 
 #### `dtmf/` - DTMF 处理
 - **职责**: 双音多频信号处理
@@ -196,13 +192,6 @@ LingEchoX 的嵌入式 SIP 协议栈，提供从信令到媒体处理、再到 A
   - `gorm_store.go`: GORM 后端
   - `json_store.go`: JSON 文件后端（开发模式）
 - **模式**: `SIP_PERSIST=json` 启用文件存储，否则使用 GORM
-
-#### `siputil/` - SIP 工具
-- **职责**: 通用 SIP 辅助函数
-- **关键文件**:
-  - `cseq.go`: CSeq 解析
-  - `pcm.go`: PCM 工具
-  - `audio_env.go`: 音频环境变量
 
 ## 启动流程
 
@@ -373,13 +362,11 @@ pkg/sip/
 ├── dtmf/          (6 files)      # DTMF 处理
 ├── outbound/      (17 files)     # 外呼/出站
 ├── persist/       (10 files)     # 持久化
-├── protocol/      (4 files)      # 底层协议
 ├── rtp/           (7 files)      # RTP 传输
 ├── sdp/           (3 files)      # SDP 协商
 ├── server/        (11 files)     # SIP 服务器（核心）
 ├── session/       (5 files)     # 呼叫会话
-├── siputil/       (3 files)      # 工具函数
-├── stack/         (12 files)     # 协议栈
+├── stack/         (12 files)     # SIP 解析 / UDP Endpoint
 ├── transaction/   (16 files)    # 事务层
 ├── uas/           (8 files)      # UAS 事务
 ├── vad/           (3 files)      # 语音检测

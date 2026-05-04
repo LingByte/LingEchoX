@@ -1,4 +1,4 @@
-package siputil
+package stack
 
 import "math"
 

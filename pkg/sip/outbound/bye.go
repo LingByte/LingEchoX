@@ -5,17 +5,17 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 )
 
-func buildBYE(inv inviteParams, toHeader200, requestURI string, cseq int, branch string) *protocol.Message {
+func buildBYE(inv inviteParams, toHeader200, requestURI string, cseq int, branch string) *stack.Message {
 	reqURI := strings.TrimSpace(requestURI)
 	if reqURI == "" {
 		reqURI = inv.RequestURI
 	}
-	msg := &protocol.Message{
+	msg := &stack.Message{
 		IsRequest:  true,
-		Method:     protocol.MethodBye,
+		Method:     stack.MethodBye,
 		RequestURI: reqURI,
 		Version:    "SIP/2.0",
 	}

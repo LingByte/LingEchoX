@@ -9,77 +9,15 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	siptts "github.com/LingByte/SoulNexus/pkg/voice/tts"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
-
-// Config wires SIP teardown from the HTTP/dialog side.
-type Config struct {
-	HangupInbound func(callID string)
-
-	// InboundLoopbackWS: on inbound attach, dial this process's HTTP voice-dialog WebSocket with ?call_id=
-	// so emitGateway has a peer without an external browser (sipapp sets true).
-	InboundLoopbackWS             bool
-	LoopbackUseTLS                bool
-	LoopbackTLSInsecureSkipVerify bool
-	LoopbackHTTPHostPort          string // e.g. 127.0.0.1:8080
-	APIPrefix                     string // e.g. /api
-}
-
-// InboundMeta is SIP snapshot metadata for dialog clients (From/To as received on INVITE).
-type InboundMeta struct {
-	CallID        string
-	FromHeader    string
-	ToHeader      string
-	RemoteSig     string
-	CodecName     string
-	PCMSampleRate int
-}
-
-// Hub coordinates pending subscribers and per-call media bridges.
-type Hub struct {
-	cfg Config
-
-	mu       sync.Mutex
-	sessions map[string]*dialogSession
-
-	subMu sync.Mutex
-	subs  []*websocket.Conn
-
-	wsUpgrader websocket.Upgrader
-
-	tokenMissingOnce sync.Once
-}
-
-type dialogSession struct {
-	h *Hub
-
-	meta InboundMeta
-	cs   *sipSession.CallSession
-
-	mu            sync.Mutex
-	conn          *websocket.Conn
-	clientSeen    bool
-
-	gatewayMu     sync.Mutex
-	ttsSpeakMu    sync.Mutex
-	ttsPipe       *siptts.Pipeline
-	ttsPlayingPtr *atomic.Bool
-	ttsStartedNS  *atomic.Int64
-	mediaSession  *media.MediaSession
-
-	transferLoadingMu     sync.Mutex
-	transferLoadingCancel context.CancelFunc
-}
 
 var defaultHub *Hub
 
@@ -92,11 +30,11 @@ func InitDefault(cfg Config) {
 			ReadBufferSize:  WSReadBufferSize,
 			WriteBufferSize: WSWriteBufferSize,
 			CheckOrigin: func(*http.Request) bool {
-				return true // same-origin policy relaxed; protect with VOICE_DIALOG_WS_TOKEN.
+				return true // protect with VOICE_DIALOG_WS_TOKEN
 			},
 		},
 	}
-	RegisterTransferPhaseNotifier()
+	conversation.SetTransferPhaseNotifier(deliverConversationTransferPhase)
 }
 
 // AttachInbound registers the voice-dialog gateway for this call. Call inside cs.AttachVoiceConversation.
@@ -146,6 +84,26 @@ func AttachInbound(_ context.Context, cs *sipSession.CallSession, meta InboundMe
 	return nil
 }
 
+// AttachInboundVoiceDialog registers the voicedialog gateway on this inbound leg: SIP does RTP/PCM,
+// ASR/TTS on the gateway; dialogue uses HTTP WebSocket (loopback and/or external clients).
+// Call from SIP ACK handling (pkg/sip/server).
+func AttachInboundVoiceDialog(ctx context.Context, cs *sipSession.CallSession, from, to, remote string) error {
+	if cs == nil {
+		return nil
+	}
+	meta := InboundMeta{
+		CallID:        cs.CallID,
+		FromHeader:    from,
+		ToHeader:      to,
+		RemoteSig:     remote,
+		CodecName:     cs.NegotiatedCodec().Name,
+		PCMSampleRate: cs.PCMSampleRate(),
+	}
+	return cs.AttachVoiceConversation(func() error {
+		return AttachInbound(ctx, cs, meta)
+	})
+}
+
 func (h *Hub) broadcastPending(sess *dialogSession) {
 	if h == nil || sess == nil {
 		return
@@ -163,7 +121,6 @@ func (h *Hub) broadcastPending(sess *dialogSession) {
 	h.subMu.Unlock()
 	if len(list) == 0 {
 		if h.cfg.InboundLoopbackWS {
-			// Loopback dials .../ws?call_id= in-process; subscriber sockets (no call_id) are optional monitors.
 			logger.Info("voicedialog → ws call.pending: no subscriber sockets (fanout skipped; using inbound loopback per-call ws)",
 				zap.String(KeyCallID, sess.meta.CallID),
 			)
@@ -234,7 +191,7 @@ func (h *Hub) endCall(callID, reason string) {
 	)
 }
 
-// IsPendingOrActive is true while a voice-dialog bridge exists for this inbound Call-ID (suppress duplicate AI attach).
+// IsPendingOrActive is true while a voice-dialog bridge exists for this inbound Call-ID.
 func IsPendingOrActive(callID string) bool {
 	if defaultHub == nil || strings.TrimSpace(callID) == "" {
 		return false
@@ -245,26 +202,7 @@ func IsPendingOrActive(callID string) bool {
 	return ok
 }
 
-func wsTokenOK(r *http.Request) bool {
-	expected := wsTokenExpected()
-	got := strings.TrimSpace(r.URL.Query().Get("token"))
-	if expected == "" {
-		if defaultHub != nil {
-			defaultHub.tokenMissingOnce.Do(func() {
-				logger.Warn("voicedialog VOICE_DIALOG_WS_TOKEN is empty; WebSocket accepts any client (set VOICE_DIALOG_WS_TOKEN in production)",
-					zap.Bool("inbound_loopback_ws", defaultHub.cfg.InboundLoopbackWS),
-				)
-			})
-		}
-		return true
-	}
-	if len(got) != len(expected) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
-}
-
-// WebSocketHTTP serves GET WebSocket (?token=… [&call_id=…]). Performs RFC 6455 upgrade via wsUpgrader.
+// WebSocketHTTP serves GET WebSocket (?token=… [&call_id=…]).
 func WebSocketHTTP(w http.ResponseWriter, r *http.Request) {
 	remote := r.RemoteAddr
 	if defaultHub == nil {
@@ -306,6 +244,25 @@ func WebSocketHTTP(w http.ResponseWriter, r *http.Request) {
 		zap.String(KeyCallID, callID),
 	)
 	go defaultHub.runCallSocket(callID, conn)
+}
+
+func wsTokenOK(r *http.Request) bool {
+	expected := wsTokenExpected()
+	got := strings.TrimSpace(r.URL.Query().Get("token"))
+	if expected == "" {
+		if defaultHub != nil {
+			defaultHub.tokenMissingOnce.Do(func() {
+				logger.Warn("voicedialog VOICE_DIALOG_WS_TOKEN is empty; WebSocket accepts any client (set VOICE_DIALOG_WS_TOKEN in production)",
+					zap.Bool("inbound_loopback_ws", defaultHub.cfg.InboundLoopbackWS),
+				)
+			})
+		}
+		return true
+	}
+	if len(got) != len(expected) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
 
 func (h *Hub) subRemove(c *websocket.Conn) {
@@ -472,4 +429,97 @@ func cmdKeysSorted(cmd map[string]any) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// --- emitGateway (uses media import only for zap in switch; keep here to avoid cycle) ---
+
+func (sess *dialogSession) emitGateway(ev map[string]any) {
+	if sess == nil || ev == nil {
+		return
+	}
+	callID := sess.meta.CallID
+	t, _ := ev[KeyType].(string)
+	switch t {
+	case EvASRPartial, EvASRFinal:
+		txt, _ := ev[KeyText].(string)
+		logger.Info("voicedialog → ws asr",
+			zap.String(KeyCallID, callID),
+			zap.String("event", t),
+			zap.Bool(KeyFinal, t == EvASRFinal),
+			zap.Int("text_len", len([]rune(txt))),
+			zap.String("text_preview", truncateRunes(txt, 100)),
+		)
+	case EvASRError:
+		msg, _ := ev[KeyMessage].(string)
+		fatal, _ := ev[KeyFatal].(bool)
+		logger.Warn("voicedialog → ws asr.error",
+			zap.String(KeyCallID, callID),
+			zap.String(KeyMessage, msg),
+			zap.Bool(KeyFatal, fatal),
+		)
+	case EvDTMF:
+		d, _ := ev[KeyDigit].(string)
+		logger.Info("voicedialog → ws dtmf",
+			zap.String(KeyCallID, callID),
+			zap.String(KeyDigit, d),
+		)
+	case EvInterrupt:
+		origin, _ := ev[KeyOrigin].(string)
+		cause, _ := ev[KeyCause].(string)
+		reason, _ := ev[KeyReason].(string)
+		logger.Info("voicedialog → ws interrupt",
+			zap.String(KeyCallID, callID),
+			zap.String(KeyOrigin, origin),
+			zap.String(KeyCause, cause),
+			zap.String(KeyReason, reason),
+		)
+	case EvTTSStarted:
+		prev, _ := ev[KeyTextPreview].(string)
+		uid, _ := ev[KeyUtteranceID].(string)
+		logger.Info("voicedialog → ws tts.started",
+			zap.String(KeyCallID, callID),
+			zap.String(KeyUtteranceID, uid),
+			zap.String(KeyTextPreview, prev),
+		)
+	case EvTTSEnded:
+		uid, _ := ev[KeyUtteranceID].(string)
+		ok, _ := ev[KeyOK].(bool)
+		logger.Info("voicedialog → ws tts.ended",
+			zap.String(KeyCallID, callID),
+			zap.String(KeyUtteranceID, uid),
+			zap.Bool(KeyOK, ok),
+		)
+	case EvTTSCancelled:
+		logger.Info("voicedialog → ws tts.cancelled", zap.String(KeyCallID, callID))
+	case EvDialogWelcome, EvDialogTransfer:
+		ph, _ := ev[KeyPhase].(string)
+		sk, _ := ev[KeySourceKind].(string)
+		src, _ := ev[KeySource].(string)
+		logger.Info("voicedialog → ws "+t,
+			zap.String(KeyCallID, callID),
+			zap.String(KeyPhase, ph),
+			zap.String(KeySourceKind, sk),
+			zap.String(KeySource, src),
+		)
+	default:
+		if strings.HasPrefix(t, "call.") || t == EvHello || t == EvError {
+			logger.Debug("voicedialog → ws",
+				zap.String(KeyCallID, callID),
+				zap.String(KeyType, t),
+			)
+		} else {
+			logger.Info("voicedialog → ws",
+				zap.String(KeyCallID, callID),
+				zap.String(KeyType, t),
+			)
+		}
+	}
+
+	sess.mu.Lock()
+	c := sess.conn
+	sess.mu.Unlock()
+	if c == nil {
+		return
+	}
+	_ = writeJSONDeadline(c, ev)
 }

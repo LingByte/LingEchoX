@@ -55,7 +55,7 @@ type EndpointConfig struct {
 }
 
 // Endpoint listens for SIP over UDP, parses datagrams, and dispatches requests.
-// It is a structural replacement for pkg/sip/protocol.Server with context-aware Serve and
+// It provides context-aware Serve and
 // non-timeout read errors exiting the loop (after optional OnReadError).
 type Endpoint struct {
 	cfg EndpointConfig
@@ -299,5 +299,47 @@ func (e *Endpoint) Serve(ctx context.Context) error {
 		if onSent != nil {
 			onSent(msg, resp, addr)
 		}
+	}
+}
+
+// SetNoRouteHandler sets the fallback handler for unknown methods (same as EndpointConfig.NoRouteHandler).
+func (e *Endpoint) SetNoRouteHandler(h HandlerFunc) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg.NoRouteHandler = h
+}
+
+// DispatchRequest runs the registered method handler (or NoRouteHandler) without sending on UDP.
+// Used by alternate transports (e.g. TCP/TLS) that write responses themselves.
+func (e *Endpoint) DispatchRequest(req *Message, addr *net.UDPAddr) *Message {
+	if e == nil || req == nil {
+		return nil
+	}
+	method := strings.ToUpper(strings.TrimSpace(req.Method))
+	e.mu.Lock()
+	h := e.handlers[method]
+	if h == nil {
+		h = e.cfg.NoRouteHandler
+	}
+	e.mu.Unlock()
+	if h == nil {
+		return nil
+	}
+	return h(req, addr)
+}
+
+// InvokeOnSIPResponse calls the configured OnSIPResponse hook (e.g. for responses received on TCP).
+func (e *Endpoint) InvokeOnSIPResponse(resp *Message, addr *net.UDPAddr) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	fn := e.cfg.OnSIPResponse
+	e.mu.Unlock()
+	if fn != nil {
+		fn(resp, addr)
 	}
 }

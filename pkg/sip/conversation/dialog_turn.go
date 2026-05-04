@@ -2,7 +2,8 @@ package conversation
 
 import "time"
 
-// DialogTurn is persisted to sip_calls.turns (JSON) via SetSIPTurnPersist → sipserver.Store.SaveConversationTurn.
+// DialogTurn is persisted to sip_calls.turns (JSON) via SetSIPTurnPersist → sipserver.Store.SaveConversationTurn
+// or conversation.RecordDialogTurn from voicedialog gateway.
 type DialogTurn struct {
 	ASRText     string
 	LLMText     string

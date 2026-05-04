@@ -110,7 +110,7 @@ func defaultOptions(req *stack.Message, addr *net.UDPAddr) (*stack.Message, erro
 // Attach registers all non-nil handlers on ep. If Options is nil, a default OPTIONS 200 handler is installed.
 func (h Handlers) Attach(ep *stack.Endpoint) error {
 	if ep == nil {
-		return fmt.Errorf("sip1/uas: nil endpoint")
+		return fmt.Errorf("sip/uas: nil endpoint")
 	}
 	if h.Invite != nil {
 		ep.RegisterHandler(stack.MethodInvite, wrapInvite(h.Invite))

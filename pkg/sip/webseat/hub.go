@@ -24,8 +24,6 @@ import (
 )
 
 const (
-	// EnvTrackWait is max wait after returning the SDP answer for the browser to connect and send the first audio track (e.g. "90s").
-	EnvTrackWait = "SIP_WEBSEAT_TRACK_WAIT"
 	// EnvWSToken is the shared secret for GET /webseat/v1/ws?token=... (empty = accept any client; not recommended for production).
 	EnvWSToken = "SIP_WEBSEAT_WS_TOKEN"
 )
@@ -701,19 +699,12 @@ func (h *Hub) waitRemoteTrackAndBridge(
 	trackCh <-chan *webrtc.TrackRemote,
 	lg *zap.Logger,
 ) {
-	wait := 90 * time.Second
-	if v := strings.TrimSpace(utils.GetEnv(EnvTrackWait)); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			wait = d
-		}
-	}
-
 	var remoteTrack *webrtc.TrackRemote
 	select {
 	case remoteTrack = <-trackCh:
-	case <-time.After(wait):
+	case <-time.After(90 * time.Second):
 		if lg != nil {
-			lg.Warn("webseat: no remote audio track after answer (ICE or mic?)", zap.String("call_id", callID), zap.Duration("wait", wait))
+			lg.Warn("webseat: no remote audio track after answer (ICE or mic?)", zap.String("call_id", callID), zap.Duration("wait", 90*time.Second))
 		}
 		if h.cfg.ReleaseTransferDedupe != nil {
 			h.cfg.ReleaseTransferDedupe(callID)

@@ -13,7 +13,7 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +21,7 @@ import (
 const sipRegisterPasswordHeader = "X-SIP-Register-Password"
 
 // registerPasswordOK is true when REGISTER is allowed: SIP_PASSWORD env empty, or header matches.
-func registerPasswordOK(msg *protocol.Message) bool {
+func registerPasswordOK(msg *stack.Message) bool {
 	required := config.RegisterPasswordFromEnv()
 	if required == "" {
 		return true
@@ -165,7 +165,7 @@ func parseContactUDPAddr(contact string, src *net.UDPAddr) *net.UDPAddr {
 	return &net.UDPAddr{IP: ip, Port: port}
 }
 
-func parseExpiresRegister(msg *protocol.Message) (seconds int, ok bool) {
+func parseExpiresRegister(msg *stack.Message) (seconds int, ok bool) {
 	if msg == nil {
 		return 0, false
 	}
@@ -193,7 +193,7 @@ func parseExpiresRegister(msg *protocol.Message) (seconds int, ok bool) {
 	return 3600, true
 }
 
-func (s *SIPServer) upsertRegistration(msg *protocol.Message, src *net.UDPAddr) {
+func (s *SIPServer) upsertRegistration(msg *stack.Message, src *net.UDPAddr) {
 	if s == nil || msg == nil || src == nil {
 		return
 	}
@@ -247,7 +247,7 @@ func (s *SIPServer) upsertRegistration(msg *protocol.Message, src *net.UDPAddr) 
 }
 
 // prependProxyVia adds a Via on top so responses route back through this server.
-func prependProxyVia(msg *protocol.Message, sipHost string, sipPort int) {
+func prependProxyVia(msg *stack.Message, sipHost string, sipPort int) {
 	if msg == nil {
 		return
 	}
@@ -277,17 +277,17 @@ func prependProxyVia(msg *protocol.Message, sipHost string, sipPort int) {
 	}
 }
 
-func (s *SIPServer) proxyInviteToRegistrar(msg *protocol.Message, dst *net.UDPAddr) error {
-	if s == nil || s.proto == nil || msg == nil || dst == nil {
+func (s *SIPServer) proxyInviteToRegistrar(msg *stack.Message, dst *net.UDPAddr) error {
+	if s == nil || s.ep == nil || msg == nil || dst == nil {
 		return fmt.Errorf("sip: proxy invite: nil")
 	}
 	raw := msg.String()
-	fwd, err := protocol.Parse(raw)
+	fwd, err := stack.Parse(raw)
 	if err != nil {
 		return err
 	}
 	prependProxyVia(fwd, s.localIP, s.listenPort)
 	// Ensure Content-Length matches normalized body after parse/re-serialize.
-	fwd.SetHeader("Content-Length", strconv.Itoa(protocol.BodyBytesLen(fwd.Body)))
-	return s.proto.Send(fwd, dst)
+	fwd.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(fwd.Body)))
+	return s.ep.Send(fwd, dst)
 }

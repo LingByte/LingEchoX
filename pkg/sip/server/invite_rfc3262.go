@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
 	"go.uber.org/zap"
@@ -58,7 +57,7 @@ func optionListRequires(list, opt string) bool {
 	return false
 }
 
-func require100rel(req *protocol.Message) bool {
+func require100rel(req *stack.Message) bool {
 	if req == nil {
 		return false
 	}
@@ -70,7 +69,7 @@ func require100rel(req *protocol.Message) bool {
 	return false
 }
 
-func inviteFlightKey(req *protocol.Message) string {
+func inviteFlightKey(req *stack.Message) string {
 	if req == nil {
 		return ""
 	}
@@ -92,7 +91,7 @@ type inviteFlightState struct {
 	prackDone  chan struct{}
 }
 
-func (s *SIPServer) inviteNeedsAsync(req *protocol.Message) bool {
+func (s *SIPServer) inviteNeedsAsync(req *stack.Message) bool {
 	if s == nil || req == nil {
 		return false
 	}
@@ -101,12 +100,12 @@ func (s *SIPServer) inviteNeedsAsync(req *protocol.Message) bool {
 	return reliable || inv.RingbackMs > 0
 }
 
-func inviteReliable(inv inviteEnvConfig, req *protocol.Message) bool {
+func inviteReliable(inv inviteEnvConfig, req *stack.Message) bool {
 	return inv.Force100rel || require100rel(req) || inv.EarlyMediaSDP
 }
 
 func (s *SIPServer) resendInviteProgress(fl *inviteFlightState, addr *net.UDPAddr) {
-	if s == nil || fl == nil || s.proto == nil || addr == nil {
+	if s == nil || fl == nil || s.ep == nil || addr == nil {
 		return
 	}
 	fl.mu.Lock()
@@ -115,14 +114,14 @@ func (s *SIPServer) resendInviteProgress(fl *inviteFlightState, addr *net.UDPAdd
 	done := fl.completed
 	fl.mu.Unlock()
 	if done && strings.TrimSpace(okRaw) != "" {
-		if m, err := protocol.Parse(okRaw); err == nil && m != nil {
-			_ = s.proto.Send(m, addr)
+		if m, err := stack.Parse(okRaw); err == nil && m != nil {
+			_ = s.ep.Send(m, addr)
 		}
 		return
 	}
 	if strings.TrimSpace(provRaw) != "" {
-		if m, err := protocol.Parse(provRaw); err == nil && m != nil {
-			_ = s.proto.Send(m, addr)
+		if m, err := stack.Parse(provRaw); err == nil && m != nil {
+			_ = s.ep.Send(m, addr)
 		}
 	}
 }
@@ -152,14 +151,14 @@ func (s *SIPServer) inviteFinalRetransmitCleanup(callID string) {
 	}
 }
 
-func (s *SIPServer) abortInviteFlight(flight *inviteFlightState, req *protocol.Message, addr *net.UDPAddr, toTag string) {
+func (s *SIPServer) abortInviteFlight(flight *inviteFlightState, req *stack.Message, addr *net.UDPAddr, toTag string) {
 	if s == nil || flight == nil {
 		return
 	}
 	cid := flight.callID
-	if s.proto != nil && addr != nil && req != nil {
+	if s.ep != nil && addr != nil && req != nil {
 		t504 := s.makeResponse(req, 504, "Server Time-out", "", toTag)
-		_ = s.proto.Send(t504, addr)
+		_ = s.ep.Send(t504, addr)
 	}
 	s.stopCallSessionLocked(cid)
 	s.inviteAsyncEnd(cid)
@@ -180,10 +179,10 @@ func (s *SIPServer) stopCallSessionLocked(callID string) {
 }
 
 func (s *SIPServer) runInviteAsync(
-	req *protocol.Message,
+	req *stack.Message,
 	addr *net.UDPAddr,
 	flight *inviteFlightState,
-	resp200 *protocol.Message,
+	resp200 *stack.Message,
 	reliable bool,
 	sdp183Body string,
 	callID string,
@@ -194,12 +193,12 @@ func (s *SIPServer) runInviteAsync(
 	inv := s.inviteEnv
 	toTag := resp200.GetHeader("To")
 
-	if inv.Send180 && s.proto != nil {
+	if inv.Send180 && s.ep != nil {
 		ring180 := s.makeResponse(req, 180, "Ringing", "", toTag)
 		ring180.SetHeader("To", toTag)
 		ring180.SetHeader("Contact", resp200.GetHeader("Contact"))
 		ring180.SetHeader("Content-Length", "0")
-		_ = s.proto.Send(ring180, addr)
+		_ = s.ep.Send(ring180, addr)
 	}
 
 	if reliable {
@@ -217,7 +216,7 @@ func (s *SIPServer) runInviteAsync(
 		p183.SetHeader("RSeq", "1")
 		p183.SetHeader("Require", "100rel")
 		p183.SetHeader("Allow", resp200.GetHeader("Allow"))
-		p183.SetHeader("Content-Length", strconv.Itoa(protocol.BodyBytesLen(body)))
+		p183.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(body)))
 
 		raw183 := p183.String()
 		flight.mu.Lock()
@@ -225,8 +224,8 @@ func (s *SIPServer) runInviteAsync(
 		flight.lastProvRaw = raw183
 		flight.mu.Unlock()
 
-		if s.proto != nil {
-			_ = s.proto.Send(p183, addr)
+		if s.ep != nil {
+			_ = s.ep.Send(p183, addr)
 		}
 
 		timer := time.NewTimer(32 * time.Second)
@@ -295,15 +294,15 @@ func (s *SIPServer) runInviteAsync(
 		s.inviteFlightKeyByCall.Store(callID, flight.flightKey)
 	}
 
-	if s.proto != nil {
-		if err := s.proto.Send(resp200, addr); err != nil && logger.Lg != nil {
+	if s.ep != nil {
+		if err := s.ep.Send(resp200, addr); err != nil && logger.Lg != nil {
 			logger.Lg.Warn("sip invite send 200", zap.String("call_id", callID), zap.Error(err))
 		}
 	}
 }
 
-func (s *SIPServer) handlePrack(msg *protocol.Message, addr *net.UDPAddr) *protocol.Message {
-	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != protocol.MethodPrack {
+func (s *SIPServer) handlePrack(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
+	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodPrack {
 		return nil
 	}
 	callID := strings.TrimSpace(msg.GetHeader("Call-ID"))

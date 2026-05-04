@@ -74,6 +74,15 @@ func TestRTPPacket_Unmarshal_TooShort(t *testing.T) {
 	}
 }
 
+func TestRTPPacket_Unmarshal_InvalidPaddingLength(t *testing.T) {
+	p := &RTPPacket{}
+	// Version 2, padding bit, minimal header + payload "x" + invalid pad len 0
+	b := []byte{0xA0, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'x', 0}
+	if err := p.Unmarshal(b); err == nil {
+		t.Fatal("expected padding error")
+	}
+}
+
 func TestRTPPacket_Unmarshal_Padding(t *testing.T) {
 	// Build a packet with 3 bytes padding. Padding bytes can be anything; last byte is padding length.
 	p := &RTPPacket{

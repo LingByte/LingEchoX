@@ -13,7 +13,9 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
 )
 
-// CanRawDatagramRelay is true when both legs are the same narrowband G.711 (bit-transparent RTP forward).
+// CanRawDatagramRelay is true when both legs share the same codec clock/channels so RTP payloads
+// can be forwarded bit-transparently (only payload-type remapping in TwoLegPayloadRelay).
+// SRTP must match on both legs if used (this helper does not inspect SRTP).
 func CanRawDatagramRelay(a, b media.CodecConfig) bool {
 	na := strings.ToLower(strings.TrimSpace(a.Codec))
 	nb := strings.ToLower(strings.TrimSpace(b.Codec))
@@ -26,6 +28,29 @@ func CanRawDatagramRelay(a, b media.CodecConfig) bool {
 	switch na {
 	case "pcmu", "pcma":
 		return a.SampleRate == 8000 && a.Channels == 1
+	case "g722":
+		// Matches pkg/sip/session CallSession wiring (16 kHz PCM path; SDP clock remains 8000).
+		return a.Channels == 1 && a.SampleRate == 16000
+	case "opus":
+		if a.Channels != 1 && a.Channels != 2 {
+			return false
+		}
+		switch a.SampleRate {
+		case 8000, 12000, 16000, 24000, 48000:
+			return true
+		default:
+			return false
+		}
+	case "l16":
+		if a.Channels < 1 || a.Channels > 2 {
+			return false
+		}
+		switch a.SampleRate {
+		case 8000, 16000, 32000, 48000:
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -93,7 +118,7 @@ func NewTwoLegPayloadRelay(
 		return nil, fmt.Errorf("bridge relay: nil session")
 	}
 	if !CanRawDatagramRelay(callerCodec, agentCodec) {
-		return nil, fmt.Errorf("bridge relay: codecs not eligible for raw RTP relay (need same narrowband PCMU/PCMA)")
+		return nil, fmt.Errorf("bridge relay: codecs not eligible for raw RTP relay (same pcmu/pcma/g722/opus/l16 required)")
 	}
 	if callerSess.RemoteAddr == nil || agentSess.RemoteAddr == nil {
 		return nil, fmt.Errorf("bridge relay: remote RTP address not set on both legs")

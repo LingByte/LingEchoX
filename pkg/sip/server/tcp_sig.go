@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"go.uber.org/zap"
 )
@@ -148,31 +147,23 @@ func (s *SIPServer) runOneTCPConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		if !msg.IsRequest {
-			if s.proto != nil && s.proto.OnSIPResponse != nil {
-				s.proto.OnSIPResponse(msg, udpAddr)
+			if s.ep != nil {
+				s.ep.InvokeOnSIPResponse(msg, udpAddr)
 			}
 			continue
 		}
-		s.dispatchSignalingRequestTCP(msg, udpAddr, func(resp *protocol.Message) error {
+		s.dispatchSignalingRequestTCP(msg, udpAddr, func(resp *stack.Message) error {
 			_, err := conn.Write([]byte(resp.String()))
 			return err
 		})
 	}
 }
 
-func (s *SIPServer) dispatchSignalingRequestTCP(req *protocol.Message, addr *net.UDPAddr, send func(*protocol.Message) error) {
-	if s == nil || s.proto == nil || req == nil || send == nil {
+func (s *SIPServer) dispatchSignalingRequestTCP(req *stack.Message, addr *net.UDPAddr, send func(*stack.Message) error) {
+	if s == nil || s.ep == nil || req == nil || send == nil {
 		return
 	}
-	method := strings.ToUpper(req.Method)
-	h := s.proto.Handlers[method]
-	if h == nil {
-		h = s.proto.NoRouteHandler
-	}
-	if h == nil {
-		return
-	}
-	resp := h(req, addr)
+	resp := s.ep.DispatchRequest(req, addr)
 	if resp != nil {
 		_ = send(resp)
 	}

@@ -13,11 +13,10 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
 	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +24,27 @@ var (
 	outboundRTPPortAllocMu sync.Mutex
 	outboundRTPPortNext    int
 )
+
+// applyOutboundAnswerSRTP enables SRTP on the RTP session when this UAC INVITE offered SDES crypto
+// and the 200 OK SDP remains RTP/SAVP(F) with a matching AES_CM_128 offer. Plain RTP/AVP answers
+// skip SRTP (interoperability downgrade).
+func applyOutboundAnswerSRTP(sess *rtp.Session, offerKey, offerSalt []byte, answer *sdp.Info) error {
+	if sess == nil || answer == nil || len(offerKey) == 0 {
+		return nil
+	}
+	if !strings.Contains(strings.ToUpper(answer.Proto), "SAVP") {
+		return nil
+	}
+	co, ok := sdp.PickAESCM128Offer(answer.CryptoOffers)
+	if !ok {
+		return fmt.Errorf("sip/outbound: SRTP answer missing %s a=crypto", sdp.SuiteAESCM128HMACSHA180)
+	}
+	rk, rs, err := sdp.DecodeSDESInline(co.KeyParams)
+	if err != nil {
+		return fmt.Errorf("sip/outbound: SRTP answer inline: %w", err)
+	}
+	return sess.EnableSDESSRTP(rk, rs, offerKey, offerSalt)
+}
 
 func isPrivateIPv4(ip net.IP) bool {
 	if ip == nil {
@@ -105,7 +125,7 @@ func newOutboundRTPSessionFromRange(start, end int) (*rtp.Session, error) {
 
 // SignalingSender sends SIP on the shared UDP socket (typically *server.SIPServer).
 type SignalingSender interface {
-	SendSIP(msg *protocol.Message, addr *net.UDPAddr) error
+	SendSIP(msg *stack.Message, addr *net.UDPAddr) error
 }
 
 // ManagerConfig configures outbound legs.
@@ -143,7 +163,7 @@ type ManagerConfig struct {
 // Manager owns outbound SIP legs keyed by Call-ID.
 type Manager struct {
 	cfg  ManagerConfig
-	send func(*protocol.Message, *net.UDPAddr) error
+	send func(*stack.Message, *net.UDPAddr) error
 
 	mu       sync.Mutex
 	legs     map[string]*outLeg // keyed by local outbound Call-ID
@@ -167,13 +187,13 @@ func (m *Manager) BindSender(s SignalingSender) {
 	if m == nil || s == nil {
 		return
 	}
-	m.send = func(msg *protocol.Message, addr *net.UDPAddr) error {
+	m.send = func(msg *stack.Message, addr *net.UDPAddr) error {
 		return s.SendSIP(msg, addr)
 	}
 }
 
-// HandleSIPResponse must be set on protocol.Server.OnSIPResponse / server.Config.OnSIPResponse.
-func (m *Manager) HandleSIPResponse(resp *protocol.Message, addr *net.UDPAddr) {
+// HandleSIPResponse must be set on stack.EndpointConfig.OnSIPResponse / server.Config.OnSIPResponse.
+func (m *Manager) HandleSIPResponse(resp *stack.Message, addr *net.UDPAddr) {
 	if m == nil || resp == nil {
 		return
 	}
@@ -246,15 +266,36 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		return "", fmt.Errorf("sip/outbound: rtp session: %w", err)
 	}
 	localPort = rtpSess.LocalAddr.Port
-	codecs := defaultOfferCodecs()
+	codecs := sdp.DefaultOutboundOfferCodecs()
 	if req.MediaProfile == MediaProfileScript {
 		// Script callbacks prioritize SIP endpoint compatibility over wideband quality.
 		// Some UAs negotiate Opus but still produce garbled playout in this path.
-		codecs = transferAgentBridgeOfferCodecs()
+		codecs = sdp.TransferAgentBridgeOfferCodecs()
 	} else if req.Scenario == ScenarioTransferAgent && req.MediaProfile == MediaProfileTransferBridge {
-		codecs = transferAgentBridgeOfferCodecs()
+		codecs = sdp.TransferAgentBridgeOfferCodecs()
 	}
-	sdpBody := sdp.GenerateWithProto(localSDP, localPort, "RTP/AVP", codecs)
+	// Outbound INVITE always offers RTP/SAVPF + SDES AES_CM_128_HMAC_SHA1_80 (per-call random key/salt).
+	// If the peer answers plain RTP/AVP, applyOutboundAnswerSRTP skips SRTP on the socket.
+	mediaProto := "RTP/SAVPF"
+	mkey := make([]byte, 16)
+	msalt := make([]byte, 14)
+	if _, err := rand.Read(mkey); err != nil {
+		_ = rtpSess.Close()
+		return "", fmt.Errorf("sip/outbound: SRTP master key: %w", err)
+	}
+	if _, err := rand.Read(msalt); err != nil {
+		_ = rtpSess.Close()
+		return "", fmt.Errorf("sip/outbound: SRTP master salt: %w", err)
+	}
+	cryptoLine, err := sdp.FormatCryptoLine(1, sdp.SuiteAESCM128HMACSHA180, mkey, msalt)
+	if err != nil {
+		_ = rtpSess.Close()
+		return "", err
+	}
+	sdpExtras := []string{cryptoLine}
+	srtpOfferKey := append([]byte(nil), mkey...)
+	srtpOfferSalt := append([]byte(nil), msalt...)
+	sdpBody := sdp.GenerateWithProtoExtras(localSDP, localPort, mediaProto, codecs, sdpExtras)
 
 	callID = newCallID(localSDP)
 	ip := m.cfg.SIPHost
@@ -293,12 +334,14 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 
 	invite := buildINVITE(params)
 	leg := &outLeg{
-		m:       m,
-		params:  params,
-		req:     req,
-		rtpSess: rtpSess,
-		dst:     addr,
-		txKey:   inviteTxKey(params.Branch, params.CSeq),
+		m:             m,
+		params:        params,
+		req:           req,
+		rtpSess:       rtpSess,
+		dst:           addr,
+		txKey:         inviteTxKey(params.Branch, params.CSeq),
+		srtpOfferKey:  srtpOfferKey,
+		srtpOfferSalt: srtpOfferSalt,
 	}
 
 	m.mu.Lock()
@@ -355,9 +398,12 @@ type outLeg struct {
 	byeRemote     *net.UDPAddr
 	byeCSeqNext   int
 	txKey         string
+
+	srtpOfferKey  []byte
+	srtpOfferSalt []byte
 }
 
-func (leg *outLeg) handleResponse(ctx context.Context, resp *protocol.Message, from *net.UDPAddr) {
+func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from *net.UDPAddr) {
 	if leg == nil || resp == nil {
 		return
 	}
@@ -464,6 +510,12 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *protocol.Message, f
 		)
 	}
 	leg.rtpSess.SetRemoteAddr(remoteRTP)
+
+	if err := applyOutboundAnswerSRTP(leg.rtpSess, leg.srtpOfferKey, leg.srtpOfferSalt, answer); err != nil {
+		logger.Warn("sip outbound SRTP negotiation failed", zap.String("call_id", leg.params.CallID), zap.Error(err))
+		leg.cleanupLeg()
+		return
+	}
 
 	cs, err := sipSession.NewCallSession(leg.params.CallID, leg.rtpSess, answer.Codecs)
 	if err != nil {
@@ -652,11 +704,11 @@ func inviteTxKey(branch string, cseq int) string {
 	return fmt.Sprintf("%s|%d", branch, cseq)
 }
 
-func txKeyFromResponse(resp *protocol.Message) string {
+func txKeyFromResponse(resp *stack.Message) string {
 	if resp == nil {
 		return ""
 	}
-	cseqNum := siputil.ParseCSeqNum(strings.TrimSpace(resp.GetHeader("CSeq")))
+	cseqNum := stack.ParseCSeqNum(strings.TrimSpace(resp.GetHeader("CSeq")))
 	if cseqNum <= 0 {
 		return ""
 	}

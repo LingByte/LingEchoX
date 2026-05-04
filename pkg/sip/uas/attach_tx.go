@@ -98,10 +98,10 @@ func WrapHandlersWithTransaction(h Handlers, b TransactionBinding) Handlers {
 // Use when building a UAS: pass the same Manager and Send used for HandleInviteRequest / HandleCancelRequest.
 func (h Handlers) AttachWithTransaction(ep *stack.Endpoint, b TransactionBinding) error {
 	if ep == nil {
-		return fmt.Errorf("sip1/uas: nil endpoint")
+		return fmt.Errorf("sip/uas: nil endpoint")
 	}
 	if b.Mgr != nil && b.Send == nil {
-		return fmt.Errorf("sip1/uas: TransactionBinding.Send required when Manager is set")
+		return fmt.Errorf("sip/uas: TransactionBinding.Send required when Manager is set")
 	}
 	if b.Mgr != nil && b.Send != nil {
 		ep.AppendOnResponseSent(AfterResponseSentBeginServerTx(b.Mgr, b.Ctx, b.Send))

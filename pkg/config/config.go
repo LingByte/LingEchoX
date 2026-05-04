@@ -25,6 +25,13 @@ type Config struct {
 	Services   ServicesConfig   `mapstructure:"services"`
 	Features   FeaturesConfig   `mapstructure:"features"`
 	Middleware MiddlewareConfig `mapstructure:"middleware"`
+	SIP        SIPConfig        `mapstructure:"sip"`
+}
+
+type SIPConfig struct {
+	SIPVADBargeIn      bool    `env:"SIP_VAD_BARGE_IN"`
+	SIPVADThreshold    float64 `env:"SIP_VAD_THRESHOLD"`
+	SIPVADConsecFrames int     `env:"SIP_VAD_CONSEC_FRAMES"`
 }
 
 // ServerConfig server configuration
@@ -195,6 +202,11 @@ func Load() error {
 			BackupSchedule: getStringOrDefault("BACKUP_SCHEDULE", "0 2 * * *"),
 		},
 		Middleware: loadMiddlewareConfig(),
+		SIP: SIPConfig{
+			SIPVADBargeIn:      getBoolOrDefault("SIPVADBargeIn", true),
+			SIPVADThreshold:    getFloatOrDefault("SIP_VAD_THRESHOLD", 3200.0),
+			SIPVADConsecFrames: getIntOrDefault("SIP_VAD_CONSEC_FRAMES", 4),
+		},
 	}
 	GlobalStore = lingstorage.NewClient(&lingstorage.Config{
 		BaseURL:   GlobalConfig.Services.Storage.BaseURL,

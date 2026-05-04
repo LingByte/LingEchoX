@@ -70,6 +70,7 @@ func TestParseHybridScript_ExtendedFields(t *testing.T) {
 }
 
 func TestListenRouteWithoutLLM_Apology(t *testing.T) {
+	t.Setenv(constants.EnvCHECKLLMRouteDisabled, "1")
 	t.Setenv(constants.EnvCHECKLLMAPIKey, "")
 	t.Setenv(constants.EnvCHECKLLMBaseURL, "")
 	t.Setenv(constants.EnvCHECKLLMModel, "")

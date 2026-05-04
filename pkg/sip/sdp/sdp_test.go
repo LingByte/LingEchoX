@@ -55,7 +55,7 @@ func TestParse_StaticPCMU_PlusTelephoneEvent(t *testing.T) {
 	}
 }
 
-func TestParse_SAVPRejected(t *testing.T) {
+func TestParse_SAVP_WithCrypto(t *testing.T) {
 	sdpBody := strings.Join([]string{
 		"v=0",
 		"o=- 1 1 IN IP4 10.0.0.2",
@@ -63,10 +63,58 @@ func TestParse_SAVPRejected(t *testing.T) {
 		"c=IN IP4 10.0.0.2",
 		"t=0 0",
 		"m=audio 8000 RTP/SAVP 0",
+		"a=rtpmap:0 PCMU/8000",
+		"a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:ABCDEFGHIJKLMNOPQRSTUVWX/Y",
 	}, "\r\n")
-	_, err := Parse(sdpBody)
-	if err == nil {
-		t.Fatal("expected error for SAVP")
+	info, err := Parse(sdpBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToUpper(info.Proto), "SAVP") {
+		t.Fatalf("proto: %q", info.Proto)
+	}
+	if len(info.CryptoOffers) != 1 || info.CryptoOffers[0].Tag != 1 {
+		t.Fatalf("crypto: %+v", info.CryptoOffers)
+	}
+}
+
+func TestCrypto_FormatDecodeRoundTrip(t *testing.T) {
+	key := make([]byte, 16)
+	salt := make([]byte, 14)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	for i := range salt {
+		salt[i] = byte(i + 10)
+	}
+	line, err := FormatCryptoLine(7, SuiteAESCM128HMACSHA180, key, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(line, "a=crypto:7 AES_CM_128_HMAC_SHA1_80 inline:") {
+		t.Fatalf("line: %s", line)
+	}
+	idx := strings.Index(line, "inline:")
+	if idx < 0 {
+		t.Fatalf("no inline in %s", line)
+	}
+	co := CryptoOffer{Tag: 7, Suite: SuiteAESCM128HMACSHA180, KeyParams: strings.TrimSpace(line[idx:])}
+	k2, s2, err := DecodeSDESInline(co.KeyParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(k2) != len(key) || len(s2) != len(salt) {
+		t.Fatalf("len mismatch")
+	}
+	for i := range key {
+		if k2[i] != key[i] {
+			t.Fatalf("key byte %d", i)
+		}
+	}
+	for i := range salt {
+		if s2[i] != salt[i] {
+			t.Fatalf("salt byte %d", i)
+		}
 	}
 }
 
@@ -114,6 +162,57 @@ func TestPickTelephoneEventFromOffer(t *testing.T) {
 		{Name: "telephone-event", ClockRate: 48000, PayloadType: 112},
 	}
 	if c, ok := PickTelephoneEventFromOffer(offer, 48000); !ok || c.PayloadType != 112 {
+		t.Fatalf("got %#v ok=%v", c, ok)
+	}
+}
+
+func TestNormalizeBody(t *testing.T) {
+	s := NormalizeBody("  a\r\nb\r  ")
+	if s != "a\nb" {
+		t.Fatalf("%q", s)
+	}
+}
+
+func TestParse_EmptyBody(t *testing.T) {
+	if _, err := Parse(""); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestGenerate_DefaultPortAndEmptyIP(t *testing.T) {
+	body := GenerateWithProto("", 0, "", []Codec{{PayloadType: 0, Name: "pcmu", ClockRate: 8000}})
+	if !strings.Contains(body, "m=audio 49172") {
+		t.Fatalf("default port: %s", body)
+	}
+	if !strings.Contains(body, "c=IN IP4 127.0.0.1") {
+		t.Fatalf("default ip: %s", body)
+	}
+}
+
+func TestGenerateWithProto_AVPF(t *testing.T) {
+	body := GenerateWithProto("10.0.0.1", 9000, "RTP/AVPF", []Codec{{PayloadType: 111, Name: "opus", ClockRate: 48000, Channels: 2}})
+	info, err := Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToUpper(info.Proto), "AVPF") {
+		t.Fatalf("proto %q", info.Proto)
+	}
+}
+
+func TestPresets_Length(t *testing.T) {
+	if len(DefaultOutboundOfferCodecs()) < 4 {
+		t.Fatal("default outbound codecs")
+	}
+	if len(TransferAgentBridgeOfferCodecs()) < 2 {
+		t.Fatal("transfer codecs")
+	}
+}
+
+func TestPickTelephoneEventFromOffer_Fallback8000(t *testing.T) {
+	offer := []Codec{{Name: "opus", ClockRate: 48000, PayloadType: 111}, {Name: "telephone-event", ClockRate: 8000, PayloadType: 101}}
+	c, ok := PickTelephoneEventFromOffer(offer, 9999)
+	if !ok || c.PayloadType != 101 {
 		t.Fatalf("got %#v ok=%v", c, ok)
 	}
 }
