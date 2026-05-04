@@ -21,6 +21,9 @@
 // Inbound UAS attaches this bridge on ACK. Outbound AI legs use conversation.AttachVoicePipeline from sipapp.
 // In-process loopback to HTTP /ws?call_id= is always enabled from sipapp (InboundLoopbackWS: true).
 //
+// HTTP GET upgrade (method, token, status responses) is implemented in internal/handlers/voice_dialog.go;
+// this package exposes UpgradeVoiceDialogWebSocket + ServeVoiceDialogWebSocket after handshake.
+//
 // WebSocket URLs (under HTTP API prefix, e.g. /api/):
 //   - GET .../lingecho/voice-dialog/v1/ws?token=T — subscribe; receives call.pending for new inbound legs.
 //   - GET .../lingecho/voice-dialog/v1/ws?token=T&call_id=C — session for Call-ID C.

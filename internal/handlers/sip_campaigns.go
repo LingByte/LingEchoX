@@ -40,7 +40,17 @@ type sipCampaignContactReq struct {
 }
 
 func (h *Handlers) listSIPCampaigns(c *gin.Context) {
-	page, size := parsePageSize(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
 	list, total, err := models.ListSIPCampaignsPage(h.db, page, size, c.Query("status"), c.Query("name"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -164,7 +174,17 @@ func (h *Handlers) listSIPCampaignContacts(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	page, size := parsePageSize(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
 	list, total, err := models.ListSIPCampaignContactsPage(h.db, uint(id), page, size)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

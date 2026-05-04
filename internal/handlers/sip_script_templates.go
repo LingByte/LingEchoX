@@ -20,7 +20,17 @@ type sipScriptTemplateWriteReq struct {
 }
 
 func (h *Handlers) listSIPScriptTemplates(c *gin.Context) {
-	page, size := parsePageSize(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
 	list, total, err := models.ListSIPScriptTemplatesPage(h.db, page, size, c.Query("scriptId"), c.Query("name"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

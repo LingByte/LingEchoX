@@ -55,22 +55,13 @@ func VoicedialogLoopbackLLMQuery(_ context.Context, p llm.LLMProvider, model, us
 	return normalizeTTSText(reply), nil
 }
 
-// VoicedialogShouldTriggerTransfer mirrors outbound SIP voice transfer gates after an assistant turn (tool / explicit phrase / pending flag).
-func VoicedialogShouldTriggerTransfer(callID, userText string, prov llm.LLMProvider) bool {
+// VoicedialogShouldTriggerTransfer mirrors outbound SIP voice transfer gates after an assistant turn (LLM tool / pending flag).
+func VoicedialogShouldTriggerTransfer(callID string, prov llm.LLMProvider) bool {
 	if prov == nil {
 		return false
 	}
-	userText = strings.TrimSpace(userText)
-	explicitXfer := sipIntentExplicitTransferRequest(userText)
 	if ap, ok := prov.(*llm.AlibabaProvider); ok {
-		if action := ap.ConsumePendingAction(); action == "transfer_to_agent" {
-			return true
-		}
-		if explicitXfer {
-			return true
-		}
-	} else if consumeSIPTransferPending(callID) || explicitXfer {
-		return true
+		return ap.ConsumePendingAction() == "transfer_to_agent"
 	}
-	return false
+	return consumeSIPTransferPending(callID)
 }

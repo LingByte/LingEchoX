@@ -40,10 +40,10 @@ func InitDefault(cfg Config) {
 // AttachInbound registers the voice-dialog gateway for this call. Call inside cs.AttachVoiceConversation.
 func AttachInbound(_ context.Context, cs *sipSession.CallSession, meta InboundMeta) error {
 	if defaultHub == nil {
-		return errors.New("voicedialog: InitDefault not called")
+		return errors.New("voice dialog: InitDefault not called")
 	}
 	if cs == nil || strings.TrimSpace(meta.CallID) == "" {
-		return errors.New("voicedialog: invalid call session or call-id")
+		return errors.New("voice dialog: invalid call session or call-id")
 	}
 	meta.CallID = strings.TrimSpace(meta.CallID)
 
@@ -66,7 +66,7 @@ func AttachInbound(_ context.Context, cs *sipSession.CallSession, meta InboundMe
 
 	if cs.MediaSession() == nil {
 		h.endCall(meta.CallID, "error")
-		return errors.New("voicedialog: nil media session")
+		return errors.New("voice dialog: nil media session")
 	}
 
 	if err := attachGatewayMedia(sess); err != nil {
@@ -76,7 +76,7 @@ func AttachInbound(_ context.Context, cs *sipSession.CallSession, meta InboundMe
 
 	h.startInboundLoopbackWS(sess)
 
-	logger.Info("voicedialog inbound gateway registered (await WebSocket)",
+	logger.Info("voice dialog inbound gateway registered (await WebSocket)",
 		zap.String(KeyCallID, meta.CallID),
 		zap.Int(KeyPCMSampleRateHz, meta.PCMSampleRate),
 		zap.String(KeyCodec, meta.CodecName),
@@ -121,11 +121,11 @@ func (h *Hub) broadcastPending(sess *dialogSession) {
 	h.subMu.Unlock()
 	if len(list) == 0 {
 		if h.cfg.InboundLoopbackWS {
-			logger.Info("voicedialog → ws call.pending: no subscriber sockets (fanout skipped; using inbound loopback per-call ws)",
+			logger.Info("voice dialog → ws call.pending: no subscriber sockets (fanout skipped; using inbound loopback per-call ws)",
 				zap.String(KeyCallID, sess.meta.CallID),
 			)
 		} else {
-			logger.Warn("voicedialog → ws call.pending fanout: no subscribers (HTTP is up but no dialog WebSocket yet)",
+			logger.Warn("voice dialog → ws call.pending fanout: no subscribers (HTTP is up but no dialog WebSocket yet)",
 				zap.String(KeyCallID, sess.meta.CallID),
 				zap.Int("subscribers", 0),
 				zap.String("subscriber_ws_path", constants.LingechoVoiceDialogPathPrefix+"/ws"),
@@ -133,7 +133,7 @@ func (h *Hub) broadcastPending(sess *dialogSession) {
 			)
 		}
 	} else {
-		logger.Info("voicedialog → ws call.pending fanout",
+		logger.Info("voice dialog → ws call.pending fanout",
 			zap.String(KeyCallID, sess.meta.CallID),
 			zap.Int("subscribers", len(list)),
 		)
@@ -174,7 +174,7 @@ func (h *Hub) endCall(callID, reason string) {
 	sess.gatewayShutdown()
 	sess.mu.Lock()
 	if sess.conn != nil {
-		logger.Info("voicedialog → ws call.ended",
+		logger.Info("voice dialog → ws call.ended",
 			zap.String(KeyCallID, callID),
 			zap.String(KeyReason, reason),
 		)
@@ -191,57 +191,14 @@ func (h *Hub) endCall(callID, reason string) {
 	)
 }
 
-// WebSocketHTTP serves GET WebSocket (?token=… [&call_id=…]).
-func WebSocketHTTP(w http.ResponseWriter, r *http.Request) {
-	remote := r.RemoteAddr
-	if defaultHub == nil {
-		logger.Warn("voicedialog ws: upgrade refused (hub not initialized)", zap.String("remote", remote))
-		http.Error(w, "voice dialog not initialized", http.StatusServiceUnavailable)
-		return
-	}
-	if r.Method != http.MethodGet {
-		logger.Warn("voicedialog ws: wrong method", zap.String("remote", remote), zap.String("method", r.Method))
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !wsTokenOK(r) {
-		logger.Warn("voicedialog ws: upgrade refused (token)", zap.String("remote", remote))
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	callID := strings.TrimSpace(r.URL.Query().Get("call_id"))
-	conn, err := defaultHub.wsUpgrader.Upgrade(w, r, nil)
-	if err != nil {
-		logger.Warn("voicedialog ws: Upgrade failed", zap.String("remote", remote), zap.String(KeyCallID, callID), zap.Error(err))
-		return
-	}
-	wsRemote := conn.RemoteAddr().String()
-	if callID == "" {
-		logger.Info("voicedialog ws: upgraded (subscriber)",
-			zap.String("http_remote", remote),
-			zap.String("ws_remote", wsRemote),
-		)
-		defaultHub.subMu.Lock()
-		defaultHub.subs = append(defaultHub.subs, conn)
-		defaultHub.subMu.Unlock()
-		go defaultHub.subscribeReadLoop(conn)
-		return
-	}
-	logger.Info("voicedialog ws: upgraded (call session)",
-		zap.String("http_remote", remote),
-		zap.String("ws_remote", wsRemote),
-		zap.String(KeyCallID, callID),
-	)
-	go defaultHub.runCallSocket(callID, conn)
-}
-
-func wsTokenOK(r *http.Request) bool {
+// WebSocketTokenOK validates ?token= against VOICE_DIALOG_WS_TOKEN (constant-time when set).
+func WebSocketTokenOK(r *http.Request) bool {
 	expected := wsTokenExpected()
 	got := strings.TrimSpace(r.URL.Query().Get("token"))
 	if expected == "" {
 		if defaultHub != nil {
 			defaultHub.tokenMissingOnce.Do(func() {
-				logger.Warn("voicedialog VOICE_DIALOG_WS_TOKEN is empty; WebSocket accepts any client (set VOICE_DIALOG_WS_TOKEN in production)",
+				logger.Warn("voice dialog VOICE_DIALOG_WS_TOKEN is empty; WebSocket accepts any client (set VOICE_DIALOG_WS_TOKEN in production)",
 					zap.Bool("inbound_loopback_ws", defaultHub.cfg.InboundLoopbackWS),
 				)
 			})
@@ -252,6 +209,47 @@ func wsTokenOK(r *http.Request) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
+}
+
+// WebSocketHubReady reports whether InitDefault has created the dialog hub.
+func WebSocketHubReady() bool {
+	return defaultHub != nil
+}
+
+// UpgradeVoiceDialogWebSocket performs the WebSocket handshake using the hub's upgrader.
+func UpgradeVoiceDialogWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	if defaultHub == nil {
+		return nil, errors.New("voice dialog: hub not initialized")
+	}
+	return defaultHub.wsUpgrader.Upgrade(w, r, nil)
+}
+
+// ServeVoiceDialogWebSocket runs the dialog protocol on an upgraded connection (subscriber fanout or per-call session).
+func ServeVoiceDialogWebSocket(conn *websocket.Conn, callID string) {
+	if conn == nil || defaultHub == nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return
+	}
+	h := defaultHub
+	wsRemote := conn.RemoteAddr().String()
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		logger.Info("voice dialog ws: upgraded (subscriber)",
+			zap.String("ws_remote", wsRemote),
+		)
+		h.subMu.Lock()
+		h.subs = append(h.subs, conn)
+		h.subMu.Unlock()
+		h.subscribeReadLoop(conn)
+		return
+	}
+	logger.Info("voice dialog ws: upgraded (call session)",
+		zap.String("ws_remote", wsRemote),
+		zap.String(KeyCallID, callID),
+	)
+	h.runCallSocket(callID, conn)
 }
 
 func (h *Hub) subRemove(c *websocket.Conn) {
@@ -293,7 +291,6 @@ func (h *Hub) subscribeReadLoop(c *websocket.Conn) {
 
 func (h *Hub) runCallSocket(callID string, conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
-
 	h.mu.Lock()
 	sess := h.sessions[callID]
 	h.mu.Unlock()
@@ -337,7 +334,7 @@ func (h *Hub) runCallSocket(callID string, conn *websocket.Conn) {
 	if err := writeJSONDeadline(conn, hello); err != nil {
 		return
 	}
-	logger.Info("voicedialog → ws hello sent",
+	logger.Info("voice dialog → ws hello sent",
 		zap.String(KeyCallID, sess.meta.CallID),
 		zap.Strings(KeyUpstreamEvents, caps),
 		zap.Strings(KeyDownstreamCommands, downCmds),
@@ -431,7 +428,7 @@ func (sess *dialogSession) emitGateway(ev map[string]any) {
 	switch t {
 	case EvASRPartial, EvASRFinal:
 		txt, _ := ev[KeyText].(string)
-		logger.Info("voicedialog → ws asr",
+		logger.Info("voice dialog → ws asr",
 			zap.String(KeyCallID, callID),
 			zap.String("event", t),
 			zap.Bool(KeyFinal, t == EvASRFinal),
@@ -441,14 +438,14 @@ func (sess *dialogSession) emitGateway(ev map[string]any) {
 	case EvASRError:
 		msg, _ := ev[KeyMessage].(string)
 		fatal, _ := ev[KeyFatal].(bool)
-		logger.Warn("voicedialog → ws asr.error",
+		logger.Warn("voice dialog → ws asr.error",
 			zap.String(KeyCallID, callID),
 			zap.String(KeyMessage, msg),
 			zap.Bool(KeyFatal, fatal),
 		)
 	case EvDTMF:
 		d, _ := ev[KeyDigit].(string)
-		logger.Info("voicedialog → ws dtmf",
+		logger.Info("voice dialog → ws dtmf",
 			zap.String(KeyCallID, callID),
 			zap.String(KeyDigit, d),
 		)
@@ -456,7 +453,7 @@ func (sess *dialogSession) emitGateway(ev map[string]any) {
 		origin, _ := ev[KeyOrigin].(string)
 		cause, _ := ev[KeyCause].(string)
 		reason, _ := ev[KeyReason].(string)
-		logger.Info("voicedialog → ws interrupt",
+		logger.Info("voice dialog → ws interrupt",
 			zap.String(KeyCallID, callID),
 			zap.String(KeyOrigin, origin),
 			zap.String(KeyCause, cause),
@@ -465,7 +462,7 @@ func (sess *dialogSession) emitGateway(ev map[string]any) {
 	case EvTTSStarted:
 		prev, _ := ev[KeyTextPreview].(string)
 		uid, _ := ev[KeyUtteranceID].(string)
-		logger.Info("voicedialog → ws tts.started",
+		logger.Info("voice dialog → ws tts.started",
 			zap.String(KeyCallID, callID),
 			zap.String(KeyUtteranceID, uid),
 			zap.String(KeyTextPreview, prev),
@@ -473,18 +470,18 @@ func (sess *dialogSession) emitGateway(ev map[string]any) {
 	case EvTTSEnded:
 		uid, _ := ev[KeyUtteranceID].(string)
 		ok, _ := ev[KeyOK].(bool)
-		logger.Info("voicedialog → ws tts.ended",
+		logger.Info("voice dialog → ws tts.ended",
 			zap.String(KeyCallID, callID),
 			zap.String(KeyUtteranceID, uid),
 			zap.Bool(KeyOK, ok),
 		)
 	case EvTTSCancelled:
-		logger.Info("voicedialog → ws tts.cancelled", zap.String(KeyCallID, callID))
+		logger.Info("voice dialog → ws tts.cancelled", zap.String(KeyCallID, callID))
 	case EvDialogWelcome, EvDialogTransfer:
 		ph, _ := ev[KeyPhase].(string)
 		sk, _ := ev[KeySourceKind].(string)
 		src, _ := ev[KeySource].(string)
-		logger.Info("voicedialog → ws "+t,
+		logger.Info("voice dialog → ws "+t,
 			zap.String(KeyCallID, callID),
 			zap.String(KeyPhase, ph),
 			zap.String(KeySourceKind, sk),
@@ -492,12 +489,12 @@ func (sess *dialogSession) emitGateway(ev map[string]any) {
 		)
 	default:
 		if strings.HasPrefix(t, "call.") || t == EvHello || t == EvError {
-			logger.Debug("voicedialog → ws",
+			logger.Debug("voice dialog → ws",
 				zap.String(KeyCallID, callID),
 				zap.String(KeyType, t),
 			)
 		} else {
-			logger.Info("voicedialog → ws",
+			logger.Info("voice dialog → ws",
 				zap.String(KeyCallID, callID),
 				zap.String(KeyType, t),
 			)

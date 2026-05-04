@@ -12,9 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func parsePageSize(c *gin.Context) (page, size int) {
-	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ = strconv.Atoi(c.DefaultQuery("size", "20"))
+func (h *Handlers) listSIPUsers(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
 		page = 1
 	}
@@ -24,50 +24,6 @@ func parsePageSize(c *gin.Context) (page, size int) {
 	if size > 100 {
 		size = 100
 	}
-	return page, size
-}
-
-func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
-	g := r.Group("sip-center")
-	{
-		g.GET("/users", h.listSIPUsers)
-		g.GET("/users/:id", h.getSIPUser)
-		g.DELETE("/users/:id", h.deleteSIPUser)
-
-		g.GET("/calls", h.listSIPCalls)
-		g.GET("/calls/:id", h.getSIPCall)
-
-		g.GET("/acd-pool", h.listACDPoolTargets)
-		g.POST("/acd-pool/web-seat/heartbeat", h.webSeatACDHeartbeat)
-		g.GET("/acd-pool/:id", h.getACDPoolTarget)
-		g.POST("/acd-pool", h.createACDPoolTarget)
-		g.PUT("/acd-pool/:id", h.updateACDPoolTarget)
-		g.DELETE("/acd-pool/:id", h.deleteACDPoolTarget)
-
-		g.GET("/scripts", h.listSIPScriptTemplates)
-		g.GET("/scripts/:id", h.getSIPScriptTemplate)
-		g.POST("/scripts", h.createSIPScriptTemplate)
-		g.PUT("/scripts/:id", h.updateSIPScriptTemplate)
-		g.DELETE("/scripts/:id", h.deleteSIPScriptTemplate)
-
-		g.POST("/campaigns", h.createSIPCampaign)
-		g.GET("/campaigns", h.listSIPCampaigns)
-		g.POST("/campaigns/:id/contacts", h.addSIPCampaignContacts)
-		g.GET("/campaigns/:id/contacts", h.listSIPCampaignContacts)
-		g.POST("/campaigns/:id/contacts/reset-suppressed", h.resetSIPCampaignSuppressedContacts)
-		g.POST("/campaigns/:id/start", h.startSIPCampaign)
-		g.POST("/campaigns/:id/pause", h.pauseSIPCampaign)
-		g.POST("/campaigns/:id/resume", h.resumeSIPCampaign)
-		g.POST("/campaigns/:id/stop", h.stopSIPCampaign)
-		g.DELETE("/campaigns/:id", h.deleteSIPCampaign)
-		g.GET("/campaigns/metrics", h.getSIPCampaignMetrics)
-		g.GET("/campaigns/worker-metrics", h.getSIPCampaignWorkerMetrics)
-		g.GET("/campaigns/:id/logs", h.getSIPCampaignLogs)
-	}
-}
-
-func (h *Handlers) listSIPUsers(c *gin.Context) {
-	page, size := parsePageSize(c)
 	list, total, err := persist.ListSIPUsersPage(h.db, page, size)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -109,7 +65,17 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 }
 
 func (h *Handlers) listSIPCalls(c *gin.Context) {
-	page, size := parsePageSize(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
 	list, total, err := persist.ListSIPCallsPage(h.db, page, size, c.Query("callId"), c.Query("state"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

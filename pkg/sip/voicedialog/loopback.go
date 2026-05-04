@@ -201,7 +201,7 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 					zap.String(KeyCallID, callID),
 					zap.Int("reply_len", len([]rune(reply))),
 				)
-				if conversation.VoicedialogShouldTriggerTransfer(callID, user, prov) {
+				if conversation.VoicedialogShouldTriggerTransfer(callID, prov) {
 					deferred := false
 					if defaultHub != nil {
 						defaultHub.mu.Lock()

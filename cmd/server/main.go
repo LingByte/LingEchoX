@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/cmd/bootstrap"
-	handlers "github.com/LingByte/SoulNexus/internal/handler"
+	"github.com/LingByte/SoulNexus/internal/handlers"
 	"github.com/LingByte/SoulNexus/internal/listeners"
 	"github.com/LingByte/SoulNexus/internal/sipserver"
 	"github.com/LingByte/SoulNexus/internal/tasks"
@@ -47,12 +47,7 @@ func (app *LingEchoApp) RegisterRoutes(r *gin.Engine) {
 }
 
 func main() {
-	// 1. Print Banner
-	if err := bootstrap.PrintBannerFromFile("banner.txt"); err != nil {
-		log.Fatalf("unload banner: %v", err)
-	}
-
-	// 2. Parse Command Line Parameters
+	// 1. Parse Command Line Parameters
 	init := flag.Bool("init", false, "deprecated: ignored; schema migration always runs at startup")
 	seed := flag.Bool("seed", false, "seed database")
 	mode := flag.String("mode", "", "running environment (development, test, production)")
@@ -61,13 +56,20 @@ func main() {
 	sipPort := flag.Int("sip-port", 6050, "embedded SIP UDP listen port")
 	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "Advertised IP for SDP c= AND for SIP Via/Contact when -sip-host is 0.0.0.0 (must be reachable by LAN phones for outbound/campaign; avoid 127.0.0.1)")
 	flag.Parse()
-	// 3. Set Environment Variables
+
+	// 2. Set Environment Variables
 	if *mode != "" {
 		os.Setenv("MODE", *mode)
 	}
-	// 4. Load Global Configuration
+	
+	// 3. Load Global Configuration
 	if err := config.Load(); err != nil {
 		panic("config load failed: " + err.Error())
+	}
+
+	// 4. Print Banner
+	if err := bootstrap.PrintBannerFromFile("banner.txt", config.GlobalConfig.Server.Name); err != nil {
+		log.Fatalf("unload banner: %v", err)
 	}
 
 	// 5. Load Log Configuration
