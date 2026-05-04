@@ -22,17 +22,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	SsmlSpeak = "<speak>"
-
-	VolcengineCloneCluster = "volcano_icl"
-	VolcengineLLMCluster   = "volcano_tts"
-	optSubmit              = "submit"
-	optQuery               = "query"
-)
-
-var defaultHeader = []byte{0x11, 0x10, 0x11, 0x00}
-
 // VolcengineTTSServResponse 火山引擎TTS响应结构
 type VolcengineTTSServResponse struct {
 	ReqID     string       `json:"reqid"`
@@ -205,12 +194,12 @@ func (v *volcengineSpeechSynthesisListener) sendRequest(ctx context.Context, opt
 	params["request"] = make(map[string]interface{})
 	params["request"]["reqid"] = reqID
 	params["request"]["text"] = text
-	if strings.HasPrefix(text, SsmlSpeak) {
+	if strings.HasPrefix(text, "<speak>") {
 		params["request"]["text_type"] = "ssml"
 	} else {
 		params["request"]["text_type"] = "plain"
 	}
-	params["request"]["operation"] = optQuery
+	params["request"]["operation"] = "query"
 	params["request"]["with_timestamp"] = "1"
 
 	url := "https://openspeech.bytedance.com/api/v1/tts"

@@ -2,11 +2,9 @@ package bridge
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,17 +12,6 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
 )
-
-// relayRewriteRTPHeader enables the legacy SoulNexus behavior: rewrite SSRC, sequence number,
-// and timestamp onto each leg's rtp.Session state. The outer SIPServe project (pkg/sip/session
-// Manager.startRTPBridge) forwards RTP **bit-transparent** on a single socket — no header rewrite.
-// With two UDP sockets, transparent forward + optional PT remap matches that semantics and avoids
-// timestamp/seq discontinuities (especially after TTS) that sound like garbled / "underwater" audio.
-// Set SIP_TRANSFER_RELAY_REWRITE_RTP=1 only if a peer strictly requires a single SSRC from our side.
-func relayRewriteRTPHeader() bool {
-	v := strings.TrimSpace(strings.ToLower(os.Getenv("SIP_TRANSFER_RELAY_REWRITE_RTP")))
-	return v == "1" || v == "true" || v == "yes"
-}
 
 // CanRawDatagramRelay is true when both legs are the same narrowband G.711 (bit-transparent RTP forward).
 func CanRawDatagramRelay(a, b media.CodecConfig) bool {
@@ -55,11 +42,9 @@ func cloneUDPAddr(a *net.UDPAddr) *net.UDPAddr {
 	return &b
 }
 
-// TwoLegPayloadRelay forwards **raw RTP UDP datagrams** between two legs. Default behavior matches
-// the outer repo’s pkg/sip/session.Manager.startRTPBridge: **transparent** RTP (preserve SSRC, seq,
-// timestamp from the sending peer); only the 7-bit payload type is remapped when the two SDP
-// legs use different PT numbers. Optional SIP_TRANSFER_RELAY_REWRITE_RTP=1 restores SSRC/seq/ts
-// rewriting onto each leg's rtp.Session (legacy).
+// TwoLegPayloadRelay forwards **raw RTP UDP datagrams** between two legs: transparent RTP (preserve
+// peer SSRC / sequence number / timestamp); only the 7-bit payload type is remapped when SDP PT
+// differs between legs.
 type TwoLegPayloadRelay struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -77,10 +62,6 @@ type TwoLegPayloadRelay struct {
 	mu sync.Mutex
 	lastCallerRTP *net.UDPAddr
 	lastAgentRTP  *net.UDPAddr
-
-	// Per-direction timestamp mapping: preserve source RTP clock deltas on our outbound Session clock.
-	clockCToA rtpRelayClock
-	clockAToC rtpRelayClock
 
 	recMu                sync.Mutex
 	onUserAudio          func(seq uint16, ts uint32, payload []byte)
@@ -100,29 +81,6 @@ func (r *TwoLegPayloadRelay) SetInboundRecording(onUser, onAgentToCaller func(se
 	r.onUserAudio = onUser
 	r.onAgentToCallerAudio = onAgentToCaller
 	r.recMu.Unlock()
-}
-
-type rtpRelayClock struct {
-	mu          sync.Mutex
-	initialized bool
-	lastSrcTS   uint32
-	lastOutTS   uint32
-}
-
-// nextTimestamp maps the next source RTP timestamp to a value continuous with dst.Timestamp.
-func (c *rtpRelayClock) nextTimestamp(dst *rtp.Session, srcTS uint32) uint32 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.initialized {
-		c.lastSrcTS = srcTS
-		c.lastOutTS = dst.Timestamp
-		c.initialized = true
-		return c.lastOutTS
-	}
-	delta := srcTS - c.lastSrcTS
-	c.lastOutTS += delta
-	c.lastSrcTS = srcTS
-	return c.lastOutTS
 }
 
 // NewTwoLegPayloadRelay builds a raw-datagram relay; both sessions must already have RemoteAddr (SDP or learned RTP).
@@ -188,39 +146,14 @@ func unblockUDPRead(s *rtp.Session) {
 	_ = s.Conn.SetReadDeadline(time.Now())
 }
 
-// rtpInPlaceHeaderOK is true for the common SIP case: RTP v2, no CSRC, no header extension, no padding.
-// Rewriting only the first 12 bytes preserves the UDP payload bit-for-bit after the header, which
-// avoids Marshal edge cases that can shift Opus data and sound like static/hiss.
-func rtpInPlaceHeaderOK(buf []byte, n int) bool {
-	if n < 12 {
-		return false
-	}
-	if buf[0]>>6 != 2 {
-		return false
-	}
-	if buf[0]&0x0F != 0 { // CSRC count
-		return false
-	}
-	if buf[0]&0x10 != 0 { // extension
-		return false
-	}
-	if buf[0]&0x20 != 0 { // padding — payload length needs trim; use parse path
-		return false
-	}
-	return true
-}
-
 // runForward: if fromCaller, read inbound leg → write outbound leg toward last known agent RTP; else agent → caller.
 func (r *TwoLegPayloadRelay) runForward(fromCaller bool) {
 	src := r.callerSess
 	dst := r.agentSess
-	clock := &r.clockCToA
 	if !fromCaller {
 		src = r.agentSess
 		dst = r.callerSess
-		clock = &r.clockAToC
 	}
-	rewriteHdr := relayRewriteRTPHeader()
 	if src == nil || dst == nil || src.Conn == nil || dst.Conn == nil {
 		return
 	}
@@ -307,63 +240,12 @@ func (r *TwoLegPayloadRelay) runForward(fromCaller bool) {
 			}
 		}
 
-		if !rewriteHdr {
-			// Outer-repo style: same RTP header as received (peer's SSRC / seq / timestamp), optional PT nibble only.
-			if (buf[1] & 0x7F) != (newPT & 0x7F) {
-				buf[1] = (buf[1] & 0x80) | (newPT & 0x7F)
-			}
-			if _, err := dst.Conn.WriteToUDP(buf[:n], dest); err != nil {
-				continue
-			}
-			continue
-		}
-
-		if rtpInPlaceHeaderOK(buf, n) {
-			srcTS := binary.BigEndian.Uint32(buf[4:8])
-			outTS := clock.nextTimestamp(dst, srcTS)
+		if (buf[1] & 0x7F) != (newPT & 0x7F) {
 			buf[1] = (buf[1] & 0x80) | (newPT & 0x7F)
-			binary.BigEndian.PutUint16(buf[2:4], dst.SeqNum)
-			binary.BigEndian.PutUint32(buf[4:8], outTS)
-			binary.BigEndian.PutUint32(buf[8:12], dst.SSRC)
-			if _, err := dst.Conn.WriteToUDP(buf[:n], dest); err != nil {
-				continue
-			}
-			dst.SeqNum++
-			dst.Timestamp = outTS
+		}
+		if _, err := dst.Conn.WriteToUDP(buf[:n], dest); err != nil {
 			continue
 		}
-
-		pkt := &rtp.RTPPacket{}
-		if err := pkt.Unmarshal(buf[:n]); err != nil {
-			continue
-		}
-		outTS := clock.nextTimestamp(dst, pkt.Header.Timestamp)
-		out := rtp.RTPPacket{
-			Header: rtp.RTPHeader{
-				Version:        pkt.Header.Version,
-				Padding:        false,
-				Extension:      pkt.Header.Extension,
-				CSRCCount:      pkt.Header.CSRCCount,
-				Marker:         pkt.Header.Marker,
-				PayloadType:    newPT,
-				SequenceNumber: dst.SeqNum,
-				Timestamp:      outTS,
-				SSRC:           dst.SSRC,
-			},
-			CSRC:             append([]uint32(nil), pkt.CSRC...),
-			ExtensionProfile: pkt.ExtensionProfile,
-			ExtensionPayload: append([]byte(nil), pkt.ExtensionPayload...),
-			Payload:          append([]byte(nil), pkt.Payload...),
-		}
-		outData, err := out.Marshal()
-		if err != nil {
-			continue
-		}
-		if _, err := dst.Conn.WriteToUDP(outData, dest); err != nil {
-			continue
-		}
-		dst.SeqNum++
-		dst.Timestamp = outTS
 	}
 }
 

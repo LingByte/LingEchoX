@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
-	sipprotocol "github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
+	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
 	"github.com/LingByte/SoulNexus/pkg/utils"
+	"go.uber.org/zap"
 )
 
 const maxInboundRecordingBytes = 50 * 1024 * 1024
@@ -68,7 +70,7 @@ type CallSession struct {
 	CallID        string
 	rtpSess       *rtp.Session
 	media         *media.MediaSession
-	neg           sipprotocol.SDPCodec
+	neg           sdp.Codec
 	rxTransport   *rtp.SIPRTPTransport // RTP transports and codec (same as used for MediaSession) for handoff to in-process PCM bridge.
 	txTransport   *rtp.SIPRTPTransport
 	srcCodec      media.CodecConfig
@@ -86,7 +88,7 @@ type CallSession struct {
 }
 
 // NewCallSession creates a call session with codec negotiation from SDP.
-func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol.SDPCodec) (*CallSession, error) {
+func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sdp.Codec) (*CallSession, error) {
 	if callID == "" {
 		return nil, fmt.Errorf("sip: empty callID")
 	}
@@ -104,7 +106,7 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 		"g722": 2,
 		"opus": 3,
 	}
-	codecs := make([]sipprotocol.SDPCodec, len(sdpCodecs))
+	codecs := make([]sdp.Codec, len(sdpCodecs))
 	copy(codecs, sdpCodecs)
 	sort.SliceStable(codecs, func(i, j int) bool {
 		ci := strings.ToLower(strings.TrimSpace(codecs[i].Name))
@@ -123,7 +125,7 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sipprotocol
 	// Choose the first supported codec by preference.
 	var src media.CodecConfig
 	negotiatedPayloadType := uint8(0)
-	var negotiatedSDP sipprotocol.SDPCodec
+	var negotiatedSDP sdp.Codec
 	found := false
 	for _, c := range codecs {
 		switch c.Name {
@@ -258,6 +260,9 @@ func (cs *CallSession) AttachVoiceConversation(fn func() error) error {
 	cs.voiceMu.Lock()
 	defer cs.voiceMu.Unlock()
 	if cs.voiceAttached {
+		logger.Debug("sip session: voice attach skipped (already attached; often duplicate ACK)",
+			zap.String("call_id", cs.CallID),
+		)
 		return nil
 	}
 	if err := fn(); err != nil {
@@ -276,7 +281,7 @@ func passthroughDTMFDecode(dec media.EncoderFunc) media.EncoderFunc {
 	}
 }
 
-func telephoneEventPayloadType(codecs []sipprotocol.SDPCodec) uint8 {
+func telephoneEventPayloadType(codecs []sdp.Codec) uint8 {
 	for _, c := range codecs {
 		if strings.EqualFold(strings.TrimSpace(c.Name), "telephone-event") {
 			return c.PayloadType
@@ -285,9 +290,9 @@ func telephoneEventPayloadType(codecs []sipprotocol.SDPCodec) uint8 {
 	return 0
 }
 
-func (cs *CallSession) NegotiatedCodec() sipprotocol.SDPCodec {
+func (cs *CallSession) NegotiatedCodec() sdp.Codec {
 	if cs == nil {
-		return sipprotocol.SDPCodec{}
+		return sdp.Codec{}
 	}
 	return cs.neg
 }

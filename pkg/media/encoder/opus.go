@@ -290,6 +290,7 @@ func createOPUSEncode(src, pcm media.CodecConfig) media.EncoderFunc {
 			copy(payload, opusScratch[:n])
 			out = append(out, &media.AudioPacket{
 				Payload:       payload,
+				RTPSamples:    uint32(frameSize),
 				IsSynthesized: audioPacket.IsSynthesized,
 				PlayID:        audioPacket.PlayID,
 				Sequence:      audioPacket.Sequence,

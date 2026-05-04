@@ -57,3 +57,6 @@ const CREDENTIAL_API_SECRET = "X-API-SECRET"
 
 // LingechoWebSeatPathPrefix is registered under Server.APIPrefix (e.g. /api/lingecho/webseat/v1/ws).
 const LingechoWebSeatPathPrefix = "lingecho/webseat/v1"
+
+// LingechoVoiceDialogPathPrefix is registered under Server.APIPrefix for SIP ↔ HTTP dialogue bridge WebSockets.
+const LingechoVoiceDialogPathPrefix = "lingecho/voice-dialog/v1"

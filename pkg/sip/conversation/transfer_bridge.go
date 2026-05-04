@@ -109,8 +109,7 @@ func ActiveTransferBridgeForCallID(callID string) bool {
 // StartTransferBridge stops AI media on both legs and bridges audio.
 // Raw UDP RTP relay only when both legs are the same narrowband G.711 (e.g. PCMU↔PCMU); transfer agent
 // legs are offered PCMU, so the usual path is PCM transcode (e.g. inbound Opus ↔ agent PCMU).
-// Raw relay keeps peer SSRC/seq/timestamp; only PT is remapped when needed. SIP_TRANSFER_RELAY_REWRITE_RTP=1
-// restores legacy SSRC/seq/ts rewrite.
+// Raw relay keeps peer SSRC/seq/timestamp; only PT is remapped when needed.
 // inboundCallID is the original caller's Call-ID (CorrelationID on the outbound DialRequest).
 func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSession, outboundCallID string, lg *zap.Logger) {
 	stopTransferRinging(inboundCallID)
@@ -236,6 +235,10 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 	}
 	lg.Info("sip transfer bridge started", logFields...)
 	MarkInboundHadSIPAgentTransfer(inboundCallID)
+	notifyTransferPhase(inboundCallID, TransferPhaseConnected, map[string]any{
+		"outbound_call_id": outboundCallID,
+		"bridge_mode":      mode,
+	})
 }
 
 func hangPeerIfNeeded(bs *transferBridgeState, hungCallID string) {

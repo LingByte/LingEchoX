@@ -262,7 +262,7 @@ func WithSynthesis(svc SynthesisService) media.MediaHandlerFunc {
 
 	executor.InitCallback = func(h media.MediaHandler) error {
 		format := svc.Format()
-		format.SampleRate = h.GetSession().SampleRate // TODO: player must as same as session sample rate
+		format.SampleRate = h.GetSession().SampleRate
 		player.Format = format
 		if format.FrameDuration > 0 {
 			go player.Run(h, h.GetContext())

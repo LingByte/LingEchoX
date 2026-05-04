@@ -7,6 +7,7 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
 )
 
 func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
@@ -29,7 +30,7 @@ func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
 	})
 
 	// A minimal INVITE with SDP body.
-	sdp := strings.Join([]string{
+	sdpBody := strings.Join([]string{
 		"v=0",
 		"o=- 123456 123456 IN IP4 198.51.100.1",
 		"s=Session",
@@ -49,7 +50,7 @@ func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
 		"Contact: <sip:caller@client.com>",
 		"Content-Type: application/sdp",
 		"",
-		sdp,
+		sdpBody,
 	}, "\r\n")
 
 	msg, err := protocol.Parse(raw)
@@ -71,9 +72,9 @@ func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
 		t.Fatalf("missing SDP in response body")
 	}
 
-	info, err := protocol.ParseSDP(resp.Body)
+	info, err := sdp.Parse(resp.Body)
 	if err != nil {
-		t.Fatalf("ParseSDP response failed: %v", err)
+		t.Fatalf("Parse response SDP failed: %v", err)
 	}
 	if info.IP != "192.0.2.10" {
 		t.Fatalf("SDP c= IP mismatch: got=%s", info.IP)

@@ -829,7 +829,7 @@ func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger,
 	if !filepath.IsAbs(path) {
 		path = filepath.Clean(path)
 	}
-	pcm, err := loadWAVAsPCM16Mono(path, sampleRate)
+	pcm, err := LoadWAVAsPCM16Mono(path, sampleRate)
 	if err != nil {
 		return fmt.Errorf("load welcome wav: %w", err)
 	}

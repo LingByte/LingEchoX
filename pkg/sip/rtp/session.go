@@ -1,6 +1,9 @@
 package rtp
 
 import (
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -10,6 +13,10 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"go.uber.org/zap"
 )
+
+// ErrRTPDiscard signals that a datagram was read but must be ignored (malformed RTP / policy).
+// Callers that loop on ReceiveRTP should continue without treating it as a transport failure.
+var ErrRTPDiscard = errors.New("rtp: discard packet")
 
 // Session is a minimal RTP-over-UDP session.
 //
@@ -48,8 +55,15 @@ type Session struct {
 	firstRxUnixNano int64
 	natWarned       uint32
 
-	mirrorMu      sync.RWMutex
-	mirrorRemotes []mirrorRemote
+	closed uint32 // atomic: 1 after Close begins — Send/Receive must not use Conn
+
+	// rxSSRCSeen/rxSSRC lock onto the first observed SSRC for this socket (symmetric RTP).
+	rxSSRCSeen uint32 // atomic 0/1
+	rxSSRC     uint32 // atomic, valid when rxSSRCSeen==1
+
+	mirrorMu           sync.RWMutex
+	mirrorRemotes      []mirrorRemote
+	mirrorErrLastLogNs int64 // atomic unix nano — rate-limit mirror write error logs
 }
 
 type mirrorRemote struct {
@@ -82,12 +96,31 @@ func NewSession(localPort int) (*Session, error) {
 		return nil, fmt.Errorf("rtp: listen udp: %w", err)
 	}
 
+	var rnd [10]byte
+	ssrc, seq, ts := uint32(0xDEADBEEF), uint16(0x1357), uint32(0x2468ACE0)
+	if _, err := rand.Read(rnd[:]); err == nil {
+		ssrc = binary.BigEndian.Uint32(rnd[0:4])
+		seq = binary.BigEndian.Uint16(rnd[4:6])
+		ts = binary.BigEndian.Uint32(rnd[6:10])
+	} else {
+		now := time.Now().UnixNano()
+		ssrc = uint32(now ^ (now >> 32))
+		seq = uint16(now)
+		ts = uint32(now >> 8)
+	}
+	if ssrc == 0 {
+		ssrc = binary.BigEndian.Uint32(rnd[0:4]) ^ 0xA5A5A5A5
+	}
+	if ssrc == 0 {
+		ssrc = 0xBADC0FFE
+	}
+
 	return &Session{
 		LocalAddr:     conn.LocalAddr().(*net.UDPAddr),
 		Conn:          conn,
-		SSRC:          0x12345678,
-		SeqNum:        0,
-		Timestamp:     0,
+		SSRC:          ssrc,
+		SeqNum:        seq,
+		Timestamp:     ts,
 		firstPacketCh: make(chan struct{}),
 		statsStopCh:   make(chan struct{}),
 	}, nil
@@ -186,6 +219,9 @@ func (s *Session) SendRTP(payload []byte, payloadType uint8, samples uint32) err
 	if s == nil {
 		return fmt.Errorf("rtp: nil session")
 	}
+	if atomic.LoadUint32(&s.closed) != 0 {
+		return fmt.Errorf("rtp: session closed")
+	}
 	if s.Conn == nil {
 		return fmt.Errorf("rtp: nil udp conn")
 	}
@@ -230,6 +266,9 @@ func (s *Session) SendRTP(payload []byte, payloadType uint8, samples uint32) err
 func (s *Session) ReceiveRTP(buffer []byte) (n int, from *net.UDPAddr, packet *RTPPacket, err error) {
 	if s == nil {
 		return 0, nil, nil, fmt.Errorf("rtp: nil session")
+	}
+	if atomic.LoadUint32(&s.closed) != 0 {
+		return 0, nil, nil, fmt.Errorf("rtp: session closed")
 	}
 	if s.Conn == nil {
 		return 0, nil, nil, fmt.Errorf("rtp: nil udp conn")
@@ -281,6 +320,25 @@ func (s *Session) ReceiveRTP(buffer []byte) (n int, from *net.UDPAddr, packet *R
 		return n, addr, nil, fmt.Errorf("rtp: unmarshal: %w", err)
 	}
 
+	if pkt.Header.Version != 2 {
+		return n, addr, nil, ErrRTPDiscard
+	}
+
+	ssrc := pkt.Header.SSRC
+	for {
+		if atomic.LoadUint32(&s.rxSSRCSeen) == 0 {
+			if atomic.CompareAndSwapUint32(&s.rxSSRCSeen, 0, 1) {
+				atomic.StoreUint32(&s.rxSSRC, ssrc)
+				break
+			}
+			continue
+		}
+		if atomic.LoadUint32(&s.rxSSRC) != ssrc {
+			return n, addr, nil, ErrRTPDiscard
+		}
+		break
+	}
+
 	return n, addr, pkt, nil
 }
 
@@ -290,6 +348,7 @@ func (s *Session) Close() error {
 	}
 	var err error
 	s.closeOnce.Do(func() {
+		atomic.StoreUint32(&s.closed, 1)
 		if s.statsStopCh != nil {
 			close(s.statsStopCh)
 		}
@@ -331,7 +390,18 @@ func (s *Session) sendMirrorRTP(data []byte, primary *net.UDPAddr) {
 		if primary != nil && primary.IP != nil && primary.IP.Equal(r.IP) && primary.Port == r.Port {
 			continue
 		}
-		_, _ = s.Conn.WriteToUDP(data, r)
+		if _, werr := s.Conn.WriteToUDP(data, r); werr != nil && logger.Lg != nil {
+			prev := atomic.LoadInt64(&s.mirrorErrLastLogNs)
+			now := time.Now().UnixNano()
+			if now-prev > int64(5*time.Second) {
+				if atomic.CompareAndSwapInt64(&s.mirrorErrLastLogNs, prev, now) {
+					logger.Lg.Warn("rtp mirror write failed",
+						zap.String("to", r.String()),
+						zap.Error(werr),
+					)
+				}
+			}
+		}
 	}
 }
 

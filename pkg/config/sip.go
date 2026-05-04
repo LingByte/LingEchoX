@@ -101,16 +101,7 @@ func RegisterPasswordFromEnv() string {
 func TransferDialTargetFromEnv() (t SIPDialEnv, ok bool) {
 	reqURI := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferReqURI))
 	sig := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferSigAddr))
-
-	debugEnv := utils.GetBoolEnv("SIP_DEBUG_ENV")
-
 	if reqURI != "" {
-		if debugEnv {
-			logger.Info("sip transfer env: using explicit request uri + signaling addr (overrides host/port)",
-				zap.String("SIP_TRANSFER_REQUEST_URI", reqURI),
-				zap.String("SIP_TRANSFER_SIGNALING_ADDR", sig),
-			)
-		}
 		if sig == "" {
 			return SIPDialEnv{}, false
 		}
@@ -138,16 +129,6 @@ func TransferDialTargetFromEnv() (t SIPDialEnv, ok bool) {
 			logger.Error("parse error", zap.Error(err))
 		}
 	}
-	if debugEnv {
-		logger.Info("sip transfer env: using number + host + port",
-			zap.String("SIP_TRANSFER_NUMBER", num),
-			zap.String("SIP_TRANSFER_HOST", host),
-			zap.String("SIP_TRANSFER_PORT", ps),
-			zap.Int("chosen_port", port),
-			zap.String("SIP_TRANSFER_SIGNALING_ADDR", sig),
-		)
-	}
-
 	t.RequestURI = fmt.Sprintf("sip:%s@%s:%d", num, host, port)
 	if sig == "" {
 		t.SignalingAddr = fmt.Sprintf("%s:%d", host, port)

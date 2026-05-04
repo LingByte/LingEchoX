@@ -8,11 +8,17 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/media"
 )
 
-func loadWAVAsPCM16Mono(path string, targetSampleRate int) ([]byte, error) {
+// LoadWAVAsPCM16Mono reads a PCM WAV file and returns mono s16le PCM at targetSampleRate.
+func LoadWAVAsPCM16Mono(path string, targetSampleRate int) ([]byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	return LoadWAVAsPCM16FromBytes(raw, targetSampleRate)
+}
+
+// LoadWAVAsPCM16FromBytes parses WAV bytes and returns mono s16le PCM at targetSampleRate.
+func LoadWAVAsPCM16FromBytes(raw []byte, targetSampleRate int) ([]byte, error) {
 	pcm, sampleRate, channels, bitsPerSample, err := parseWAVPCM(raw)
 	if err != nil {
 		return nil, err

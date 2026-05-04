@@ -17,9 +17,26 @@ const DefaultJitterPlaybackDelay = 80 * time.Millisecond
 
 const maxTelephoneEventPayload = 24
 
+// jbSlotCount is the reorder window (slots); two sequences that differ by a multiple of alias to the same slot — keep this comfortably above max reorder depth.
+const jbSlotCount = 2048
+
+const (
+	jbMaxPacketAge = 600 * time.Millisecond
+	jbDelayFloor   = 40 * time.Millisecond
+	jbDelayRaise   = 15 * time.Millisecond
+	jbDelayLower   = 4 * time.Millisecond
+	jbPLCMaxBytes  = 1200
+)
+
 type jbHeld struct {
 	pkt *RTPPacket
 	at  time.Time
+}
+
+type jbSlot struct {
+	valid bool
+	seq   uint16
+	held  jbHeld
 }
 
 // SIPRTPTransport adapts an RTP Session to the media.MediaTransport interface.
@@ -52,11 +69,14 @@ type SIPRTPTransport struct {
 	// JitterPlaybackDelay, if > 0 on DirectionInput, delays playout and absorbs reorder/jitter (see DefaultJitterPlaybackDelay).
 	JitterPlaybackDelay time.Duration
 
-	jbPending   map[uint16]jbHeld
-	jbNext      uint16
-	jbStarted   bool
-	jbLossWait  time.Time
-	jbHoleSkips int
+	jbSlots         [jbSlotCount]jbSlot
+	jbNext          uint16
+	jbStarted       bool
+	jbLossWait      time.Time
+	jbHoleSkips     int
+	jbAdaptiveDelay time.Duration
+	jbLastPLC       []byte
+	readBuf         []byte
 
 	attached *media.MediaSession
 }
@@ -95,18 +115,123 @@ func cloneRTPPacketForJitter(p *RTPPacket) *RTPPacket {
 	return out
 }
 
+func (t *SIPRTPTransport) jbEnsureAdaptiveBaseline() {
+	if t == nil {
+		return
+	}
+	if t.jbAdaptiveDelay <= 0 {
+		if t.JitterPlaybackDelay > 0 {
+			t.jbAdaptiveDelay = t.JitterPlaybackDelay
+		} else {
+			t.jbAdaptiveDelay = DefaultJitterPlaybackDelay
+		}
+	}
+}
+
+func (t *SIPRTPTransport) jbEffectiveDelay() time.Duration {
+	if t == nil {
+		return DefaultJitterPlaybackDelay
+	}
+	t.jbEnsureAdaptiveBaseline()
+	base := t.JitterPlaybackDelay
+	if base <= 0 {
+		base = DefaultJitterPlaybackDelay
+	}
+	d := t.jbAdaptiveDelay
+	if d < jbDelayFloor {
+		d = jbDelayFloor
+	}
+	maxD := base + 200*time.Millisecond
+	if d > maxD {
+		d = maxD
+	}
+	return d
+}
+
+func (t *SIPRTPTransport) jbNoteHole() {
+	if t == nil {
+		return
+	}
+	t.jbEnsureAdaptiveBaseline()
+	t.jbAdaptiveDelay += jbDelayRaise
+}
+
+func (t *SIPRTPTransport) jbNoteGoodPop() {
+	if t == nil {
+		return
+	}
+	t.jbEnsureAdaptiveBaseline()
+	if t.jbAdaptiveDelay > jbDelayFloor+jbDelayLower {
+		t.jbAdaptiveDelay -= jbDelayLower
+	}
+}
+
+func (t *SIPRTPTransport) jbExpireStale(now time.Time) {
+	if t == nil {
+		return
+	}
+	for i := range t.jbSlots {
+		sl := &t.jbSlots[i]
+		if !sl.valid {
+			continue
+		}
+		if now.Sub(sl.held.at) > jbMaxPacketAge {
+			sl.valid = false
+		}
+	}
+}
+
+func (t *SIPRTPTransport) jbRememberPLC(payload []byte) {
+	if t == nil || len(payload) == 0 {
+		return
+	}
+	n := len(payload)
+	if n > jbPLCMaxBytes {
+		n = jbPLCMaxBytes
+	}
+	if cap(t.jbLastPLC) < n {
+		t.jbLastPLC = make([]byte, n)
+	} else {
+		t.jbLastPLC = t.jbLastPLC[:n]
+	}
+	copy(t.jbLastPLC, payload[:n])
+}
+
+func (t *SIPRTPTransport) jbPLCReplacement() []byte {
+	if t == nil || len(t.jbLastPLC) == 0 {
+		return nil
+	}
+	c := strings.ToLower(strings.TrimSpace(t.codec.Codec))
+	switch c {
+	case "pcmu", "g711u", "ulaw", "pcma", "g711a", "alaw":
+		out := make([]byte, len(t.jbLastPLC))
+		copy(out, t.jbLastPLC)
+		return out
+	default:
+		return nil
+	}
+}
+
 func (t *SIPRTPTransport) jbPush(pkt *RTPPacket, now time.Time) {
 	if t == nil || pkt == nil || t.JitterPlaybackDelay <= 0 {
 		return
 	}
+	t.jbEnsureAdaptiveBaseline()
 	seq := pkt.Header.SequenceNumber
-	if t.jbPending == nil {
-		t.jbPending = make(map[uint16]jbHeld)
-	}
-	if _, dup := t.jbPending[seq]; dup {
+	t.jbExpireStale(now)
+
+	idx := int(seq) % jbSlotCount
+	slot := &t.jbSlots[idx]
+	if slot.valid && slot.seq != seq {
+		// Index collision: cannot disambiguate without a map; drop new packet (rare if jbSlotCount is large).
 		return
 	}
-	t.jbPending[seq] = jbHeld{pkt: cloneRTPPacketForJitter(pkt), at: now}
+	if slot.valid && slot.seq == seq {
+		return
+	}
+	slot.valid = true
+	slot.seq = seq
+	slot.held = jbHeld{pkt: cloneRTPPacketForJitter(pkt), at: now}
 	if !t.jbStarted {
 		t.jbNext = seq
 		t.jbStarted = true
@@ -120,15 +245,21 @@ func (t *SIPRTPTransport) jbTryPop(now time.Time) *RTPPacket {
 	const lossSkipAfter = 120 * time.Millisecond
 	const maxHoleSkips = 64
 
+	delay := t.jbEffectiveDelay()
 	for {
-		q, ok := t.jbPending[t.jbNext]
-		if ok {
-			if now.Sub(q.at) >= t.JitterPlaybackDelay {
-				delete(t.jbPending, t.jbNext)
-				pkt := q.pkt
+		idx := int(t.jbNext) % jbSlotCount
+		slot := &t.jbSlots[idx]
+		if slot.valid && slot.seq == t.jbNext {
+			if now.Sub(slot.held.at) >= delay {
+				slot.valid = false
+				pkt := slot.held.pkt
 				t.jbNext++
 				t.jbLossWait = time.Time{}
 				t.jbHoleSkips = 0
+				t.jbNoteGoodPop()
+				if pkt != nil && len(pkt.Payload) > 0 {
+					t.jbRememberPLC(pkt.Payload)
+				}
 				return pkt
 			}
 			return nil
@@ -139,6 +270,10 @@ func (t *SIPRTPTransport) jbTryPop(now time.Time) *RTPPacket {
 			t.jbNext++
 			t.jbHoleSkips++
 			t.jbLossWait = now
+			t.jbNoteHole()
+			if plc := t.jbPLCReplacement(); len(plc) > 0 {
+				return &RTPPacket{Payload: plc}
+			}
 			continue
 		}
 		return nil
@@ -149,10 +284,14 @@ func (t *SIPRTPTransport) jbReset() {
 	if t == nil {
 		return
 	}
-	t.jbPending = nil
+	for i := range t.jbSlots {
+		t.jbSlots[i].valid = false
+	}
 	t.jbStarted = false
 	t.jbLossWait = time.Time{}
 	t.jbHoleSkips = 0
+	t.jbAdaptiveDelay = 0
+	t.jbLastPLC = nil
 }
 
 func (t *SIPRTPTransport) inputCallbacks(pkt *RTPPacket) {
@@ -216,7 +355,10 @@ func (t *SIPRTPTransport) Next(ctx context.Context) (media.MediaPacket, error) {
 		return nil, nil
 	}
 
-	buf := make([]byte, 1500) // enough for typical RTP over UDP
+	if cap(t.readBuf) < 2048 {
+		t.readBuf = make([]byte, 2048)
+	}
+	buf := t.readBuf[:2048]
 	for {
 		// If the media session is shutting down, stop waiting.
 		if ctx != nil && ctx.Err() != nil {
@@ -241,6 +383,9 @@ func (t *SIPRTPTransport) Next(ctx context.Context) (media.MediaPacket, error) {
 
 		n, _, pkt, err := t.sess.ReceiveRTP(buf)
 		if err != nil {
+			if errors.Is(err, ErrRTPDiscard) {
+				continue
+			}
 			if ctx != nil && ctx.Err() != nil {
 				t.clearReadDeadline()
 				t.jbReset()
@@ -364,32 +509,34 @@ func (t *SIPRTPTransport) Send(ctx context.Context, packet media.MediaPacket) (i
 	// RTP timestamp increment must be based on codec clock rate, not payload bytes.
 	// For codecs like OPUS (variable bitrate), deriving samples from payload length
 	// causes timestamp drift and audible artifacts (noise/choppiness).
-	clockRate := t.codec.SampleRate
-	if strings.EqualFold(strings.TrimSpace(t.codec.Codec), "g722") {
-		// G.722 SDP clock is 8000 Hz even though PCM is 16 kHz (RFC 3551).
-		clockRate = 8000
-	}
-	samples := uint32(0)
-	if clockRate > 0 {
-		if t.codec.FrameDuration != "" {
-			if d, err := time.ParseDuration(t.codec.FrameDuration); err == nil && d > 0 {
-				samples = uint32((int64(clockRate) * d.Milliseconds()) / 1000)
+	samples := audio.RTPSamples
+	if samples == 0 {
+		clockRate := t.codec.SampleRate
+		if strings.EqualFold(strings.TrimSpace(t.codec.Codec), "g722") {
+			// G.722 SDP clock is 8000 Hz even though PCM is 16 kHz (RFC 3551).
+			clockRate = 8000
+		}
+		if clockRate > 0 {
+			if t.codec.FrameDuration != "" {
+				if d, err := time.ParseDuration(t.codec.FrameDuration); err == nil && d > 0 {
+					samples = uint32((int64(clockRate) * d.Milliseconds()) / 1000)
+				}
+			}
+			// Default to 20ms frames if not specified/parsable.
+			if samples == 0 {
+				samples = uint32((clockRate * 20) / 1000)
 			}
 		}
-		// Default to 20ms frames if not specified/parsable.
 		if samples == 0 {
-			samples = uint32((clockRate * 20) / 1000)
-		}
-	}
-	if samples == 0 {
-		// Fallback: approximate from raw PCM payload size (works for 8-bit PCMU/PCMA).
-		bytesPerSample := (t.codec.BitDepth / 8) * t.codec.Channels
-		if bytesPerSample <= 0 {
-			bytesPerSample = 2
-		}
-		samples = uint32(len(payload) / bytesPerSample)
-		if samples == 0 {
-			samples = 1
+			// Fallback: approximate from raw PCM payload size (works for 8-bit PCMU/PCMA).
+			bytesPerSample := (t.codec.BitDepth / 8) * t.codec.Channels
+			if bytesPerSample <= 0 {
+				bytesPerSample = 2
+			}
+			samples = uint32(len(payload) / bytesPerSample)
+			if samples == 0 {
+				samples = 1
+			}
 		}
 	}
 

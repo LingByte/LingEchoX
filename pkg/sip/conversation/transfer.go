@@ -107,6 +107,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		} else {
 			lg.Warn("sip transfer: configure database for cmd/sip (ACD pool), or set SIP_TRANSFER_REQUEST_URI + SIP_TRANSFER_SIGNALING_ADDR, or SIP_TRANSFER_NUMBER + SIP_TRANSFER_HOST (web for browser agent)")
 		}
+		notifyTransferPhase(inboundCallID, "no_agent", map[string]any{"reason": "no_dial_target"})
 		go playNoSeatGoodbyeAndHangup(ctx, inboundCallID, lg)
 		return
 	}
@@ -116,27 +117,37 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		return
 	}
 
+	notifyTransferPhase(inboundCallID, "requested", map[string]any{
+		"web_seat": tgt.WebSeat,
+	})
+
 	if tgt.WebSeat {
 		if webFn == nil {
 			lg.Warn("sip transfer: WebSeat (SIP_TRANSFER_NUMBER=web) but SetWebSeatTransfer not configured")
+			notifyTransferPhase(inboundCallID, "failed", map[string]any{"reason": "webseat_not_configured"})
 			webseat.ReleaseInboundWebACDOffer(inboundCallID)
 			transferStarted.Delete(inboundCallID)
 			return
 		}
 		lg.Info("sip transfer: web seat — handing off to WebRTC bridge", zap.String("inbound_call_id", inboundCallID))
+		notifyTransferPhase(inboundCallID, "loading", nil)
 		startTransferRinging(ctx, inboundCallID, lg)
+		notifyTransferPhase(inboundCallID, "ringing", nil)
 		go func() { webFn(inboundCallID, lg) }()
 		return
 	}
 
 	if d == nil {
 		lg.Warn("sip transfer: no TransferDialer (SetTransferDialer not called)")
+		notifyTransferPhase(inboundCallID, "failed", map[string]any{"reason": "no_transfer_dialer"})
 		transferStarted.Delete(inboundCallID)
 		return
 	}
 
 	lg.Info("sip transfer: dialing agent leg", zap.String("inbound_call_id", inboundCallID), zap.String("agent_uri", tgt.RequestURI))
+	notifyTransferPhase(inboundCallID, "loading", nil)
 	startTransferRinging(ctx, inboundCallID, lg)
+	notifyTransferPhase(inboundCallID, "ringing", nil)
 
 	go func() {
 		cid, err := d.Dial(ctx, outbound.DialRequest{
@@ -148,6 +159,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		if err != nil {
 			stopTransferRinging(inboundCallID)
 			transferStarted.Delete(inboundCallID)
+			notifyTransferPhase(inboundCallID, "failed", map[string]any{"error": err.Error()})
 			lg.Warn("sip transfer: outbound dial failed", zap.String("inbound_call_id", inboundCallID), zap.Error(err))
 			return
 		}
@@ -214,7 +226,7 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 	if pcmSR <= 0 {
 		pcmSR = 16000
 	}
-	pcm, err := loadWAVAsPCM16Mono(path, pcmSR)
+	pcm, err := LoadWAVAsPCM16Mono(path, pcmSR)
 	if err != nil {
 		return fmt.Errorf("load transfer ringing wav: %w", err)
 	}
@@ -303,7 +315,7 @@ func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *z
 	if pcmSR <= 0 {
 		pcmSR = 16000
 	}
-	pcm, err := loadWAVAsPCM16Mono(path, pcmSR)
+	pcm, err := LoadWAVAsPCM16Mono(path, pcmSR)
 	if err != nil {
 		if lg != nil {
 			lg.Warn("sip transfer: load goodbye wav failed, hangup directly",

@@ -39,4 +39,5 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	r.Use(middleware.InjectDB(h.db))
 	h.registerSIPContactCenterRoutes(r)
 	h.registerLingechoWebSeatRoutes(r)
+	h.registerVoiceDialogRoutes(r)
 }

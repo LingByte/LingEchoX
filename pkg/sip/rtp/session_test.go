@@ -3,6 +3,7 @@ package rtp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -52,6 +53,41 @@ func TestSession_UDPLoopback(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timeout waiting for received packet")
+	}
+}
+
+func TestSession_ReceiveRTP_DiscardNonV2(t *testing.T) {
+	rx, err := NewSession(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rx.Close()
+	tx, err := NewSession(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+
+	hdr := RTPHeader{
+		Version:        1,
+		PayloadType:    0,
+		SequenceNumber: 1,
+		Timestamp:      1,
+		SSRC:           0x11111111,
+	}
+	raw, err := (&RTPPacket{Header: hdr, Payload: []byte{0x7F}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Conn.WriteToUDP(raw, rx.LocalAddr); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	buf := make([]byte, 1500)
+	_, _, pkt, err := rx.ReceiveRTP(buf)
+	if !errors.Is(err, ErrRTPDiscard) {
+		t.Fatalf("want ErrRTPDiscard, got err=%v pkt=%v", err, pkt)
 	}
 }
 

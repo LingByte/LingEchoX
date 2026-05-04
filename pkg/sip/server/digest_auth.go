@@ -21,7 +21,6 @@ type sipDigestAuth struct {
 	realm string
 	user  string
 	pass  string
-
 	mu     sync.Mutex
 	nonces map[string]digestNonce
 }

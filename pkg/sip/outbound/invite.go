@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
+	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
 )
 
 // inviteParams carries dialog fields needed for INVITE and later ACK.
@@ -139,8 +140,8 @@ func nonZero(n, def int) int {
 
 // defaultOfferCodecs orders codecs for the initial outbound offer.
 // Prefer G.711 PCMA first for maximum carrier interoperability; keep wideband codecs as fallback.
-func defaultOfferCodecs() []protocol.SDPCodec {
-	return []protocol.SDPCodec{
+func defaultOfferCodecs() []sdp.Codec {
+	return []sdp.Codec{
 		{PayloadType: 8, Name: "pcma", ClockRate: 8000, Channels: 1},
 		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
 		{PayloadType: 9, Name: "g722", ClockRate: 8000, Channels: 1},
@@ -152,8 +153,8 @@ func defaultOfferCodecs() []protocol.SDPCodec {
 // transferAgentBridgeOfferCodecs is the INVITE offer for the human/agent leg after transfer.
 // Matches typical voice-server behavior (narrowband G.711 on the agent leg) so the bridge is
 // Opus/48k (caller) ↔ PCM ↔ PCMU/8k (agent), avoiding brittle Opus↔Opus transcoding.
-func transferAgentBridgeOfferCodecs() []protocol.SDPCodec {
-	return []protocol.SDPCodec{
+func transferAgentBridgeOfferCodecs() []sdp.Codec {
+	return []sdp.Codec{
 		{PayloadType: 8, Name: "pcma", ClockRate: 8000, Channels: 1},
 		{PayloadType: 0, Name: "pcmu", ClockRate: 8000, Channels: 1},
 		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000, Channels: 1},

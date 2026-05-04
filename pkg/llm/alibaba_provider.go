@@ -248,10 +248,6 @@ func (p *AlibabaProvider) QueryWithOptions(text string, options QueryOptions) (s
 	}
 
 	finalResponse := result.Output.Text
-
-	logger.Debug("Alibaba AI raw output",
-		zap.String("output_preview", previewText(finalResponse, 300)),
-	)
 	if msgResp, ok := parseAlibabaPayload(finalResponse); ok {
 		logger.Info("Alibaba AI json parsed",
 			zap.String("action", strings.TrimSpace(msgResp.Action)),

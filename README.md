@@ -130,7 +130,6 @@ This project includes an AGPL-3.0 license file (`LICENSE`).
 //
 //   - SIP_TRANSFER_RINGING_WAV_PATH: clip during transfer ringback.
 //   - SIP_TRANSFER_GOODBYE_TAIL_MS: tail timing for transfer goodbye.
-//   - SIP_TRANSFER_RELAY_REWRITE_RTP: legacy RTP SSRC/seq rewrite for raw relay (see bridge/two_leg_relay.go).
 //
 // # WebSeat WebRTC (pkg/sip/webseat)
 //

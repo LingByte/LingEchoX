@@ -166,6 +166,7 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 	if s == nil || callID == "" {
 		return
 	}
+	defer s.endVoiceDialogBridge(callID)
 	if conversation.HangupWebSeatBridgeFull(callID) {
 		return
 	}

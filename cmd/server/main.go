@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -77,18 +75,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	port := 50400
-	if ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferPort)); ps != "" {
-		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
-			port = p
-			logger.Info("parse ture", zap.Int("port", port))
-		} else {
-			logger.Error("parse error", zap.Error(err))
-		}
-	}
+
 	// 6. Print Configuration
 	bootstrap.LogConfigInfo()
-
 	// 7. Load Data Source
 	db, err := bootstrap.SetupDatabase(os.Stdout, &bootstrap.Options{
 		InitSQLPath: *initSQL,

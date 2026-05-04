@@ -1,8 +1,11 @@
 package protocol
 
 import (
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 )
@@ -41,7 +44,6 @@ func TestParse_SIPRequest(t *testing.T) {
 	if len(msg.GetHeaders("Via")) != 2 {
 		t.Fatalf("expected 2 Via values, got=%d", len(msg.GetHeaders("Via")))
 	}
-	// Header key case-insensitive
 	if msg.GetHeader("Call-ID") != "abc123" {
 		t.Fatalf("Call-ID mismatch: got=%q", msg.GetHeader("Call-ID"))
 	}
@@ -51,112 +53,6 @@ func TestParse_Invalid(t *testing.T) {
 	_, err := Parse("")
 	if err == nil {
 		t.Fatalf("expected error")
-	}
-}
-
-func TestParseSDP_Basic(t *testing.T) {
-	sdp := strings.Join([]string{
-		"v=0",
-		"o=- 123456 123456 IN IP4 192.168.1.100",
-		"s=Session",
-		"c=IN IP4 192.168.1.100",
-		"t=0 0",
-		"m=audio 49170 RTP/AVP 0",
-		"a=rtpmap:0 PCMU/8000",
-	}, "\r\n")
-
-	info, err := ParseSDP(sdp)
-	if err != nil {
-		t.Fatalf("ParseSDP failed: %v", err)
-	}
-	if info.IP != "192.168.1.100" {
-		t.Fatalf("ip mismatch: got=%s", info.IP)
-	}
-	if info.Port != 49170 {
-		t.Fatalf("port mismatch: got=%d", info.Port)
-	}
-	if len(info.Codecs) != 1 {
-		t.Fatalf("expected 1 codec, got=%d", len(info.Codecs))
-	}
-	if info.Codecs[0].PayloadType != 0 {
-		t.Fatalf("payload type mismatch: got=%d", info.Codecs[0].PayloadType)
-	}
-	if info.Codecs[0].Name != "pcmu" {
-		t.Fatalf("codec name mismatch: got=%s", info.Codecs[0].Name)
-	}
-	if info.Codecs[0].ClockRate != 8000 {
-		t.Fatalf("clock mismatch: got=%d", info.Codecs[0].ClockRate)
-	}
-}
-
-// Many UAS answer with m=audio 0 101 but only a=rtpmap for 101 (telephone-event); PT 0 is static PCMU.
-func TestParseSDP_StaticPCMU_WithoutRtpMap_PlusTelephoneEvent(t *testing.T) {
-	sdp := strings.Join([]string{
-		"v=0",
-		"o=- 1 1 IN IP4 10.0.0.2",
-		"s=-",
-		"c=IN IP4 10.0.0.2",
-		"t=0 0",
-		"m=audio 8000 RTP/AVP 0 101",
-		"a=rtpmap:101 telephone-event/8000",
-		"a=fmtp:101 0-15",
-	}, "\r\n")
-
-	info, err := ParseSDP(sdp)
-	if err != nil {
-		t.Fatalf("ParseSDP failed: %v", err)
-	}
-	if len(info.Codecs) != 2 {
-		t.Fatalf("expected 2 codecs (pcmu + telephone-event), got=%d", len(info.Codecs))
-	}
-	if info.Codecs[0].PayloadType != 0 || info.Codecs[0].Name != "pcmu" {
-		t.Fatalf("first codec should be PCMU from m= order, got %#v", info.Codecs[0])
-	}
-	if info.Codecs[1].Name != "telephone-event" {
-		t.Fatalf("second codec: got %#v", info.Codecs[1])
-	}
-}
-
-func TestGenerateSDP_RoundTrip_CanParse(t *testing.T) {
-	codecs := []SDPCodec{
-		{PayloadType: 0, Name: "pcmu", ClockRate: 8000},
-		{PayloadType: 8, Name: "pcma", ClockRate: 8000},
-	}
-	body := GenerateSDP("127.0.0.1", 5004, codecs)
-	info, err := ParseSDP(body)
-	if err != nil {
-		t.Fatalf("ParseSDP failed: %v", err)
-	}
-	if info.IP != "127.0.0.1" {
-		t.Fatalf("ip mismatch: got=%s", info.IP)
-	}
-	if info.Port != 5004 {
-		t.Fatalf("port mismatch: got=%d", info.Port)
-	}
-	if len(info.Codecs) == 0 {
-		t.Fatalf("expected codecs")
-	}
-}
-
-func TestGenerateSDP_MAudioPayloadOrderPreserved(t *testing.T) {
-	codecs := []SDPCodec{
-		{PayloadType: 8, Name: "pcma", ClockRate: 8000},
-		{PayloadType: 111, Name: "opus", ClockRate: 48000, Channels: 1},
-		{PayloadType: 0, Name: "pcmu", ClockRate: 8000},
-		{PayloadType: 101, Name: "telephone-event", ClockRate: 8000},
-	}
-	body := GenerateSDP("127.0.0.1", 5004, codecs)
-	info, err := ParseSDP(body)
-	if err != nil {
-		t.Fatalf("ParseSDP failed: %v", err)
-	}
-	if len(info.Codecs) != len(codecs) {
-		t.Fatalf("codec count mismatch: got=%d want=%d", len(info.Codecs), len(codecs))
-	}
-	for i := range codecs {
-		if info.Codecs[i].PayloadType != codecs[i].PayloadType || info.Codecs[i].Name != codecs[i].Name {
-			t.Fatalf("codec[%d] mismatch: got=%#v want=%#v", i, info.Codecs[i], codecs[i])
-		}
 	}
 }
 
@@ -173,4 +69,39 @@ func TestIsSIPSignalingNoiseDatagram(t *testing.T) {
 	if stack.IsSignalingNoiseDatagram(nil) || stack.IsSignalingNoiseDatagram([]byte{}) {
 		t.Fatal("empty is not noise (handled elsewhere)")
 	}
+}
+
+func TestServer_OnSIPResponse(t *testing.T) {
+	s := NewServer("127.0.0.1", 0)
+	if err := s.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = s.Stop() }()
+
+	var saw atomic.Bool
+	s.OnSIPResponse = func(resp *Message, _ *net.UDPAddr) {
+		if resp != nil && resp.StatusCode == 200 {
+			saw.Store(true)
+		}
+	}
+
+	raw := "SIP/2.0 200 OK\r\n" +
+		"Via: SIP/2.0/UDP 127.0.0.1:9;branch=z9hG4bKtest\r\n" +
+		"From: <sip:a@b>;tag=1\r\n" +
+		"To: <sip:a@b>;tag=2\r\n" +
+		"Call-ID: cid-1\r\n" +
+		"CSeq: 1 INVITE\r\n" +
+		"Content-Length: 0\r\n\r\n"
+
+	addr, _ := net.ResolveUDPAddr("udp", s.Conn.LocalAddr().String())
+	_, _ = s.Conn.WriteToUDP([]byte(raw), addr)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if saw.Load() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("OnSIPResponse not invoked for 200 OK")
 }

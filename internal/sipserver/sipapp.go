@@ -3,6 +3,7 @@ package sipserver
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"github.com/LingByte/SoulNexus/pkg/sip/server"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
 	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
@@ -54,6 +56,25 @@ func resolveOutboundDialTarget(store *GormStore) (outbound.DialTarget, bool) {
 	return outbound.DialTargetFromEnv()
 }
 
+// httpDialHostPortForVoicedialog maps HTTP listen addr (e.g. :8080, 0.0.0.0:8080) to a loopback host:port for ws dial.
+func httpDialHostPortForVoicedialog(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "127.0.0.1:8080"
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "127.0.0.1" + addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "127.0.0.1:8080"
+	}
+	if host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
+
 func sipDSNForLog(dsn string) string {
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {
@@ -68,6 +89,7 @@ func sipDSNForLog(dsn string) string {
 
 // Start wires outbound manager, SIP server, DB persistence, WebSeat hub, and starts UDP.
 func Start(cfg Config) (*Embedded, error) {
+	SetRegisterOutboundRequestURIServerPort(cfg.Port)
 	// SDP c=/Call-ID host: CLI (cfg.LocalIP) first; empty → SIP_LOCAL_IP (.env / process env).
 	// If both miss, outbound/server still default to 127.0.0.1 inside their packages.
 	localIP := strings.TrimSpace(cfg.LocalIP)
@@ -284,6 +306,38 @@ func Start(cfg Config) (*Embedded, error) {
 		},
 	})
 	conversation.SetWebSeatTransfer(conversation.StartWebSeatHandoff)
+
+	httpAddr := ":8082"
+	apiPrefix := "/api"
+	useTLS := false
+	if config.GlobalConfig != nil {
+		if strings.TrimSpace(config.GlobalConfig.Server.Addr) != "" {
+			httpAddr = config.GlobalConfig.Server.Addr
+		}
+		if strings.TrimSpace(config.GlobalConfig.Server.APIPrefix) != "" {
+			apiPrefix = config.GlobalConfig.Server.APIPrefix
+		}
+		useTLS = config.GlobalConfig.Server.SSLEnabled
+	}
+	loopDialHostPort := httpDialHostPortForVoicedialog(httpAddr)
+
+	voicedialog.InitDefault(voicedialog.Config{
+		HangupInbound: func(callID string) {
+			if sipServerPtr != nil {
+				sipServerPtr.HangupInboundCall(callID)
+			}
+		},
+		InboundLoopbackWS:             true,
+		LoopbackUseTLS:                useTLS,
+		LoopbackTLSInsecureSkipVerify: false,
+		LoopbackHTTPHostPort:          loopDialHostPort,
+		APIPrefix:                     apiPrefix,
+	})
+
+	logger.Info("sipapp: inbound SIP legs use voicedialog WebSocket bridge (HTTP); outbound AI uses embedded pipeline",
+		zap.Bool("voicedialog_inbound_loopback_ws", true),
+		zap.String("voicedialog_loopback_dial_host_port", loopDialHostPort),
+	)
 
 	if err := sipServerPtr.Start(); err != nil {
 		return nil, fmt.Errorf("sipapp: sip start: %w", err)

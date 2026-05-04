@@ -5,7 +5,7 @@
 //
 // [NormalizeBody] trims and normalizes CRLF/LF before [Parse] so offers from heterogeneous UAs parse consistently.
 //
-// Wire-level behavior matches pkg/sip/protocol SDP wrappers used in production call paths.
+// Production SIP stacks import this package directly for Parse / Generate / codec negotiate helpers.
 //
 // After you map SDP codecs to names (pcmu, pcma, opus, g722), use pkg/media/encoder.CreateDecode /
 // CreateEncode — do not reimplement those codecs in sip1.

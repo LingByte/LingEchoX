@@ -169,6 +169,7 @@ func (s *SIPServer) stopCallSessionLocked(callID string) {
 	if s == nil || callID == "" {
 		return
 	}
+	s.endVoiceDialogBridge(callID)
 	s.mu.Lock()
 	cs := s.callStore[callID]
 	delete(s.callStore, callID)

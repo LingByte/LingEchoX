@@ -116,6 +116,8 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
 			port = p
 		}
+	} else {
+		port = effectiveRegisterDialRequestURIPort(port)
 	}
 	reqURI := fmt.Sprintf("sip:%s@%s:%d", row.Username, d, port)
 	sig := net.JoinHostPort(row.RemoteIP, strconv.Itoa(row.RemotePort))

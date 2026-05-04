@@ -15,6 +15,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
+	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/sip/siputil"
 	"go.uber.org/zap"
@@ -253,7 +254,7 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 	} else if req.Scenario == ScenarioTransferAgent && req.MediaProfile == MediaProfileTransferBridge {
 		codecs = transferAgentBridgeOfferCodecs()
 	}
-	sdpBody := protocol.GenerateSDPWithProto(localSDP, localPort, "RTP/AVP", codecs)
+	sdpBody := sdp.GenerateWithProto(localSDP, localPort, "RTP/AVP", codecs)
 
 	callID = newCallID(localSDP)
 	ip := m.cfg.SIPHost
@@ -437,34 +438,34 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *protocol.Message, f
 		return
 	}
 
-	sdp, err := protocol.ParseSDP(resp.Body)
+	answer, err := sdp.Parse(resp.Body)
 	if err != nil {
 		logger.Warn("sip outbound bad answer SDP", zap.String("call_id", leg.params.CallID), zap.Error(err))
 		leg.cleanupLeg()
 		return
 	}
-	remoteIP := net.ParseIP(sdp.IP)
-	if remoteIP == nil || sdp.Port <= 0 {
+	remoteIP := net.ParseIP(answer.IP)
+	if remoteIP == nil || answer.Port <= 0 {
 		logger.Warn("sip outbound invalid RTP in answer", zap.String("call_id", leg.params.CallID))
 		leg.cleanupLeg()
 		return
 	}
-	remoteRTP := &net.UDPAddr{IP: remoteIP, Port: sdp.Port}
+	remoteRTP := &net.UDPAddr{IP: remoteIP, Port: answer.Port}
 	// NAT fallback for outbound UAC legs: when answer SDP has a private media IP but
 	// response source is public/reachable, use response source IP + SDP port.
 	if from != nil && isPrivateIPv4(remoteIP) && from.IP != nil && from.IP.To4() != nil && !isPrivateIPv4(from.IP) {
-		remoteRTP = &net.UDPAddr{IP: from.IP, Port: sdp.Port}
+		remoteRTP = &net.UDPAddr{IP: from.IP, Port: answer.Port}
 		logger.Info("sip outbound media target overridden (private SDP IP fallback)",
 			zap.String("call_id", leg.params.CallID),
 			zap.String("sdp_remote_ip", remoteIP.String()),
 			zap.String("sip_source_ip", from.IP.String()),
-			zap.Int("media_port", sdp.Port),
+			zap.Int("media_port", answer.Port),
 			zap.String("chosen_remote_rtp", remoteRTP.String()),
 		)
 	}
 	leg.rtpSess.SetRemoteAddr(remoteRTP)
 
-	cs, err := sipSession.NewCallSession(leg.params.CallID, leg.rtpSess, sdp.Codecs)
+	cs, err := sipSession.NewCallSession(leg.params.CallID, leg.rtpSess, answer.Codecs)
 	if err != nil {
 		logger.Warn("sip outbound CallSession", zap.String("call_id", leg.params.CallID), zap.Error(err))
 		leg.cleanupLeg()

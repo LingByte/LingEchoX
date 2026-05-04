@@ -30,6 +30,10 @@ type QCloudASR struct {
 	transcribeResult TranscribeResult
 	processError     ProcessError
 	dialogID         string
+
+	// lastFinalEmitted is cumulative text last sent with isLast=true from OnSentenceEnd
+	// (used to skip a duplicate final from OnRecognitionComplete).
+	lastFinalEmitted string
 }
 
 type QCloudASROption struct {
@@ -41,7 +45,7 @@ type QCloudASROption struct {
 	ReqChanSize int       `json:"reqChanSize" yaml:"req_chan_size" default:"128"`
 	HotWords    []HotWord `json:"hotWords" yaml:"hot_words"`
 	// SentenceNotify is invoked on each Tencent OnSentenceEnd (fragment = 本句增量, cumulative = 当前累计).
-	// Optional; used by offline streaming consumers that want per-sentence callbacks.
+	// Optional; used by offline streaming consumers (e.g. call analysis WebSocket).
 	SentenceNotify func(fragment string, cumulative string) `json:"-" yaml:"-"`
 }
 
@@ -130,6 +134,7 @@ func (opt QCloudASROption) String() string {
 
 // OnRecognitionStart implementation of SpeechRecognitionListener
 func (asq *QCloudASR) OnRecognitionStart(response *asr.SpeechRecognitionResponse) {
+	asq.lastFinalEmitted = ""
 	logFields := logrus.Fields{
 		"voice_id": response.VoiceID,
 	}
@@ -171,7 +176,13 @@ func (asq *QCloudASR) OnSentenceEnd(response *asr.SpeechRecognitionResponse) {
 		asq.opt.SentenceNotify(response.Result.VoiceTextStr, asq.sentence)
 	}
 	if asq.transcribeResult != nil {
-		asq.transcribeResult(asq.sentence, false, time.Since(*asq.sendReqTime), asq.dialogID)
+		// Sentence boundary: treat as final for streaming consumers (SIP / WebSocket).
+		// Previously this passed false, so only OnRecognitionComplete emitted isLast=true
+		// (often at hangup), and all sentence-end logs looked like endless partials.
+		asq.transcribeResult(asq.sentence, true, time.Since(*asq.sendReqTime), asq.dialogID)
+		asq.lastFinalEmitted = asq.sentence
+		// Do not carry prior sentences into the next final (asq.sentence was += across boundaries).
+		asq.sentence = ""
 		return
 	}
 }
@@ -192,7 +203,16 @@ func (asq *QCloudASR) OnRecognitionComplete(response *asr.SpeechRecognitionRespo
 
 	// 优先使用 transcribeResult 回调
 	if asq.transcribeResult != nil {
-		asq.transcribeResult(finalSentence, true, time.Since(*asq.sendReqTime), asq.dialogID)
+		t := strings.TrimSpace(finalSentence)
+		if t == "" {
+			t = strings.TrimSpace(response.Result.VoiceTextStr)
+		}
+		last := strings.TrimSpace(asq.lastFinalEmitted)
+		// Last sentence often already emitted in OnSentenceEnd; avoid duplicate session-end.
+		if t != "" && t != last {
+			asq.transcribeResult(t, true, time.Since(*asq.sendReqTime), asq.dialogID)
+		}
+		asq.lastFinalEmitted = ""
 		return
 	}
 

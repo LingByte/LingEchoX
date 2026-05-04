@@ -13,28 +13,27 @@ import (
 // pcmBridgeLeg is the minimal read/write + codec surface for PCM bridging (SIP RTP or WebRTC).
 type pcmBridgeLeg interface {
 	Next(ctx context.Context) (media.MediaPacket, error)
+
 	Send(ctx context.Context, p media.MediaPacket) (int, error)
+
 	Codec() media.CodecConfig
+
 	WakeupRead()
 }
 
 // TwoLegPCMBridge transcodes between two SIP legs. Transfer agent leg is PCMU/8k; inbound may be Opus, G.722, etc.
 // Mid PCM is 8 kHz mono for dual G.711, otherwise 16 kHz mono (typical Opus/PCMU bridge).
 type TwoLegPCMBridge struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-
+	ctx                                  context.Context
+	cancel                               context.CancelFunc
+	wg                                   sync.WaitGroup
 	callerRx, callerTx, agentRx, agentTx pcmBridgeLeg
 	c2aDec, c2aEnc, a2cDec, a2cEnc       media.EncoderFunc
-
-	midSampleRate int
-
-	tapMu sync.Mutex
-	tap   func([]byte) // mono PCM at midSampleRate (decoded bridge tap)
-
-	startOnce sync.Once
-	stopOnce  sync.Once
+	midSampleRate                        int
+	tapMu                                sync.Mutex
+	tap                                  func([]byte) // mono PCM at midSampleRate (decoded bridge tap)
+	startOnce                            sync.Once
+	stopOnce                             sync.Once
 }
 
 // NewTwoLegPCMBridge builds a bidirectional bridge. Transports must use the same codec config

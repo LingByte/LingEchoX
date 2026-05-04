@@ -15,6 +15,8 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/protocol"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
+	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
+	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
 	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"go.uber.org/zap"
@@ -26,7 +28,8 @@ import (
 // - INVITE: parses SDP, creates an RTP session, and replies 200 OK with SDP.
 // - BYE: closes the associated RTP session (if any).
 //
-// On ACK, optional ASR→LLM→TTS is attached when ASR/LLM/TTS env vars are set (see pkg/sip/conversation).
+// On ACK, inbound media attaches the HTTP WebSocket dialogue bridge (pkg/sip/voicedialog) only — no embedded
+// SIP-side LLM pipeline on inbound.
 type SIPServer struct {
 	proto *protocol.Server
 
@@ -63,6 +66,9 @@ type SIPServer struct {
 
 	sigCtx    context.Context
 	sigCancel context.CancelFunc
+
+	inviteBriefMu sync.RWMutex
+	inviteBrief   map[string]inviteBrief // inbound Call-ID -> INVITE snapshot for dialog WS meta
 }
 
 var (
@@ -162,10 +168,11 @@ type Config struct {
 
 func New(cfg Config) *SIPServer {
 	s := &SIPServer{
-		localIP:    strings.TrimSpace(cfg.LocalIP),
-		listenHost: strings.TrimSpace(cfg.Host),
-		listenPort: cfg.Port,
-		callStore:  make(map[string]*sipSession.CallSession),
+		localIP:     strings.TrimSpace(cfg.LocalIP),
+		listenHost:  strings.TrimSpace(cfg.Host),
+		listenPort:  cfg.Port,
+		callStore:   make(map[string]*sipSession.CallSession),
+		inviteBrief: make(map[string]inviteBrief),
 	}
 	if s.localIP == "" {
 		s.localIP = "127.0.0.1"
@@ -398,6 +405,7 @@ func (s *SIPServer) Stop() error {
 
 	s.mu.Lock()
 	for callID, cs := range s.callStore {
+		s.endVoiceDialogBridge(callID)
 		if cs != nil {
 			cs.Stop()
 		}
@@ -475,7 +483,7 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	}
 
 	// Parse remote RTP endpoint from SDP.
-	sdp, err := protocol.ParseSDP(msg.Body)
+	offer, err := sdp.Parse(msg.Body)
 	if err != nil {
 		logger.Warn("sip invite rejected (sdp not acceptable)",
 			zap.String("call_id", callID),
@@ -516,22 +524,22 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 		}
 	}
 
-	remoteIP := net.ParseIP(sdp.IP)
-	if remoteIP == nil || sdp.Port <= 0 {
+	remoteIP := net.ParseIP(offer.IP)
+	if remoteIP == nil || offer.Port <= 0 {
 		return s.makeResponse(msg, 400, "Bad Request", "", "")
 	}
 
-	remoteAddr := &net.UDPAddr{IP: remoteIP, Port: sdp.Port}
+	remoteAddr := &net.UDPAddr{IP: remoteIP, Port: offer.Port}
 	// NAT-friendly fallback: if SDP c= carries a private IPv4 but signaling source is public/reachable,
 	// use signaling source IP with SDP media port as initial RTP destination.
 	if addr != nil && isPrivateIPv4(remoteIP) && addr.IP != nil && addr.IP.To4() != nil {
 		if !isPrivateIPv4(addr.IP) {
-			remoteAddr = &net.UDPAddr{IP: addr.IP, Port: sdp.Port}
+			remoteAddr = &net.UDPAddr{IP: addr.IP, Port: offer.Port}
 			logger.Info("sip invite media target overridden (private SDP IP fallback)",
 				zap.String("call_id", callID),
 				zap.String("sdp_remote_ip", remoteIP.String()),
 				zap.String("sip_source_ip", addr.IP.String()),
-				zap.Int("media_port", sdp.Port),
+				zap.Int("media_port", offer.Port),
 				zap.String("chosen_remote_rtp", remoteAddr.String()),
 			)
 		}
@@ -569,7 +577,7 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	if old := s.callStore[callID]; old != nil {
 		old.Stop()
 	}
-	cs, err := sipSession.NewCallSession(callID, rtpSess, sdp.Codecs)
+	cs, err := sipSession.NewCallSession(callID, rtpSess, offer.Codecs)
 	if err != nil {
 		s.mu.Unlock()
 		_ = rtpSess.Close()
@@ -578,13 +586,19 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 		}
 		logger.Warn("sip invite rejected (no supported codec)",
 			zap.String("call_id", callID),
-			zap.Any("offered_codecs", sdp.Codecs),
+			zap.Any("offered_codecs", offer.Codecs),
 			zap.Error(err),
 		)
 		return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
 	}
 	s.callStore[callID] = cs
 	s.mu.Unlock()
+
+	remoteSig := ""
+	if addr != nil {
+		remoteSig = addr.String()
+	}
+	s.storeInviteBrief(callID, msg.GetHeader("From"), msg.GetHeader("To"), remoteSig)
 
 	// IMPORTANT: Do not start media until ACK (call established).
 
@@ -609,11 +623,11 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 
 	// Reply with negotiated audio codec; add telephone-event from offer so UAs can send RFC 2833 DTMF.
 	neg := cs.NegotiatedCodec()
-	codecs := []protocol.SDPCodec{neg}
-	if te, ok := protocol.PickTelephoneEventFromOffer(sdp.Codecs, neg.ClockRate); ok {
+	codecs := []sdp.Codec{neg}
+	if te, ok := sdp.PickTelephoneEventFromOffer(offer.Codecs, neg.ClockRate); ok {
 		codecs = append(codecs, te)
 	}
-	respSDP := protocol.GenerateSDPWithProto(s.localIP, localPort, sdp.Proto, codecs)
+	respSDP := sdp.GenerateWithProto(s.localIP, localPort, offer.Proto, codecs)
 
 	// Use a single To-tag consistently across provisional/final responses.
 	toWithTag := ensureToTag(msg.GetHeader("To"))
@@ -639,8 +653,8 @@ func (s *SIPServer) handleInvite(msg *protocol.Message, addr *net.UDPAddr) *prot
 	logger.Info("sip invite negotiated",
 		zap.String("call_id", callID),
 		zap.String("remote_rtp", remoteAddr.String()),
-		zap.String("answer_proto", sdp.Proto),
-		zap.Any("offered_codecs", sdp.Codecs),
+		zap.String("answer_proto", offer.Proto),
+		zap.Any("offered_codecs", offer.Codecs),
 		zap.Any("negotiated_codec", neg),
 		zap.String("answer_sdp_preview", preview(respSDP, 800)),
 		zap.Int("answer_content_length", len(respSDP)),
@@ -700,17 +714,26 @@ func (s *SIPServer) handleAck(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 	if cs != nil {
 		// After transfer, media is bridged (raw RTP or PCM transcode); do not attach ASR/TTS again
 		// (e.g. late or duplicate ACK / re-INVITE ACK would hit a cancelled MediaSession).
-		if conversation.ActiveTransferBridgeForCallID(callID) || conversation.ActiveWebSeatSession(callID) {
+		tb := conversation.ActiveTransferBridgeForCallID(callID)
+		wsSeat := conversation.ActiveWebSeatSession(callID)
+		if tb || wsSeat {
+			logger.Info("sip inbound ACK: skipping AI/voicedialog voice attach (transfer or web seat owns media)",
+				zap.String("call_id", callID),
+				zap.Bool("transfer_bridge_active", tb),
+				zap.Bool("webseat_pending_or_active", wsSeat),
+			)
 			return nil
 		}
-		var voiceLog *zap.Logger
-		if logger.Lg != nil {
-			voiceLog = logger.Lg.Named("sip-voice")
-		}
-		if err := conversation.AttachVoicePipeline(context.Background(), cs, voiceLog); err != nil {
-			logger.Warn("sip voice pipeline attach failed",
+		fromH, toH, remSig := s.peekInviteBrief(callID)
+		if err := voicedialog.AttachInboundVoiceDialog(context.Background(), cs, fromH, toH, remSig); err != nil {
+			logger.Warn("sip inbound voicedialog attach failed (no embedded fallback; configure ASR/TTS + HTTP WS client)",
 				zap.String("call_id", callID),
 				zap.Error(err),
+			)
+		} else {
+			logger.Info("sip inbound voice attached",
+				zap.String("call_id", callID),
+				zap.String("mode", "voicedialog_ws"),
 			)
 		}
 		if p := s.callPersistStore(); p != nil {
@@ -730,6 +753,7 @@ func (s *SIPServer) handleBye(msg *protocol.Message, _ *net.UDPAddr) *protocol.M
 	if callID == "" {
 		return s.makeResponse(msg, 400, "Bad Request", "", "")
 	}
+	defer s.endVoiceDialogBridge(callID)
 	defer s.inviteFinalRetransmitCleanup(callID)
 
 	if tb := conversation.HangupTransferBridgeIfAny(callID); tb != nil {
@@ -947,6 +971,7 @@ func (s *SIPServer) RemoveCallSession(callID string) {
 	if s == nil || callID == "" {
 		return
 	}
+	s.endVoiceDialogBridge(callID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.callStore, callID)
