@@ -59,7 +59,7 @@ func main() {
 	initSQL := flag.String("init-sql", "", "path to database init .sql script (optional)")
 	sipHost := flag.String("sip-host", "0.0.0.0", "embedded SIP UDP listen host")
 	sipPort := flag.Int("sip-port", 6050, "embedded SIP UDP listen port")
-	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "SDP c= line IP (RTP reachable from SIP peers)")
+	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "Advertised IP for SDP c= AND for SIP Via/Contact when -sip-host is 0.0.0.0 (must be reachable by LAN phones for outbound/campaign; avoid 127.0.0.1)")
 	flag.Parse()
 	// 3. Set Environment Variables
 	if *mode != "" {

@@ -378,7 +378,9 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		zap.String("media_profile", string(req.MediaProfile)),
 		zap.String("correlation_id", strings.TrimSpace(req.CorrelationID)),
 		zap.String("script_id", strings.TrimSpace(req.ScriptID)),
-		zap.String("dst", addr.String()),
+		zap.String("dst_udp", addr.String()),
+		zap.String("from_user", fromUser),
+		zap.String("signaling_addr_cfg", strings.TrimSpace(req.Target.SignalingAddr)),
 	)
 	if m.cfg.OnEvent != nil {
 		m.cfg.OnEvent(DialEvent{
@@ -388,6 +390,8 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 			MediaProfile:  req.MediaProfile,
 			State:         DialEventInvited,
 			At:            time.Now(),
+			RequestURI:    strings.TrimSpace(req.Target.RequestURI),
+			RemoteAddr:    addr.String(),
 		})
 	}
 	return callID, nil
@@ -428,14 +432,15 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 		return
 	}
 	if st >= 100 && st < 200 {
-		if st != 100 && from != nil {
-			logger.Info("sip outbound provisional response",
-				zap.String("call_id", leg.params.CallID),
-				zap.Int("status", st),
-				zap.String("remote", from.String()),
-				zap.String("scenario", string(leg.req.Scenario)),
-				zap.String("correlation_id", strings.TrimSpace(leg.req.CorrelationID)))
-		}
+		phrase := strings.TrimSpace(resp.StatusText)
+		logger.Info("sip outbound provisional response",
+			zap.String("call_id", leg.params.CallID),
+			zap.Int("status", st),
+			zap.String("reason_phrase", phrase),
+			zap.String("remote_udp", udpAddrString(from)),
+			zap.String("scenario", string(leg.req.Scenario)),
+			zap.String("correlation_id", strings.TrimSpace(leg.req.CorrelationID)),
+		)
 		if leg.m.cfg.OnEvent != nil {
 			leg.m.cfg.OnEvent(DialEvent{
 				CallID:        leg.params.CallID,
@@ -444,6 +449,9 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 				MediaProfile:  leg.req.MediaProfile,
 				State:         DialEventProvisional,
 				StatusCode:    st,
+				StatusText:    phrase,
+				RemoteAddr:    udpAddrString(from),
+				RequestURI:    strings.TrimSpace(leg.req.Target.RequestURI),
 				At:            time.Now(),
 			})
 		}
@@ -457,8 +465,10 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 		logger.Warn("sip outbound non-200 response",
 			zap.String("call_id", leg.params.CallID),
 			zap.Int("status", st),
-			zap.String("reason", reason),
-			zap.String("remote", udpAddrString(from)),
+			zap.String("reason_phrase", reason),
+			zap.String("remote_udp", udpAddrString(from)),
+			zap.String("request_uri", strings.TrimSpace(leg.req.Target.RequestURI)),
+			zap.String("correlation_id", strings.TrimSpace(leg.req.CorrelationID)),
 			zap.String("content_type", strings.TrimSpace(resp.GetHeader("Content-Type"))),
 			zap.Int("content_length", len(resp.Body)),
 			zap.String("body_preview", previewBody(resp.Body, 500)),
@@ -472,6 +482,9 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 				State:         DialEventFailed,
 				StatusCode:    st,
 				Reason:        reason,
+				StatusText:    strings.TrimSpace(resp.StatusText),
+				RemoteAddr:    udpAddrString(from),
+				RequestURI:    strings.TrimSpace(leg.req.Target.RequestURI),
 				At:            time.Now(),
 			})
 		}
@@ -650,6 +663,9 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 			MediaProfile:  leg.req.MediaProfile,
 			State:         DialEventEstablished,
 			StatusCode:    200,
+			StatusText:    strings.TrimSpace(resp.StatusText),
+			RemoteAddr:    udpAddrString(from),
+			RequestURI:    strings.TrimSpace(leg.req.Target.RequestURI),
 			At:            time.Now(),
 		})
 	}

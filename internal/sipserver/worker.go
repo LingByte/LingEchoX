@@ -162,10 +162,13 @@ func (s *CampaignService) enqueueDispatchTask(campaign models.SIPCampaign, conta
 		s.dispatchMu.Unlock()
 		s.releaseCampaignSlot(cID)
 		level := "info"
-		msg := fmt.Sprintf("task done id=%s", taskID)
+		msg := fmt.Sprintf(
+			"dispatch worker finished task_id=%s (queue slot released; this is NOT call teardown — SIP outcome is async under type=dial: 100/180/200 or failure)",
+			taskID,
+		)
 		if err != nil {
 			level = "warn"
-			msg = fmt.Sprintf("task done id=%s err=%v", taskID, err)
+			msg = fmt.Sprintf("dispatch worker finished task_id=%s err=%v", taskID, err)
 		}
 		s.appendEvent(context.Background(), models.SIPCampaignEvent{
 			CampaignID: cID,
@@ -225,6 +228,35 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 		"attempt_count": attemptNo,
 		"last_dial_at":  &now,
 	}).Error
+	s.appendEvent(ctx, models.SIPCampaignEvent{
+		CampaignID:    campaign.ID,
+		ContactID:     contact.ID,
+		AttemptID:     attempt.ID,
+		CorrelationID: correlationID,
+		Type:          "dispatch",
+		Level:         "info",
+		Message: fmt.Sprintf(
+			"dial attempt start #%d phone=%s scenario=%s media=%s script_id=%s",
+			attemptNo,
+			strings.TrimSpace(contact.Phone),
+			strings.TrimSpace(campaign.Scenario),
+			strings.TrimSpace(campaign.MediaProfile),
+			strings.TrimSpace(campaign.ScriptID),
+		),
+	})
+	if logger.Lg != nil {
+		logger.Lg.Info("campaign dial attempt start",
+			zap.Uint("campaign_id", campaign.ID),
+			zap.Uint("contact_id", contact.ID),
+			zap.Uint("attempt_id", attempt.ID),
+			zap.Int("attempt_no", attemptNo),
+			zap.String("correlation_id", correlationID),
+			zap.String("phone", strings.TrimSpace(contact.Phone)),
+			zap.String("scenario", strings.TrimSpace(campaign.Scenario)),
+			zap.String("media_profile", strings.TrimSpace(campaign.MediaProfile)),
+			zap.String("script_id", strings.TrimSpace(campaign.ScriptID)),
+		)
+	}
 	target, err := buildDialTarget(campaign, contact)
 	if err != nil {
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).Where("id = ?", contact.ID).
@@ -353,7 +385,15 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 		CorrelationID: correlationID,
 		Type:          "dispatch",
 		Level:         "info",
-		Message:       fmt.Sprintf("dial request dispatched uri=%s signaling=%s source=%s note=%s", target.RequestURI, target.SignalingAddr, targetSource, targetResolveNote),
+		Message: fmt.Sprintf(
+			"dial request dispatched call_id=%s Request-URI=%s signaling_cfg=%s target_source=%s resolver_note=%s caller_user=%s",
+			callID,
+			target.RequestURI,
+			target.SignalingAddr,
+			targetSource,
+			targetResolveNote,
+			strings.TrimSpace(contact.CallerUser),
+		),
 	})
 	_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).Where("id = ?", contact.ID).Updates(map[string]any{
 		"correlation_id": correlationID,
@@ -368,9 +408,11 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 			zap.String("call_id", callID),
 			zap.String("correlation_id", correlationID),
 			zap.String("request_uri", target.RequestURI),
-			zap.String("signaling", target.SignalingAddr),
+			zap.String("signaling_cfg", target.SignalingAddr),
 			zap.String("target_source", targetSource),
 			zap.String("target_note", targetResolveNote),
+			zap.String("caller_user", strings.TrimSpace(contact.CallerUser)),
+			zap.String("hint", "UDP INVITE sent by sip/outbound Manager; real dst_ip:port is logged as dst_udp on INVITE sent"),
 		)
 	}
 }
@@ -408,11 +450,9 @@ func (s *CampaignService) resolveRegisteredDialTarget(ctx context.Context, phone
 	if !persist.IsRegisterFresh(row.LastSeenAt) {
 		return outbound.DialTarget{}, false
 	}
-	domain := persist.EffectiveDialDomain(row.Domain, row.RemoteIP)
-	uriPort := persist.EffectiveRegisterDialRequestURIPort(6050)
-	reqURI := fmt.Sprintf("sip:%s@%s:%d", row.Username, domain, uriPort)
-	sig := row.RemoteIP + ":" + strconv.Itoa(row.RemotePort)
-	return outbound.DialTarget{RequestURI: reqURI, SignalingAddr: sig}, true
+	// Must match GormStore.DialTargetForUsername (incl. SIP_DEFAULT_URI_PORT); old code only used
+	// EffectiveRegisterDialRequestURIPort → wrong Request-URI port vs env, breaks some UAs (intermittent “luck”).
+	return persist.DialTargetFromSIPUser(row), true
 }
 
 func shouldResolveFromRegister(phone string) bool {
@@ -483,7 +523,10 @@ func (s *CampaignService) watchDialAttemptTimeout(campaign models.SIPCampaign, c
 		CorrelationID: correlationID,
 		Type:          "dial",
 		Level:         "error",
-		Message:       "dial timeout: no final SIP response within 45s",
+		Message: fmt.Sprintf(
+			"dial timeout: no final SIP response within 45s call_id=%s — common causes: (1) -sip-local-ip still 127.0.0.1 while -sip-host is 0.0.0.0 → Via points at loopback and callee sends responses to wrong host; set -sip-local-ip to this server's LAN IP. (2) Firewall/NAT drops UDP. (3) UA offline or stale register.",
+			callID,
+		),
 	})
 	s.HandleDialEvent(ctx, outbound.DialEvent{
 		CallID:        callID,

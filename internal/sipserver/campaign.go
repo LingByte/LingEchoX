@@ -207,9 +207,18 @@ func (s *CampaignService) HandleDialEvent(ctx context.Context, evt outbound.Dial
 			CorrelationID: evt.CorrelationID,
 			Type:          "dial",
 			Level:         "info",
-			Message:       "INVITE sent to target",
+			Message: fmt.Sprintf(
+				"INVITE sent call_id=%s dst_udp=%s Request-URI=%s | stack completes INVITE send; ringing waits on UA (watch next: SIP 100/180/183). If client never rings, verify Contact/register IP matches dst_udp and Request-URI user matches registered AOR.",
+				strings.TrimSpace(evt.CallID),
+				strings.TrimSpace(evt.RemoteAddr),
+				strings.TrimSpace(evt.RequestURI),
+			),
 		})
 	case outbound.DialEventProvisional:
+		phrase := strings.TrimSpace(evt.StatusText)
+		if phrase == "" {
+			phrase = "—"
+		}
 		s.appendEvent(ctx, models.SIPCampaignEvent{
 			CampaignID:    campaignID,
 			ContactID:     contactID,
@@ -217,7 +226,10 @@ func (s *CampaignService) HandleDialEvent(ctx context.Context, evt outbound.Dial
 			CorrelationID: evt.CorrelationID,
 			Type:          "dial",
 			Level:         "info",
-			Message:       fmt.Sprintf("provisional response: sip=%d", evt.StatusCode),
+			Message: fmt.Sprintf(
+				"SIP provisional code=%d phrase=%s from_udp=%s (100=Trying 180/183=Ringing)",
+				evt.StatusCode, phrase, strings.TrimSpace(evt.RemoteAddr),
+			),
 		})
 	case outbound.DialEventEstablished:
 		s.metrics.Answered.Add(1)
@@ -241,7 +253,11 @@ func (s *CampaignService) HandleDialEvent(ctx context.Context, evt outbound.Dial
 			CorrelationID: evt.CorrelationID,
 			Type:          "dial",
 			Level:         "info",
-			Message:       "call established",
+			Message: fmt.Sprintf(
+				"call established SIP 200 OK from_udp=%s phrase=%s",
+				strings.TrimSpace(evt.RemoteAddr),
+				strings.TrimSpace(evt.StatusText),
+			),
 		})
 	case outbound.DialEventFailed:
 		s.metrics.Failed.Add(1)
@@ -253,7 +269,14 @@ func (s *CampaignService) HandleDialEvent(ctx context.Context, evt outbound.Dial
 			CorrelationID: evt.CorrelationID,
 			Type:          "dial",
 			Level:         "error",
-			Message:       fmt.Sprintf("dial failed: sip=%d reason=%s", evt.StatusCode, emptyOr(evt.Reason, "unknown")),
+			Message: fmt.Sprintf(
+				"dial failed sip=%d phrase=%s detail=%s from_udp=%s uri=%s",
+				evt.StatusCode,
+				strings.TrimSpace(evt.StatusText),
+				emptyOr(evt.Reason, "unknown"),
+				strings.TrimSpace(evt.RemoteAddr),
+				strings.TrimSpace(evt.RequestURI),
+			),
 		})
 	}
 }

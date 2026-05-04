@@ -100,7 +100,11 @@ func (h *Handlers) createSIPCampaign(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	h.appendCampaignEvent(row.ID, 0, 0, "", "", "campaign", "info", "campaign created")
+	h.appendCampaignEvent(row.ID, 0, 0, "", "", "campaign", "info", fmt.Sprintf(
+		"campaign created id=%d name=%q scenario=%s media=%s script_id=%s task_concurrency=%d global_concurrency=%d max_attempts=%d",
+		row.ID, row.Name, row.Scenario, row.MediaProfile, row.ScriptID,
+		row.TaskConcurrency, row.GlobalConcurrency, row.MaxAttempts,
+	))
 	response.Success(c, "success", row)
 }
 
@@ -147,7 +151,10 @@ func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	h.appendCampaignEvent(uint(id), 0, 0, "", "", "contact", "info", fmt.Sprintf("contacts imported: %d", len(rows)))
+	h.appendCampaignEvent(uint(id), 0, 0, "", "", "contact", "info", fmt.Sprintf(
+		"contacts imported count=%d campaign_id=%d max_attempts_per_contact=%d (numbers normalized for dial/register resolution)",
+		len(rows), id, campaign.MaxAttempts,
+	))
 	response.Success(c, "success", gin.H{"accepted": len(rows)})
 }
 
@@ -203,7 +210,10 @@ func (h *Handlers) setSIPCampaignStatus(c *gin.Context, status string) {
 			return
 		}
 	}
-	h.appendCampaignEvent(uint(id), 0, 0, "", "", "campaign", "info", "campaign status changed to "+status)
+	h.appendCampaignEvent(uint(id), 0, 0, "", "", "campaign", "info", fmt.Sprintf(
+		"campaign status changed to %s campaign_id=%d (running=enqueues dial worker; paused/done stops new dials)",
+		status, id,
+	))
 	response.Success(c, "success", nil)
 }
 

@@ -103,4 +103,12 @@ type DialEvent struct {
 	StatusCode    int
 	Reason        string
 	At            time.Time
+
+	// RequestURI is the INVITE Request-URI (set on invite + dialog events when known).
+	RequestURI string
+	// StatusText is the SIP reason phrase (e.g. "Trying", "Ringing").
+	StatusText string
+	// RemoteAddr is the UDP signaling peer: INVITE destination for "invited";
+	// source address of SIP responses for provisional / failure / established.
+	RemoteAddr string
 }

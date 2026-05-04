@@ -45,6 +45,40 @@ func (e *Embedded) CampaignService() *CampaignService {
 	return e.campaignSvc
 }
 
+// warnIfSIPViaLoopback detects the common misconfig where outbound INVITE puts Via/Contact on 127.0.0.1.
+// Callees then send 100/180/200 to their own loopback — server never sees a response → timeout_no_final_response.
+func warnIfSIPViaLoopback(sipHostEffective, localIP, sipListenHost string) {
+	h := strings.TrimSpace(sipHostEffective)
+	if h == "" {
+		return
+	}
+	loopback := false
+	switch strings.ToLower(h) {
+	case "127.0.0.1", "::1", "localhost":
+		loopback = true
+	default:
+		if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+			loopback = true
+		}
+	}
+	if !loopback {
+		return
+	}
+	msg := "outbound/campaign INVITE Via uses a loopback address — phones on the LAN will send SIP responses to 127.0.0.1 on THEIR machine; " +
+		"you will see INVITE dispatched then timeout_no_final_response with no ringing. " +
+		"Fix: pass -sip-local-ip=<this server's LAN IP>, e.g. the same subnet as your SIP clients (listen host was %q, sip-local-ip=%q)."
+	if logger.Lg != nil {
+		logger.Lg.Warn("sipapp: SIP signaling advertise address is loopback",
+			zap.String("sip_via_host_effective", h),
+			zap.String("sip_listen_host", strings.TrimSpace(sipListenHost)),
+			zap.String("sip_local_ip_flag", strings.TrimSpace(localIP)),
+			zap.String("hint", fmt.Sprintf(msg, sipListenHost, localIP)),
+		)
+	} else {
+		_, _ = fmt.Fprintf(os.Stderr, "sipapp WARN: %s\n", fmt.Sprintf(msg, sipListenHost, localIP))
+	}
+}
+
 func resolveOutboundDialTarget(store *persist.GormStore) (outbound.DialTarget, bool) {
 	if store != nil {
 		n := utils.GetEnv(constants.EnvSIPTargetNumber)
@@ -84,6 +118,7 @@ func Start(cfg Config) (*Embedded, error) {
 	if sipHost == "0.0.0.0" {
 		sipHost = localIP
 	}
+	warnIfSIPViaLoopback(sipHost, localIP, cfg.Host)
 
 	var sipServerPtr *server.SIPServer
 	var sipRegStore *persist.GormStore

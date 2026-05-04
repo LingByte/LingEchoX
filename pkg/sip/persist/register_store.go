@@ -87,6 +87,24 @@ func (s *GormStore) LookupRegister(ctx context.Context, user, domain string) (*n
 	return &net.UDPAddr{IP: ip, Port: row.RemotePort}, true, nil
 }
 
+// DialTargetFromSIPUser builds Request-URI + signaling UDP target from an online sip_users row.
+// Matches GormStore.DialTargetForUsername URI rules (SIP_DEFAULT_URI_PORT vs embedded listen port).
+// Caller must ensure RemoteIP/RemotePort/freshness are valid.
+func DialTargetFromSIPUser(row SIPUser) outbound.DialTarget {
+	d := EffectiveDialDomain(row.Domain, row.RemoteIP)
+	port := 6050
+	if ps := utils.GetEnv(constants.EnvSIPDefaultURIPort); ps != "" {
+		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
+			port = p
+		}
+	} else {
+		port = EffectiveRegisterDialRequestURIPort(port)
+	}
+	reqURI := fmt.Sprintf("sip:%s@%s:%d", row.Username, d, port)
+	sig := net.JoinHostPort(row.RemoteIP, strconv.Itoa(row.RemotePort))
+	return outbound.DialTarget{RequestURI: reqURI, SignalingAddr: sig}
+}
+
 // DialTargetForUsername returns outbound.DialTarget for a registered extension (username).
 // SIP_DEFAULT_DOMAIN optionally restricts to one AOR when multiple domains exist.
 func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) (outbound.DialTarget, bool) {
@@ -109,16 +127,5 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 	if !IsRegisterFresh(row.LastSeenAt) {
 		return zero, false
 	}
-	d := EffectiveDialDomain(row.Domain, row.RemoteIP)
-	port := 6050
-	if ps := utils.GetEnv(constants.EnvSIPDefaultURIPort); ps != "" {
-		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
-			port = p
-		}
-	} else {
-		port = EffectiveRegisterDialRequestURIPort(port)
-	}
-	reqURI := fmt.Sprintf("sip:%s@%s:%d", row.Username, d, port)
-	sig := net.JoinHostPort(row.RemoteIP, strconv.Itoa(row.RemotePort))
-	return outbound.DialTarget{RequestURI: reqURI, SignalingAddr: sig}, true
+	return DialTargetFromSIPUser(row), true
 }
