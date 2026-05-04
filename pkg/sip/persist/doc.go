@@ -1,7 +1,6 @@
-// Package persist holds SIP persistence for sip_users and sip_calls: types and stores in types.go,
-// user helpers in sip_user.go, SIP call row + turns JSON in sip_call.go, DB queries in sip_call_repo.go,
-// invite/bye/RTP lifecycle helpers in sip_call_lifecycle.go, plus GORM and optional JSON backends.
+// Package persist holds SIP persistence types and helpers for sip_users and sip_calls (GORM).
 //
-// JSON file mode: set SIP_PERSIST=json. Writes under SIP_DATA_DIR/sip/: calls.json, users.json
-// (atomic rename, per-file mutexes, MergeSIPCall patch semantics).
+// Models and CRUD: sip_call.go, sip_user.go, types.go.
+// Wiring for server/outbound: CallStore (call_store.go), GormStore REGISTER bindings (register_store.go),
+// dial-domain / freshness helpers (register_domain.go, register_fresh.go), listen-port for Request-URI (register_listen_port.go).
 package persist

@@ -23,7 +23,7 @@ const (
 
 func (t TaskStatus) String() string { return string(t) }
 
-// Task carries one handler invocation.
+// Task carries one handler invocation. Wait() blocks until completion.
 type Task[Params, Result any] struct {
 	ID         string
 	ctx        context.Context
@@ -31,13 +31,19 @@ type Task[Params, Result any] struct {
 	Priority   int
 	Params     Params
 	Handler    func(ctx context.Context, params Params) (Result, error)
-	Result     chan Result
-	Err        chan error
 	Status     atomic.Value
 	Progress   atomic.Int32
 	SubmitTime time.Time
 
+	queueAhead     atomic.Int32
+	queuedTotal    atomic.Int32
+	runningWorkers atomic.Int32
+	unfinishedEst  atomic.Int32
+
 	finishOnce sync.Once
+	done       chan struct{}
+	res        Result
+	err        error
 }
 
 func newTask[Params, Result any](ctx context.Context, priority int, param Params, handler func(ctx context.Context, p Params) (Result, error)) *Task[Params, Result] {
@@ -50,16 +56,60 @@ func newTask[Params, Result any](ctx context.Context, priority int, param Params
 		Priority:   priority,
 		Params:     param,
 		Handler:    handler,
-		Result:     make(chan Result, 1),
-		Err:        make(chan error, 1),
 		SubmitTime: time.Now(),
+		done:       make(chan struct{}),
 	}
 	t.Status.Store(TaskStatusPending)
 	t.Progress.Store(0)
 	return t
 }
 
+func (t *Task[Params, Result]) applyQueueLabels(ahead, qlen int, running int32) {
+	if t == nil {
+		return
+	}
+	t.queueAhead.Store(int32(ahead))
+	t.queuedTotal.Store(int32(qlen))
+	t.runningWorkers.Store(running)
+	t.unfinishedEst.Store(int32(qlen) + running)
+}
+
+// QueueAhead is how many tasks are still in front of this one in the priority wait queue (0 = next).
+func (t *Task[Params, Result]) QueueAhead() int {
+	if t == nil {
+		return -1
+	}
+	return int(t.queueAhead.Load())
+}
+
+// QueuedTotal is the depth of the wait queue at the last relabel (includes this task while waiting).
+func (t *Task[Params, Result]) QueuedTotal() int {
+	if t == nil {
+		return 0
+	}
+	return int(t.queuedTotal.Load())
+}
+
+// RunningWorkers is the snapshot of executing tasks at the last relabel.
+func (t *Task[Params, Result]) RunningWorkers() int {
+	if t == nil {
+		return 0
+	}
+	return int(t.runningWorkers.Load())
+}
+
+// UnfinishedEstimate is queuedTotal + runningWorkers at last relabel (system load hint).
+func (t *Task[Params, Result]) UnfinishedEstimate() int {
+	if t == nil {
+		return 0
+	}
+	return int(t.unfinishedEst.Load())
+}
+
 func (t *Task[Params, Result]) deliver(res Result, err error) {
+	if t == nil {
+		return
+	}
 	t.finishOnce.Do(func() {
 		switch {
 		case err == nil:
@@ -69,9 +119,26 @@ func (t *Task[Params, Result]) deliver(res Result, err error) {
 		default:
 			t.Status.Store(TaskStatusFailed)
 		}
-		t.Result <- res
-		t.Err <- err
-		close(t.Result)
-		close(t.Err)
+		t.res = res
+		t.err = err
+		close(t.done)
 	})
+}
+
+// Wait blocks until the handler finishes (success, failure, or cancel).
+func (t *Task[Params, Result]) Wait() (Result, error) {
+	if t == nil {
+		var zero Result
+		return zero, errors.New("nil task")
+	}
+	<-t.done
+	return t.res, t.err
+}
+
+// Cancel requests cooperative stop via the task context.
+func (t *Task[Params, Result]) Cancel() {
+	if t == nil || t.cancel == nil {
+		return
+	}
+	t.cancel()
 }

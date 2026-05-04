@@ -191,17 +191,6 @@ func (h *Hub) endCall(callID, reason string) {
 	)
 }
 
-// IsPendingOrActive is true while a voice-dialog bridge exists for this inbound Call-ID.
-func IsPendingOrActive(callID string) bool {
-	if defaultHub == nil || strings.TrimSpace(callID) == "" {
-		return false
-	}
-	defaultHub.mu.Lock()
-	defer defaultHub.mu.Unlock()
-	_, ok := defaultHub.sessions[strings.TrimSpace(callID)]
-	return ok
-}
-
 // WebSocketHTTP serves GET WebSocket (?token=… [&call_id=…]).
 func WebSocketHTTP(w http.ResponseWriter, r *http.Request) {
 	remote := r.RemoteAddr

@@ -274,27 +274,39 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 	} else if req.Scenario == ScenarioTransferAgent && req.MediaProfile == MediaProfileTransferBridge {
 		codecs = sdp.TransferAgentBridgeOfferCodecs()
 	}
-	// Outbound INVITE always offers RTP/SAVPF + SDES AES_CM_128_HMAC_SHA1_80 (per-call random key/salt).
-	// If the peer answers plain RTP/AVP, applyOutboundAnswerSRTP skips SRTP on the socket.
-	mediaProto := "RTP/SAVPF"
-	mkey := make([]byte, 16)
-	msalt := make([]byte, 14)
-	if _, err := rand.Read(mkey); err != nil {
-		_ = rtpSess.Close()
-		return "", fmt.Errorf("sip/outbound: SRTP master key: %w", err)
+
+	var (
+		mediaProto    string
+		sdpExtras     []string
+		srtpOfferKey  []byte
+		srtpOfferSalt []byte
+	)
+	if req.Scenario == ScenarioTransferAgent && req.MediaProfile == MediaProfileTransferBridge {
+		// Bridged agent leg targets desk phones / common softphones; many reject RTP/SAVPF+SDES with 488.
+		// Plain RTP/AVP keeps SRTP on the customer inbound leg only.
+		mediaProto = "RTP/AVP"
+	} else {
+		// Standard outbound offers RTP/SAVPF + SDES; plain RTP answers downgrade via applyOutboundAnswerSRTP.
+		mediaProto = "RTP/SAVPF"
+		mkey := make([]byte, 16)
+		msalt := make([]byte, 14)
+		if _, err := rand.Read(mkey); err != nil {
+			_ = rtpSess.Close()
+			return "", fmt.Errorf("sip/outbound: SRTP master key: %w", err)
+		}
+		if _, err := rand.Read(msalt); err != nil {
+			_ = rtpSess.Close()
+			return "", fmt.Errorf("sip/outbound: SRTP master salt: %w", err)
+		}
+		cryptoLine, cerr := sdp.FormatCryptoLine(1, sdp.SuiteAESCM128HMACSHA180, mkey, msalt)
+		if cerr != nil {
+			_ = rtpSess.Close()
+			return "", cerr
+		}
+		sdpExtras = []string{cryptoLine}
+		srtpOfferKey = append([]byte(nil), mkey...)
+		srtpOfferSalt = append([]byte(nil), msalt...)
 	}
-	if _, err := rand.Read(msalt); err != nil {
-		_ = rtpSess.Close()
-		return "", fmt.Errorf("sip/outbound: SRTP master salt: %w", err)
-	}
-	cryptoLine, err := sdp.FormatCryptoLine(1, sdp.SuiteAESCM128HMACSHA180, mkey, msalt)
-	if err != nil {
-		_ = rtpSess.Close()
-		return "", err
-	}
-	sdpExtras := []string{cryptoLine}
-	srtpOfferKey := append([]byte(nil), mkey...)
-	srtpOfferSalt := append([]byte(nil), msalt...)
 	sdpBody := sdp.GenerateWithProtoExtras(localSDP, localPort, mediaProto, codecs, sdpExtras)
 
 	callID = newCallID(localSDP)

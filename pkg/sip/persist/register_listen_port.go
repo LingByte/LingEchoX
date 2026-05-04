@@ -1,15 +1,14 @@
-package sipserver
+package persist
 
 import "sync"
 
-// Request-URI host port when dialing registered extensions (must match embedded SIP listen port).
 var (
 	registerOutboundReqURIPortMu sync.RWMutex
-	registerOutboundReqURIPort int
+	registerOutboundReqURIPort   int
 )
 
-// SetRegisterOutboundRequestURIServerPort sets the server UDP port embedded in sip:user@host:PORT for
-// register-resolved outbound dials. Call from sipapp with the same cfg.Port as the embedded SIP stack.
+// SetRegisterOutboundRequestURIServerPort sets the SIP UDP listen port embedded in sip:user@host:PORT when
+// dialing registered extensions. Call with the same port as the embedded SIP stack (e.g. sipapp cfg.Port).
 func SetRegisterOutboundRequestURIServerPort(port int) {
 	registerOutboundReqURIPortMu.Lock()
 	defer registerOutboundReqURIPortMu.Unlock()
@@ -18,7 +17,8 @@ func SetRegisterOutboundRequestURIServerPort(port int) {
 	}
 }
 
-func effectiveRegisterDialRequestURIPort(fallback int) int {
+// EffectiveRegisterDialRequestURIPort returns the configured listen port if set, otherwise fallback.
+func EffectiveRegisterDialRequestURIPort(fallback int) int {
 	if fallback <= 0 {
 		fallback = 6050
 	}

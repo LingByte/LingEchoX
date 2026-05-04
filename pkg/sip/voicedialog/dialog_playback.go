@@ -100,7 +100,7 @@ func (sess *dialogSession) runDialogWelcome() {
 		return
 	}
 	callID := sess.meta.CallID
-	ref := strings.TrimSpace(utils.GetEnv("SIP_WELCOME_WAV_PATH"))
+	ref := utils.GetEnv("SIP_WELCOME_WAV_PATH")
 	if strings.TrimSpace(ref) == "" {
 		ref = "scripts/welcome.wav"
 	}

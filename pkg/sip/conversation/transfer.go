@@ -105,7 +105,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		if resolveTgt != nil {
 			lg.Warn("sip transfer: no eligible acd_pool_targets row (need weight>0, work_state=available, route sip|web; trunk must have dial target + gateway env; web seat needs fresh heartbeat)")
 		} else {
-			lg.Warn("sip transfer: configure database for cmd/sip (ACD pool), or set SIP_TRANSFER_REQUEST_URI + SIP_TRANSFER_SIGNALING_ADDR, or SIP_TRANSFER_NUMBER + SIP_TRANSFER_HOST (web for browser agent)")
+			lg.Warn("sip transfer: configure database for cmd/sip (ACD pool), or set SIP_TRANSFER_NUMBER + SIP_TRANSFER_HOST (+ SIP_TRANSFER_PORT / SIP_TRANSFER_SIGNALING_ADDR), or SIP_TRANSFER_NUMBER=web for browser agent")
 		}
 		notifyTransferPhase(inboundCallID, "no_agent", map[string]any{"reason": "no_dial_target"})
 		go playNoSeatGoodbyeAndHangup(ctx, inboundCallID, lg)
@@ -215,7 +215,7 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 	if ms == nil {
 		return fmt.Errorf("nil inbound media session")
 	}
-	path := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH"))
+	path := utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH")
 	if path == "" {
 		path = "scripts/ringing.wav"
 	}
@@ -282,7 +282,7 @@ func errorsIsCtxDone(err error) bool {
 // can finish before BYE (RTP jitter buffer / far-end playout). Override with SIP_TRANSFER_GOODBYE_TAIL_MS (milliseconds).
 func sipTransferGoodbyeTailWait() time.Duration {
 	const defaultMS = 900
-	raw := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_GOODBYE_TAIL_MS"))
+	raw := utils.GetEnv("SIP_TRANSFER_GOODBYE_TAIL_MS")
 	if raw == "" {
 		return defaultMS * time.Millisecond
 	}

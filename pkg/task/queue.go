@@ -51,17 +51,17 @@ func (pq *PriorityQueue) Pop() any {
 	return item.taskPtr
 }
 
-// Remove drops a task by id; returns true if removed.
-func (pq *PriorityQueue) Remove(taskID string) bool {
+// Remove drops a task by id; returns the stored task pointer if removed.
+func (pq *PriorityQueue) Remove(taskID string) (removed any, ok bool) {
 	pq.mu.Lock()
 	defer pq.mu.Unlock()
 	for i, item := range pq.items {
 		if item.taskID == taskID {
 			pq.items = append(pq.items[:i], pq.items[i+1:]...)
-			return true
+			return item.taskPtr, true
 		}
 	}
-	return false
+	return nil, false
 }
 
 // GetPosition returns queue index (0 = next to run) or -1.
@@ -95,4 +95,13 @@ func (pq *PriorityQueue) Snapshot() []QueueItemSnapshot {
 		})
 	}
 	return out
+}
+
+// RelabelQueued invokes fn for each waiting task in dispatch order (index 0 runs next).
+func (pq *PriorityQueue) RelabelQueued(fn func(position int, taskID string, task any)) {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
+	for i, it := range pq.items {
+		fn(i, it.taskID, it.taskPtr)
+	}
 }

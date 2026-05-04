@@ -166,8 +166,6 @@ func main() {
 		zap.Int("sip_port", *sipPort),
 		zap.String("sip_local_ip", *sipLocalIP))
 	// 22. Start HTTP/HTTPS Server
-
-	// 部分 sip-center / 外呼相关接口可能长时间无写出；WriteTimeout 过小会导致提前断连。
 	const httpLongRun = 45 * time.Minute
 	httpServer := &http.Server{
 		Addr:           addr,

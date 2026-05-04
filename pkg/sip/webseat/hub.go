@@ -206,7 +206,7 @@ func RegisterAwaiting(callID string, cs *sipSession.CallSession, lg *zap.Logger)
 }
 
 func webseatWSTokenOK(r *http.Request) bool {
-	expected := strings.TrimSpace(utils.GetEnv(EnvWSToken))
+	expected := utils.GetEnv(EnvWSToken)
 	got := strings.TrimSpace(r.URL.Query().Get("token"))
 	if expected == "" {
 		wsTokenMissingOnce.Do(func() {
@@ -334,7 +334,7 @@ func (h *Hub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) awaitWatchdog(callID string) {
 	wait := 5 * time.Minute
-	if v := strings.TrimSpace(utils.GetEnv("SIP_WEBSEAT_JOIN_TIMEOUT")); v != "" {
+	if v := utils.GetEnv("SIP_WEBSEAT_JOIN_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			wait = d
 		}
@@ -798,7 +798,7 @@ func newMediaEngine() *webrtc.MediaEngine {
 }
 
 func defaultICEServers() []webrtc.ICEServer {
-	raw := strings.TrimSpace(utils.GetEnv("SIP_WEBSEAT_ICE_SERVERS"))
+	raw := utils.GetEnv("SIP_WEBSEAT_ICE_SERVERS")
 	if raw != "" {
 		var servers []webrtc.ICEServer
 		if err := json.Unmarshal([]byte(raw), &servers); err == nil && len(servers) > 0 {

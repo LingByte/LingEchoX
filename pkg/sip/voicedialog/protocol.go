@@ -44,12 +44,12 @@ func truncateRunes(s string, max int) string {
 }
 
 func wsTokenExpected() string {
-	return strings.TrimSpace(utils.GetEnv("VOICE_DIALOG_WS_TOKEN"))
+	return utils.GetEnv("VOICE_DIALOG_WS_TOKEN")
 }
 
 // transferLoadingAudioRef returns SIP_TRANSFER_RINGING_WAV_PATH when set (same clip family as SIP transfer ringback).
 func transferLoadingAudioRef() string {
-	return strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH"))
+	return utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH")
 }
 
 // ParseVoicedialogAudioRef returns source_kind, client-visible source, and filesystem path or URL for loading WAV PCM.

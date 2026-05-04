@@ -49,7 +49,7 @@ func NewSIPHotwordCorrector(lg *zap.Logger) *SIPHotwordCorrector {
 func loadHotwordPairs() map[string]string {
 	out := map[string]string{}
 
-	if raw := strings.TrimSpace(utils.GetEnv("SIP_HOTWORD_CORRECTIONS_JSON")); raw != "" {
+	if raw := utils.GetEnv("SIP_HOTWORD_CORRECTIONS_JSON"); raw != "" {
 		var m map[string]string
 		if err := json.Unmarshal([]byte(raw), &m); err == nil {
 			for k, v := range m {
@@ -59,7 +59,7 @@ func loadHotwordPairs() map[string]string {
 	}
 
 	// CSV-ish fallback: "foo=bar,baz=qux"
-	if raw := strings.TrimSpace(utils.GetEnv("SIP_HOTWORD_CORRECTIONS")); raw != "" {
+	if raw := utils.GetEnv("SIP_HOTWORD_CORRECTIONS"); raw != "" {
 		items := strings.Split(raw, ",")
 		for _, it := range items {
 			kv := strings.SplitN(strings.TrimSpace(it), "=", 2)

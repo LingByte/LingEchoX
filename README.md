@@ -98,8 +98,7 @@ This project includes an AGPL-3.0 license file (`LICENSE`).
 //
 // # Persistence (pkg/sip/persist)
 //
-//   - SIP_PERSIST: "json" or "file" → JSON file store under SIP_DATA_DIR; anything else → GORM (default).
-//   - SIP_DATA_DIR: directory for JSON mode (default "data", resolved to absolute when relative).
+//   - SIP calls / registrar rows use GORM via app DB (see cmd/bootstrap migrations); no separate SIP_PERSIST file mode.
 //
 // # SIP server / RTP (pkg/sip/server, pkg/sip/session)
 //
@@ -156,8 +155,8 @@ This project includes an AGPL-3.0 license file (`LICENSE`).
 //
 // # Outbound / ACD / hybrid script (pkg/sip/outbound, pkg/constants)
 //
-//   - SIP_OUTBOUND_HOST, SIP_OUTBOUND_PORT, SIP_SIGNALING_ADDR, SIP_OUTBOUND_REQUEST_URI,
-//     SIP_OUTBOUND_AUTO_DIAL, SIP_TARGET_NUMBER, SIP_CALLER_ID, SIP_CALLER_DISPLAY_NAME,
+//   - SIP_OUTBOUND_HOST, SIP_OUTBOUND_PORT, SIP_SIGNALING_ADDR,
+//     SIP_TARGET_NUMBER, SIP_CALLER_ID, SIP_CALLER_DISPLAY_NAME,
 //     SIP_DEFAULT_DOMAIN, SIP_DEFAULT_URI_PORT, SIP_PASSWORD (REGISTER auth),
 //     SIP_TRANSFER_* (host/port/sig/request-uri/number),
 //     SIP_SCRIPT_LISTEN_AFTER_TTS_TAIL, SIP_SCRIPT_LISTEN_TAIL_MS_MAX/MIN, SIP_SCRIPT_LISTEN_POLL_MS,

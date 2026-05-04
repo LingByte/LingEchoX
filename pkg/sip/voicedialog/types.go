@@ -187,7 +187,10 @@ type dialogSession struct {
 	voicedialogASRProv string
 
 	// Loopback LLM metadata consumed on the next gateway TTS playback.
-	pendingTurnMu     sync.Mutex
-	pendingLLMModel   string
-	pendingLLMWallMs  int
+	pendingTurnMu    sync.Mutex
+	pendingLLMModel  string
+	pendingLLMWallMs int
+
+	// Defer TriggerTransferToAgent until handleTTSSpeak finishes (avoid ringback over assistant audio).
+	transferAfterNextTTS atomic.Bool
 }

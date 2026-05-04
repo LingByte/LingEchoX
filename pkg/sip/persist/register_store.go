@@ -1,4 +1,4 @@
-package sipserver
+package persist
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
-	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 
 	"gorm.io/gorm"
@@ -37,7 +36,7 @@ func (s *GormStore) SaveRegister(ctx context.Context, user, domain, contactURI s
 	}
 	now := time.Now()
 	exp := expiresAt
-	return persist.UpsertSIPUserRegister(ctx, s.db, persist.SIPUser{
+	return UpsertSIPUserRegister(ctx, s.db, SIPUser{
 		Username:   user,
 		Domain:     domain,
 		ContactURI: contactURI,
@@ -59,7 +58,7 @@ func (s *GormStore) DeleteRegister(ctx context.Context, user, domain string) err
 	if user == "" || domain == "" {
 		return nil
 	}
-	return persist.MarkSIPUserOffline(ctx, s.db, user, domain)
+	return MarkSIPUserOffline(ctx, s.db, user, domain)
 }
 
 func (s *GormStore) LookupRegister(ctx context.Context, user, domain string) (*net.UDPAddr, bool, error) {
@@ -71,7 +70,7 @@ func (s *GormStore) LookupRegister(ctx context.Context, user, domain string) (*n
 	if user == "" || domain == "" {
 		return nil, false, nil
 	}
-	row, err := persist.FindOnlineSIPUserByAOR(ctx, s.db, user, domain)
+	row, err := FindOnlineSIPUserByAOR(ctx, s.db, user, domain)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, false, nil
@@ -99,25 +98,25 @@ func (s *GormStore) DialTargetForUsername(ctx context.Context, username string) 
 	if username == "" {
 		return zero, false
 	}
-	domain := strings.TrimSpace(utils.GetEnv(constants.EnvSIPDefaultDomain))
-	row, err := persist.FindOnlineSIPUserByAOR(ctx, s.db, username, domain)
+	domain := utils.GetEnv(constants.EnvSIPDefaultDomain)
+	row, err := FindOnlineSIPUserByAOR(ctx, s.db, username, domain)
 	if err != nil {
 		return zero, false
 	}
 	if row.RemoteIP == "" || row.RemotePort <= 0 {
 		return zero, false
 	}
-	if !isSIPRegisterFresh(row.LastSeenAt) {
+	if !IsRegisterFresh(row.LastSeenAt) {
 		return zero, false
 	}
-	d := effectiveDialDomain(row.Domain, row.RemoteIP)
+	d := EffectiveDialDomain(row.Domain, row.RemoteIP)
 	port := 6050
-	if ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPDefaultURIPort)); ps != "" {
+	if ps := utils.GetEnv(constants.EnvSIPDefaultURIPort); ps != "" {
 		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
 			port = p
 		}
 	} else {
-		port = effectiveRegisterDialRequestURIPort(port)
+		port = EffectiveRegisterDialRequestURIPort(port)
 	}
 	reqURI := fmt.Sprintf("sip:%s@%s:%d", row.Username, d, port)
 	sig := net.JoinHostPort(row.RemoteIP, strconv.Itoa(row.RemotePort))

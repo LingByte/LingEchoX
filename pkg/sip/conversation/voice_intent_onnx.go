@@ -52,23 +52,21 @@ import (
 //
 //	# 无座席 goodbye 播完后多等一会再发 BYE（毫秒），给对端缓冲播完
 //	SIP_TRANSFER_GOODBYE_TAIL_MS=900
-//
-// 注意：需要 CGO 且进程能加载上述 .dylib/.so；SIP 服务与工作目录无关，请用绝对路径。
 var (
-	sipIntentMu      sync.Mutex
-	sipIntentEng     *intentonnx.Engine
-	sipIntentCfg     *intentonnx.IntentConfig
-	sipIntentReady   bool
-	sipIntentGaveUp  bool
+	sipIntentMu     sync.Mutex
+	sipIntentEng    *intentonnx.Engine
+	sipIntentCfg    *intentonnx.IntentConfig
+	sipIntentReady  bool
+	sipIntentGaveUp bool
 )
 
 func sipIntentONNXEnabled() bool {
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv("SIP_INTENT_ONNX_ENABLED")))
+	v := strings.ToLower(utils.GetEnv("SIP_INTENT_ONNX_ENABLED"))
 	return v == "1" || v == "true" || v == "yes"
 }
 
 func sipIntentONNXCoreML() bool {
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv("SIP_INTENT_ONNX_COREML")))
+	v := strings.ToLower(utils.GetEnv("SIP_INTENT_ONNX_COREML"))
 	return v == "1" || v == "true" || v == "yes"
 }
 
@@ -86,9 +84,9 @@ func sipIntentEngine(lg *zap.Logger) (*intentonnx.Engine, *intentonnx.IntentConf
 		sipIntentGaveUp = true
 		return nil, nil, false
 	}
-	model := strings.TrimSpace(utils.GetEnv("SIP_INTENT_ONNX_MODEL"))
-	tok := strings.TrimSpace(utils.GetEnv("SIP_INTENT_ONNX_TOKENIZER"))
-	lib := strings.TrimSpace(utils.GetEnv("SIP_INTENT_ONNX_LIB"))
+	model := utils.GetEnv("SIP_INTENT_ONNX_MODEL")
+	tok := utils.GetEnv("SIP_INTENT_ONNX_TOKENIZER")
+	lib := utils.GetEnv("SIP_INTENT_ONNX_LIB")
 	if lib == "" {
 		lib = strings.TrimSpace(os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"))
 	}
@@ -100,7 +98,7 @@ func sipIntentEngine(lg *zap.Logger) (*intentonnx.Engine, *intentonnx.IntentConf
 		return nil, nil, false
 	}
 	seq := 128
-	if s := strings.TrimSpace(utils.GetEnv("SIP_INTENT_ONNX_SEQ")); s != "" {
+	if s := utils.GetEnv("SIP_INTENT_ONNX_SEQ"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
 			seq = n
 		}
@@ -126,7 +124,7 @@ func sipIntentEngine(lg *zap.Logger) (*intentonnx.Engine, *intentonnx.IntentConf
 		}
 		return nil, nil, false
 	}
-	cfgPath := strings.TrimSpace(utils.GetEnv("SIP_INTENT_ONNX_CONFIG"))
+	cfgPath := utils.GetEnv("SIP_INTENT_ONNX_CONFIG")
 	cfg, err := intentonnx.LoadIntentConfig(cfgPath)
 	if err != nil {
 		_ = eng.Close()
@@ -164,7 +162,7 @@ func sipIntentRouteOptions() intentonnx.RouteOptions {
 }
 
 func sipIntentTransferLiteralOnlyEnabled() bool {
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv("SIP_INTENT_TRANSFER_LITERAL_ONLY")))
+	v := strings.ToLower(utils.GetEnv("SIP_INTENT_TRANSFER_LITERAL_ONLY"))
 	if v == "0" || v == "false" || v == "no" {
 		return false
 	}
@@ -172,7 +170,7 @@ func sipIntentTransferLiteralOnlyEnabled() bool {
 }
 
 func sipIntentTransferLiteralIntentName() string {
-	s := strings.TrimSpace(utils.GetEnv("SIP_INTENT_TRANSFER_LITERAL_INTENT_NAME"))
+	s := utils.GetEnv("SIP_INTENT_TRANSFER_LITERAL_INTENT_NAME")
 	if s == "" {
 		return "转人工"
 	}
@@ -208,7 +206,7 @@ func sipIntentEnforceTransferLiteral(routeText string, out *intentonnx.RouteOutp
 // sipIntentCannedIntentNames lists intent names (from intents JSON "name") that use canned TTS only.
 // Others (e.g. 查询) still run ONNX for routing/metrics but the user hears LLM once.
 func sipIntentCannedIntentNames() []string {
-	raw := strings.TrimSpace(utils.GetEnv("SIP_INTENT_ONNX_CANNED_INTENTS"))
+	raw := utils.GetEnv("SIP_INTENT_ONNX_CANNED_INTENTS")
 	if raw == "" {
 		raw = "转人工,投诉建议"
 	}
@@ -238,7 +236,7 @@ func sipIntentReplyUsesCannedOnly(intentName string) bool {
 // sipIntentStrictCannedIntentNames lists intent names for which ONNX fixed-line TTS is allowed only when
 // the user transcript matches an explicit phrase (see sipIntentExplicitTransferRequest).
 func sipIntentStrictCannedIntentNames() []string {
-	raw := strings.TrimSpace(utils.GetEnv("SIP_INTENT_STRICT_CANNED_NAMES"))
+	raw := utils.GetEnv("SIP_INTENT_STRICT_CANNED_NAMES")
 	if raw == "" {
 		return []string{"转人工"}
 	}
@@ -269,7 +267,7 @@ func sipIntentRequiresExplicitTranscript(intentName string) bool {
 }
 
 func sipIntentTransferExplicitKeywords() []string {
-	raw := strings.TrimSpace(utils.GetEnv("SIP_INTENT_TRANSFER_EXPLICIT_PHRASES"))
+	raw := utils.GetEnv("SIP_INTENT_TRANSFER_EXPLICIT_PHRASES")
 	if raw != "" {
 		var out []string
 		for _, p := range strings.Split(raw, ",") {
@@ -298,7 +296,7 @@ func sipIntentExplicitTransferRequest(transcript string) bool {
 	if s == "" {
 		return false
 	}
-	custom := strings.TrimSpace(utils.GetEnv("SIP_INTENT_TRANSFER_EXPLICIT_PHRASES")) != ""
+	custom := utils.GetEnv("SIP_INTENT_TRANSFER_EXPLICIT_PHRASES") != ""
 	for _, kw := range sipIntentTransferExplicitKeywords() {
 		kw = strings.TrimSpace(kw)
 		if kw == "" {
@@ -326,7 +324,7 @@ func sipIntentExplicitCannedAllowed(intentName, normalizedTranscript string) boo
 // sipIntentAugmentUserTextForLLM prepends ONNX route metadata so the LLM call uses both models in one turn
 // (single user-visible answer from LLM/TTS, no second canned line). Disable with SIP_INTENT_ONNX_LLM_PREFIX=0.
 func sipIntentTwoPhaseTTSEnabled() bool {
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv("SIP_INTENT_TWO_PHASE_TTS")))
+	v := strings.ToLower(utils.GetEnv("SIP_INTENT_TWO_PHASE_TTS"))
 	if v == "0" || v == "false" || v == "no" {
 		return false
 	}
@@ -334,7 +332,7 @@ func sipIntentTwoPhaseTTSEnabled() bool {
 }
 
 func sipIntentTwoPhaseIntentNames() []string {
-	raw := strings.TrimSpace(utils.GetEnv("SIP_INTENT_TWO_PHASE_NAMES"))
+	raw := utils.GetEnv("SIP_INTENT_TWO_PHASE_NAMES")
 	if raw == "" {
 		return []string{"查询"}
 	}
@@ -366,7 +364,7 @@ func sipIntentAugmentUserTextForLLM(userText string, out *intentonnx.RouteOutput
 	if out == nil {
 		return userText
 	}
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv("SIP_INTENT_ONNX_LLM_PREFIX")))
+	v := strings.ToLower(utils.GetEnv("SIP_INTENT_ONNX_LLM_PREFIX"))
 	if v == "0" || v == "false" || v == "no" {
 		return userText
 	}

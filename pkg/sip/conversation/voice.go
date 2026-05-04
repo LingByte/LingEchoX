@@ -37,19 +37,6 @@ var (
 	sipTransferPendingByCallID = map[string]bool{}
 )
 
-// SetSIPCallSystemPrompt overrides the default LLM system prompt for one call.
-// It is consumed when the voice pipeline is attached for this call.
-func SetSIPCallSystemPrompt(callID, prompt string) {
-	callID = strings.TrimSpace(callID)
-	prompt = strings.TrimSpace(prompt)
-	if callID == "" || prompt == "" {
-		return
-	}
-	sipSystemPromptMu.Lock()
-	sipSystemPromptByCallID[callID] = prompt
-	sipSystemPromptMu.Unlock()
-}
-
 func popSIPCallSystemPrompt(callID string) string {
 	callID = strings.TrimSpace(callID)
 	if callID == "" {
@@ -129,48 +116,56 @@ func sipVoiceTTSCloudSampleRate(env VoiceEnv, pcmBridgeSR int) int {
 	return 16000
 }
 
-func voiceEnvFromProcess() VoiceEnv {
-	voiceType, _ := strconv.ParseInt(strings.TrimSpace(utils.GetEnv("TTS_VOICE_TYPE")), 10, 64)
-	ttsSpeed, _ := strconv.ParseInt(strings.TrimSpace(utils.GetEnv("TTS_SPEED")), 10, 64)
-	sr, _ := strconv.Atoi(strings.TrimSpace(utils.GetEnv("TTS_SAMPLE_RATE")))
+func VoiceEnvFromProcess() VoiceEnv {
+	voiceType, _ := strconv.ParseInt(utils.GetEnv("TTS_VOICE_TYPE"), 10, 64)
+	ttsSpeed, _ := strconv.ParseInt(utils.GetEnv("TTS_SPEED"), 10, 64)
+	sr, _ := strconv.Atoi(utils.GetEnv("TTS_SAMPLE_RATE"))
 	if sr <= 0 {
 		sr = 16000
 	}
-	provider := strings.TrimSpace(utils.GetEnv("LLM_PROVIDER"))
-	appID := strings.TrimSpace(utils.GetEnv("LLM_APP_ID"))
+	provider := utils.GetEnv("LLM_PROVIDER")
+	appID := utils.GetEnv("LLM_APP_ID")
 	if appID == "" {
-		appID = strings.TrimSpace(utils.GetEnv("ALIBABA_AI_APP_ID"))
+		appID = utils.GetEnv("ALIBABA_AI_APP_ID")
 	}
-	apiKey := strings.TrimSpace(utils.GetEnv("LLM_APIKEY"))
+	apiKey := utils.GetEnv("LLM_APIKEY")
 	if apiKey == "" && strings.EqualFold(provider, "alibaba") {
-		apiKey = strings.TrimSpace(utils.GetEnv("ALIBABA_AI_API_KEY"))
+		apiKey = utils.GetEnv("ALIBABA_AI_API_KEY")
 	}
 	return VoiceEnv{
 		LLMProvider: provider,
-		LLMBaseURL:  strings.TrimSpace(utils.GetEnv("LLM_BASEURL")),
+		LLMBaseURL:  utils.GetEnv("LLM_BASEURL"),
 		LLMAppID:    appID,
 		LLMAPIKey:   apiKey,
-		LLMModel:    strings.TrimSpace(utils.GetEnv("LLM_MODEL")),
+		LLMModel:    utils.GetEnv("LLM_MODEL"),
 
-		ASRAppID:     strings.TrimSpace(utils.GetEnv("ASR_APPID")),
-		ASRSecretID:  strings.TrimSpace(utils.GetEnv("ASR_SECRET_ID")),
-		ASRSecretKey: strings.TrimSpace(utils.GetEnv("ASR_SECRET_KEY")),
-		ASRModelType: strings.TrimSpace(utils.GetEnv("ASR_MODEL_TYPE")),
+		ASRAppID:     utils.GetEnv("ASR_APPID"),
+		ASRSecretID:  utils.GetEnv("ASR_SECRET_ID"),
+		ASRSecretKey: utils.GetEnv("ASR_SECRET_KEY"),
+		ASRModelType: utils.GetEnv("ASR_MODEL_TYPE"),
 
-		TTSAppID:      strings.TrimSpace(utils.GetEnv("TTS_APPID")),
-		TTSSecretID:   strings.TrimSpace(utils.GetEnv("TTS_SECRET_ID")),
-		TTSSecretKey:  strings.TrimSpace(utils.GetEnv("TTS_SECRET_KEY")),
+		TTSAppID:      utils.GetEnv("TTS_APPID"),
+		TTSSecretID:   utils.GetEnv("TTS_SECRET_ID"),
+		TTSSecretKey:  utils.GetEnv("TTS_SECRET_KEY"),
 		TTSVoiceType:  voiceType,
 		TTSSpeed:      ttsSpeed,
 		TTSSampleRate: sr,
 	}
 }
 
+// llmAPIURLForProvider returns the apiUrl argument for llm.NewLLMProvider (OpenAI-compatible base URL or Alibaba App ID).
+func llmAPIURLForProvider(env VoiceEnv) string {
+	if strings.EqualFold(env.LLMProvider, "alibaba") {
+		return env.LLMAppID
+	}
+	return env.LLMBaseURL
+}
+
 func (e VoiceEnv) readyForVoice() bool {
 	llmReady := e.LLMAPIKey != "" && e.LLMBaseURL != ""
 	if strings.EqualFold(e.LLMProvider, "alibaba") {
 		// Alibaba provider in pkg/llm consumes AppID in apiUrl slot.
-		llmReady = e.LLMAPIKey != "" && strings.TrimSpace(e.LLMAppID) != ""
+		llmReady = e.LLMAPIKey != "" && e.LLMAppID != ""
 	}
 	return e.ASRAppID != "" && e.ASRSecretID != "" && e.ASRSecretKey != "" &&
 		llmReady &&
@@ -184,7 +179,7 @@ func AttachVoicePipeline(ctx context.Context, cs *sipSession.CallSession, lg *za
 	if cs == nil {
 		return nil
 	}
-	env := voiceEnvFromProcess()
+	env := VoiceEnvFromProcess()
 	if !env.readyForVoice() {
 		if lg != nil {
 			lg.Info("sip voice pipeline skipped (missing ASR/LLM/TTS env)")
@@ -205,7 +200,7 @@ func AttachVoicePipeline(ctx context.Context, cs *sipSession.CallSession, lg *za
 }
 
 func sipHangupPhrasesFromEnv() []string {
-	s := strings.TrimSpace(utils.GetEnv("SIP_AI_HANGUP_PHRASES"))
+	s := utils.GetEnv("SIP_AI_HANGUP_PHRASES")
 	if s == "" {
 		return []string{"再见", "拜拜", "挂断", "先挂了", "挂了啊"}
 	}
@@ -225,7 +220,7 @@ func sipHangupPhrasesFromEnv() []string {
 // sipASRTriggerPartialEnabled controls whether non-final ASR hypotheses can trigger LLM.
 // Default false to avoid premature responses ("抢话") that sound like stutter/choppy dialog.
 func sipASRTriggerPartialEnabled() bool {
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv("SIP_ASR_TRIGGER_PARTIAL")))
+	v := strings.ToLower(utils.GetEnv("SIP_ASR_TRIGGER_PARTIAL"))
 	switch v {
 	case "1", "true", "yes", "on":
 		return true
@@ -238,7 +233,7 @@ func sipASRTriggerPartialEnabled() bool {
 // hypotheses but delay/omit final marks on noisy phone lines.
 // <=0 disables timeout trigger.
 func sipASRPartialTimeoutMs() int {
-	s := strings.TrimSpace(utils.GetEnv("SIP_ASR_PARTIAL_TIMEOUT_MS"))
+	s := utils.GetEnv("SIP_ASR_PARTIAL_TIMEOUT_MS")
 	if s == "" {
 		return 1200
 	}
@@ -259,7 +254,7 @@ func sipASRPartialTimeoutMs() int {
 // Default 2000 ms gives the RTP layer time to learn symmetric NAT (remote send target updates from first packet).
 // Set SIP_WELCOME_WAIT_FIRST_RTP_MS=0 to skip waiting (e.g. same-LAN tests).
 func welcomeWaitFirstRTPMs() int {
-	s := strings.TrimSpace(utils.GetEnv("SIP_WELCOME_WAIT_FIRST_RTP_MS"))
+	s := utils.GetEnv("SIP_WELCOME_WAIT_FIRST_RTP_MS")
 	if s == "" {
 		return 2000
 	}
@@ -338,10 +333,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		llmModel = "qwen-plus"
 	}
 	systemPrompt := popSIPCallSystemPrompt(cs.CallID)
-	llmEndpointOrAppID := env.LLMBaseURL
-	if strings.EqualFold(env.LLMProvider, "alibaba") {
-		llmEndpointOrAppID = strings.TrimSpace(env.LLMAppID)
-	}
+	llmEndpointOrAppID := llmAPIURLForProvider(env)
 	llmProvider, err := llm.NewLLMProvider(ctx, env.LLMProvider, env.LLMAPIKey, llmEndpointOrAppID, systemPrompt)
 	if err != nil {
 		return fmt.Errorf("sip conversation: llm provider init: %w", err)
@@ -820,7 +812,7 @@ func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger,
 	if ms == nil {
 		return fmt.Errorf("media session is nil")
 	}
-	path := strings.TrimSpace(utils.GetEnv("SIP_WELCOME_WAV_PATH"))
+	path := utils.GetEnv("SIP_WELCOME_WAV_PATH")
 	if path == "" {
 		path = "scripts/welcome.wav"
 	}
@@ -1169,7 +1161,7 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 			lg = zap.NewNop()
 		}
 	}
-	env := voiceEnvFromProcess()
+	env := VoiceEnvFromProcess()
 	if env.TTSAppID == "" || env.TTSSecretID == "" || env.TTSSecretKey == "" {
 		return fmt.Errorf("sip conversation: missing TTS credentials")
 	}

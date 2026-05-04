@@ -94,16 +94,16 @@ func attachGatewayMedia(sess *dialogSession) error {
 	if sess == nil || sess.cs == nil {
 		return errors.New("voicedialog gateway: nil session")
 	}
-	asrAppID := strings.TrimSpace(utils.GetEnv("ASR_APPID"))
-	asrSecretID := strings.TrimSpace(utils.GetEnv("ASR_SECRET_ID"))
-	asrSecretKey := strings.TrimSpace(utils.GetEnv("ASR_SECRET_KEY"))
-	asrModelType := strings.TrimSpace(utils.GetEnv("ASR_MODEL_TYPE"))
-	ttsAppID := strings.TrimSpace(utils.GetEnv("TTS_APPID"))
-	ttsSecretID := strings.TrimSpace(utils.GetEnv("TTS_SECRET_ID"))
-	ttsSecretKey := strings.TrimSpace(utils.GetEnv("TTS_SECRET_KEY"))
-	ttsVoiceType, _ := strconv.ParseInt(strings.TrimSpace(utils.GetEnv("TTS_VOICE_TYPE")), 10, 64)
-	ttsSpeed, _ := strconv.ParseInt(strings.TrimSpace(utils.GetEnv("TTS_SPEED")), 10, 64)
-	ttsSampleRate, _ := strconv.Atoi(strings.TrimSpace(utils.GetEnv("TTS_SAMPLE_RATE")))
+	asrAppID := utils.GetEnv("ASR_APPID")
+	asrSecretID := utils.GetEnv("ASR_SECRET_ID")
+	asrSecretKey := utils.GetEnv("ASR_SECRET_KEY")
+	asrModelType := utils.GetEnv("ASR_MODEL_TYPE")
+	ttsAppID := utils.GetEnv("TTS_APPID")
+	ttsSecretID := utils.GetEnv("TTS_SECRET_ID")
+	ttsSecretKey := utils.GetEnv("TTS_SECRET_KEY")
+	ttsVoiceType, _ := strconv.ParseInt(utils.GetEnv("TTS_VOICE_TYPE"), 10, 64)
+	ttsSpeed, _ := strconv.ParseInt(utils.GetEnv("TTS_SPEED"), 10, 64)
+	ttsSampleRate, _ := strconv.Atoi(utils.GetEnv("TTS_SAMPLE_RATE"))
 	if ttsSampleRate <= 0 {
 		ttsSampleRate = 16000
 	}
@@ -381,6 +381,19 @@ func (sess *dialogSession) takePendingLLMMeta() (model string, llmWallMs int) {
 	return model, llmWallMs
 }
 
+func (sess *dialogSession) markTransferAfterNextTTS() {
+	if sess != nil {
+		sess.transferAfterNextTTS.Store(true)
+	}
+}
+
+func (sess *dialogSession) consumeTransferAfterNextTTS() bool {
+	if sess == nil {
+		return false
+	}
+	return sess.transferAfterNextTTS.Swap(false)
+}
+
 func (sess *dialogSession) handleTTSSpeak(text, utteranceID string) {
 	sess.ttsSpeakMu.Lock()
 	defer sess.ttsSpeakMu.Unlock()
@@ -467,6 +480,12 @@ func (sess *dialogSession) handleTTSSpeak(text, utteranceID string) {
 			TTSMs:       ttsMs,
 			PipelineMs:  int(time.Since(pipelineT0).Milliseconds()),
 		})
+		if sess.consumeTransferAfterNextTTS() {
+			logger.Info("voicedialog: transfer after assistant TTS finished",
+				zap.String(KeyCallID, sess.meta.CallID),
+			)
+			go conversation.TriggerTransferToAgent(context.Background(), sess.meta.CallID, logger.Lg)
+		}
 	}
 }
 

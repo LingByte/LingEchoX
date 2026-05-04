@@ -90,7 +90,8 @@ func GetIntEnvWithDefault(key string, defaultValue int) int {
 func LookupEnv(key string) (value string, found bool) {
 	key = strings.ToUpper(key)
 	if v, ok := os.LookupEnv(key); ok {
-		if strings.TrimSpace(v) != "" {
+		v = strings.TrimSpace(v)
+		if v != "" {
 			if envCache != nil {
 				envCache.Add(key, v)
 			}

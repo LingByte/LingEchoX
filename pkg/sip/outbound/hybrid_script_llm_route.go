@@ -56,17 +56,17 @@ func listenRouteLLMEnabled() bool {
 	if isTruthyEnv(utils.GetEnv(constants.EnvCHECKLLMRouteDisabled)) {
 		return false
 	}
-	prov := strings.ToLower(strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMProvider)))
+	prov := strings.ToLower(utils.GetEnv(constants.EnvCHECKLLMProvider))
 	if prov != "" && prov != "openai" {
 		return false
 	}
-	if strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMAPIKey)) == "" {
+	if utils.GetEnv(constants.EnvCHECKLLMAPIKey) == "" {
 		return false
 	}
-	if strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMBaseURL)) == "" {
+	if utils.GetEnv(constants.EnvCHECKLLMBaseURL) == "" {
 		return false
 	}
-	if strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMModel)) == "" {
+	if utils.GetEnv(constants.EnvCHECKLLMModel) == "" {
 		return false
 	}
 	return true
@@ -109,7 +109,7 @@ func routeLegacyJSON() bool {
 
 func routeMaxCompletionTokens() int {
 	def := 32
-	if s := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMRouteMaxTokens)); s != "" {
+	if s := utils.GetEnv(constants.EnvCHECKLLMRouteMaxTokens); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n >= 8 && n <= 128 {
 			return n
 		}
@@ -118,11 +118,11 @@ func routeMaxCompletionTokens() int {
 }
 
 func pickNextWithLLM(ctx context.Context, leg EstablishedLeg, step HybridStep, userText string, allowed map[string]bool) (string, error) {
-	apiKey := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMAPIKey))
-	baseURL := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMBaseURL))
-	model := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMModel))
+	apiKey := utils.GetEnv(constants.EnvCHECKLLMAPIKey)
+	baseURL := utils.GetEnv(constants.EnvCHECKLLMBaseURL)
+	model := utils.GetEnv(constants.EnvCHECKLLMModel)
 	ms := 12000
-	if s := strings.TrimSpace(utils.GetEnv(constants.EnvCHECKLLMRouteTimeoutMS)); s != "" {
+	if s := utils.GetEnv(constants.EnvCHECKLLMRouteTimeoutMS); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n >= 2000 && n <= 120000 {
 			ms = n
 		}

@@ -1,4 +1,4 @@
-package sipserver
+package persist
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/LingByte/lingstorage-sdk-go"
@@ -18,32 +17,32 @@ import (
 	"gorm.io/gorm"
 )
 
-// Store persists SIPCall (including AI dialog JSON in `turns`) and uploads call recordings via config.GlobalStore.
-type Store struct {
+// CallStore persists SIPCall (including AI dialog JSON in `turns`) and uploads call recordings via config.GlobalStore.
+type CallStore struct {
 	db *gorm.DB
 	lg *zap.Logger
 }
 
-func New(db *gorm.DB, lg *zap.Logger) *Store {
+func NewCallStore(db *gorm.DB, lg *zap.Logger) *CallStore {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
-	return &Store{db: db, lg: lg}
+	return &CallStore{db: db, lg: lg}
 }
 
 // OnInvite upserts SIPCall in ringing state.
-func (s *Store) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
+func (s *CallStore) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
 	if s == nil || s.db == nil || p.CallID == "" {
 		return
 	}
 	now := time.Now()
 	dir := p.Direction
 	if dir == "" {
-		dir = persist.DirectionInbound
+		dir = DirectionInbound
 	}
-	row, err := persist.FindSIPCallByCallID(ctx, s.db, p.CallID)
+	row, err := FindSIPCallByCallID(ctx, s.db, p.CallID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		row = persist.NewSIPCallRinging(
+		row = NewSIPCallRinging(
 			p.CallID, p.From, p.To, p.CSeqInvite, p.RemoteSig, dir,
 			p.RemoteRTP, p.LocalRTP, p.PayloadType, p.Codec, p.ClockRate, now,
 		)
@@ -56,23 +55,23 @@ func (s *Store) OnInvite(ctx context.Context, p sipServer.InvitePersistParams) {
 		s.lg.Warn("sippersist invite lookup", zap.String("call_id", p.CallID), zap.Error(err))
 		return
 	}
-	_ = s.db.WithContext(ctx).Model(&row).Updates(persist.SIPCallInviteRefreshUpdateMap(
+	_ = s.db.WithContext(ctx).Model(&row).Updates(SIPCallInviteRefreshUpdateMap(
 		p.From, p.To, p.RemoteSig, p.RemoteRTP, p.LocalRTP, p.Codec, p.PayloadType, p.ClockRate, now,
 	)).Error
 }
 
 // OnEstablished marks call established (ACK / media start).
-func (s *Store) OnEstablished(ctx context.Context, callID string) {
+func (s *CallStore) OnEstablished(ctx context.Context, callID string) {
 	if s == nil || s.db == nil || callID == "" {
 		return
 	}
 	now := time.Now()
-	_ = s.db.WithContext(ctx).Model(&persist.SIPCall{}).Where("call_id = ?", callID).Updates(persist.SIPCallEstablishedUpdateMap(now)).Error
+	_ = s.db.WithContext(ctx).Model(&SIPCall{}).Where("call_id = ?", callID).Updates(SIPCallEstablishedUpdateMap(now)).Error
 }
 
 // OnBye finalizes SIPCall, optionally uploads SN3/SN2 recording as stereo WAV (L=user R=AI per-leg decode),
 // falling back to legacy mono mix, via config.GlobalStore.
-func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
+func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	if s == nil || s.db == nil || p.CallID == "" {
 		return
 	}
@@ -85,15 +84,15 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	}
 
 	sipAgent, webSeat := conversation.TakeInboundTransferFlags(callID)
-	endStatus := persist.SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
+	endStatus := SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
 
 	now := time.Now()
 	durationSec := 0
-	var call persist.SIPCall
+	var call SIPCall
 	if err := s.db.WithContext(ctx).Where("call_id = ?", callID).First(&call).Error; err == nil {
-		durationSec = persist.SIPCallDurationSince(call.AckAt, call.InviteAt, now)
+		durationSec = SIPCallDurationSince(call.AckAt, call.InviteAt, now)
 	}
-	updates := persist.SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
+	updates := SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
 	if bi := strings.ToLower(strings.TrimSpace(initiator)); bi != "" {
 		updates["bye_initiator"] = bi
 	}
@@ -152,7 +151,7 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 		}
 		if len(wav) > 0 {
-			key := fmt.Sprintf("sip/recordings/%s_%d.wav", sanitizeKey(callID), now.Unix())
+			key := fmt.Sprintf("sip/recordings/%s_%d.wav", sanitizeRecordingKey(callID), now.Unix())
 			res, err := config.GlobalStore.UploadBytes(&lingstorage.UploadBytesRequest{
 				Bucket:   config.GlobalConfig.Services.Storage.Bucket,
 				Data:     wav,
@@ -167,8 +166,7 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				s.lg.Info("sippersist recording uploaded", zap.String("call_id", callID), zap.String("codec", codecName))
 			}
 		} else if len(raw) >= 3 && raw[0] == 'S' && raw[1] == 'N' && (raw[2] == '3' || raw[2] == '2' || raw[2] == '1') {
-			// WAV mux/decode failed or unsupported codec branch — still persist tagged RTP blob for forensics.
-			snKey := fmt.Sprintf("sip/recordings/%s_%d.sn2", sanitizeKey(callID), now.Unix())
+			snKey := fmt.Sprintf("sip/recordings/%s_%d.sn2", sanitizeRecordingKey(callID), now.Unix())
 			res, err := config.GlobalStore.UploadBytes(&lingstorage.UploadBytesRequest{
 				Bucket:   config.GlobalConfig.Services.Storage.Bucket,
 				Data:     raw,
@@ -190,14 +188,14 @@ func (s *Store) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 			zap.String("call_id", callID), zap.String("codec", codecName))
 	}
 
-	if err := s.db.WithContext(ctx).Model(&persist.SIPCall{}).Where("call_id = ?", callID).Updates(updates).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&SIPCall{}).Where("call_id = ?", callID).Updates(updates).Error; err != nil {
 		s.lg.Warn("sippersist bye update", zap.String("call_id", callID), zap.Error(err))
 	}
 
 }
 
 // SaveConversationTurn appends one ASR→LLM turn onto sip_calls.turns for callID (creates a minimal call row if missing).
-func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conversation.DialogTurn) {
+func (s *CallStore) SaveConversationTurn(ctx context.Context, callID string, t conversation.DialogTurn) {
 	if s == nil || s.db == nil || callID == "" {
 		return
 	}
@@ -210,7 +208,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conve
 	if !t.At.IsZero() {
 		now = t.At
 	}
-	turn := persist.SIPCallDialogTurn{
+	turn := SIPCallDialogTurn{
 		ASRText:      userText,
 		LLMText:      assistantText,
 		ASRProvider:  t.ASRProvider,
@@ -226,16 +224,16 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conve
 		PipelineMs:   t.PipelineMs,
 	}
 
-	row, err := persist.FindActiveSIPCallByCallID(ctx, s.db, callID)
+	row, err := FindActiveSIPCallByCallID(ctx, s.db, callID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		turnsBytes, jErr := persist.MarshalSIPCallTurns([]persist.SIPCallDialogTurn{turn})
+		turnsBytes, jErr := MarshalSIPCallTurns([]SIPCallDialogTurn{turn})
 		if jErr != nil {
 			s.lg.Warn("sippersist call turns marshal failed", zap.String("call_id", callID), zap.Error(jErr))
 			return
 		}
-		row = persist.NewSIPCallMinimalEstablishedWithFirstTurn(callID, turnsBytes, now)
+		row = NewSIPCallMinimalEstablishedWithFirstTurn(callID, turnsBytes, now)
 		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-			row, err = persist.FindActiveSIPCallByCallID(ctx, s.db, callID)
+			row, err = FindActiveSIPCallByCallID(ctx, s.db, callID)
 			if err != nil {
 				s.lg.Warn("sippersist call create/first for turn", zap.String("call_id", callID), zap.Error(err))
 				return
@@ -252,7 +250,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conve
 		return
 	}
 
-	upd, turnCount, uErr := persist.SIPCallAppendTurnUpdateMap(row, turn, now)
+	upd, turnCount, uErr := SIPCallAppendTurnUpdateMap(row, turn, now)
 	if uErr != nil {
 		s.lg.Warn("sippersist call turns merge failed", zap.String("call_id", callID), zap.Error(uErr))
 		return
@@ -270,7 +268,7 @@ func (s *Store) SaveConversationTurn(ctx context.Context, callID string, t conve
 	}
 }
 
-func sanitizeKey(s string) string {
+func sanitizeRecordingKey(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "call"

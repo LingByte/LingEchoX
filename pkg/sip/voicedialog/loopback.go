@@ -86,7 +86,7 @@ func (h *Hub) runInboundLoopbackWS(callID string) {
 func runLoopbackAssistant(callID string, c *websocket.Conn) {
 	defer func() { _ = c.Close() }()
 
-	env := conversation.VoiceEnvForVoicedialogLoopback()
+	env := conversation.VoiceEnvFromProcess()
 	if !env.ReadyForVoicedialogLoopbackLLM() {
 		logger.Warn("voicedialog loopback: LLM env incomplete — drain WS only (configure LLM_PROVIDER + LLM_APIKEY + LLM_BASEURL or Alibaba APP_ID, same as outbound SIP)",
 			zap.String(KeyCallID, callID),
@@ -202,7 +202,22 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 					zap.Int("reply_len", len([]rune(reply))),
 				)
 				if conversation.VoicedialogShouldTriggerTransfer(callID, user, prov) {
-					conversation.TriggerTransferToAgent(context.Background(), callID, logger.Lg)
+					deferred := false
+					if defaultHub != nil {
+						defaultHub.mu.Lock()
+						ds := defaultHub.sessions[strings.TrimSpace(callID)]
+						defaultHub.mu.Unlock()
+						if ds != nil {
+							ds.markTransferAfterNextTTS()
+							deferred = true
+							logger.Info("voicedialog loopback: transfer deferred until TTS completes",
+								zap.String(KeyCallID, callID),
+							)
+						}
+					}
+					if !deferred {
+						conversation.TriggerTransferToAgent(context.Background(), callID, logger.Lg)
+					}
 				}
 			}(text)
 

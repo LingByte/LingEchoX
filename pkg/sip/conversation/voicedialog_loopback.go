@@ -10,40 +10,25 @@ import (
 	"go.uber.org/zap"
 )
 
-// VoiceEnvForVoicedialogLoopback returns env vars used by the SIP voice pipeline (LLM_* same as outbound).
-func VoiceEnvForVoicedialogLoopback() VoiceEnv {
-	return voiceEnvFromProcess()
-}
-
 // ReadyForVoicedialogLoopbackLLM is true when LLM_* env is sufficient for inbound voicedialog loopback (no ASR/TTS check).
 func (e VoiceEnv) ReadyForVoicedialogLoopbackLLM() bool {
-	prov := strings.TrimSpace(e.LLMProvider)
-	if prov == "" {
+	if strings.TrimSpace(e.LLMProvider) == "" || e.LLMAPIKey == "" {
 		return false
 	}
-	llmReady := e.LLMAPIKey != "" && e.LLMBaseURL != ""
-	if strings.EqualFold(prov, "alibaba") {
-		llmReady = e.LLMAPIKey != "" && strings.TrimSpace(e.LLMAppID) != ""
+	if strings.EqualFold(e.LLMProvider, "alibaba") {
+		return e.LLMAppID != ""
 	}
-	return llmReady
+	return e.LLMBaseURL != ""
 }
 
 // NewVoicedialogLoopbackLLMProvider builds one LLM session per inbound call (multi-turn history inside provider).
 func NewVoicedialogLoopbackLLMProvider(ctx context.Context, callID string, lg *zap.Logger) (llm.LLMProvider, string, func(), error) {
-	env := voiceEnvFromProcess()
+	env := VoiceEnvFromProcess()
 	if !env.ReadyForVoicedialogLoopbackLLM() {
 		return nil, "", nil, fmt.Errorf("voicedialog loopback LLM: incomplete LLM env (LLM_PROVIDER / LLM_APIKEY / LLM_BASEURL or Alibaba APP_ID)")
 	}
-	model := strings.TrimSpace(env.LLMModel)
-	if model == "" {
-		model = "qwen-plus"
-	}
 	systemPrompt := popSIPCallSystemPrompt(callID)
-	endpoint := strings.TrimSpace(env.LLMBaseURL)
-	if strings.EqualFold(env.LLMProvider, "alibaba") {
-		endpoint = strings.TrimSpace(env.LLMAppID)
-	}
-	p, err := llm.NewLLMProvider(ctx, env.LLMProvider, env.LLMAPIKey, endpoint, systemPrompt)
+	p, err := llm.NewLLMProvider(ctx, env.LLMProvider, env.LLMAPIKey, llmAPIURLForProvider(env), systemPrompt)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -54,7 +39,7 @@ func NewVoicedialogLoopbackLLMProvider(ctx context.Context, callID string, lg *z
 		registerSIPTransferTool(p, callID, lg.Named("voicedialog-loopback"))
 	}
 	cleanup := func() { p.Hangup() }
-	return p, model, cleanup, nil
+	return p, env.LLMModel, cleanup, nil
 }
 
 // VoicedialogLoopbackLLMQuery runs one user turn (provider keeps conversation history).

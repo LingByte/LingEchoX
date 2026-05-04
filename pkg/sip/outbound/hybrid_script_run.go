@@ -46,7 +46,7 @@ type RuntimeHooks struct {
 	OnSay func(ctx context.Context, leg EstablishedLeg, prompt string) error
 	// notBefore marks the moment listen step starts; consumers should ignore older ASR turns.
 	// step is the current listen HybridStep (for DTMF bindings).
-	OnListen func(ctx context.Context, leg EstablishedLeg, timeout time.Duration, notBefore time.Time, step HybridStep) (ListenResult, error)
+	OnListen    func(ctx context.Context, leg EstablishedLeg, timeout time.Duration, notBefore time.Time, step HybridStep) (ListenResult, error)
 	OnLLMReply  func(ctx context.Context, leg EstablishedLeg, userText, instruction string) (string, error)
 	IsEndIntent func(input string, script HybridScript) bool
 }
@@ -304,7 +304,7 @@ func (r *HybridScriptRunner) finishWithRouteApology(ctx context.Context, leg Est
 			zap.String("step_id", step.ID),
 			zap.Error(routeErr))
 	}
-	msg := strings.TrimSpace(utils.GetEnv(constants.EnvSIPScriptLLMFailPrompt))
+	msg := utils.GetEnv(constants.EnvSIPScriptLLMFailPrompt)
 	if msg == "" {
 		msg = "对不起，打扰了。"
 	}
@@ -364,19 +364,14 @@ func estimatePromptTailMS(prompt string) int {
 	if prompt == "" {
 		return 0
 	}
-	v := strings.TrimSpace(strings.ToLower(utils.GetEnv(constants.EnvSIPScriptListenAfterTTSTail)))
-	switch v {
-	case "0", "false", "off", "no":
-		return 0
-	}
 	maxMS := 2000
-	if s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPScriptListenTailMSMax)); s != "" {
+	if s := utils.GetEnv(constants.EnvSIPScriptListenTailMSMax); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
 			maxMS = n
 		}
 	}
 	minMS := 400
-	if s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPScriptListenTailMSMin)); s != "" {
+	if s := utils.GetEnv(constants.EnvSIPScriptListenTailMSMin); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
 			minMS = n
 		}

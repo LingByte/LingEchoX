@@ -315,7 +315,7 @@ func UpsertWebSeatSIPPresence(db *gorm.DB, operatorKey, seatDisplayName string) 
 		return nil
 	}
 	user := sanitizeWebSeatUsername(op)
-	dom := strings.TrimSpace(utils.GetEnv("CONVERSATION_WEBSEAT_SIP_DOMAIN"))
+	dom := utils.GetEnv("CONVERSATION_WEBSEAT_SIP_DOMAIN")
 	if dom == "" {
 		dom = "webseat"
 	}

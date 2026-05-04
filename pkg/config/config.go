@@ -29,6 +29,7 @@ type Config struct {
 }
 
 type SIPConfig struct {
+	SIPPort            int     `env:"SIP_PORT"`
 	SIPVADBargeIn      bool    `env:"SIP_VAD_BARGE_IN"`
 	SIPVADThreshold    float64 `env:"SIP_VAD_THRESHOLD"`
 	SIPVADConsecFrames int     `env:"SIP_VAD_CONSEC_FRAMES"`

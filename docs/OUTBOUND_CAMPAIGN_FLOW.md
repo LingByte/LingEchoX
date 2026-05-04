@@ -195,13 +195,7 @@ sequenceDiagram
 
 ---
 
-## 8. 与「环境变量自动外呼」的区别
-
-`internal/sipserver/sipapp.go` 在解析到 **`SIP_TARGET_NUMBER` + 完整 outbound 目标**且 **`AutoDialFromEnv()`** 为真时，会 **单独 `go outMgr.Dial(..., ScenarioCampaign, MediaProfileAI)`**，**不经过** `SIPCampaign` 表与 Worker。文档上可与「任务外呼」区分，避免混淆。
-
----
-
-## 9. 关键源文件索引
+## 8. 关键源文件索引
 
 | 模块 | 路径 |
 |------|------|
@@ -214,7 +208,7 @@ sequenceDiagram
 
 ---
 
-## 10. 改造时可优先关注的「接缝」
+## 9. 改造时可优先关注的「接缝」
 
 1. **Worker 模型**：定时全表扫 `running` + 每任务 `limit`，无独立队列中间件；扩缩、公平性、延迟调度可在此动刀。  
 2. **重试策略**：`retry_schedule` 与 `computeNextRetry` 不一致。  

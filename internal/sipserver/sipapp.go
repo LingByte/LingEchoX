@@ -13,6 +13,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/sip/server"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
@@ -27,7 +28,7 @@ type Config struct {
 	Host    string
 	Port    int
 	LocalIP string
-	DB      *gorm.DB // DB when non-nil is reused (e.g. same pool as the web app). When nil, a connection is opened from GlobalConfig if DSN is set.
+	DB      *gorm.DB // Required: same pool as the HTTP app (REGISTER, sip_calls, campaign worker).
 }
 
 // Embedded holds started subsystems for graceful shutdown.
@@ -44,9 +45,9 @@ func (e *Embedded) CampaignService() *CampaignService {
 	return e.campaignSvc
 }
 
-func resolveOutboundDialTarget(store *GormStore) (outbound.DialTarget, bool) {
+func resolveOutboundDialTarget(store *persist.GormStore) (outbound.DialTarget, bool) {
 	if store != nil {
-		n := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTargetNumber))
+		n := utils.GetEnv(constants.EnvSIPTargetNumber)
 		if n != "" {
 			if dt, ok := store.DialTargetForUsername(context.Background(), n); ok {
 				return dt, true
@@ -58,14 +59,7 @@ func resolveOutboundDialTarget(store *GormStore) (outbound.DialTarget, bool) {
 
 // httpDialHostPortForVoicedialog maps HTTP listen addr (e.g. :8080, 0.0.0.0:8080) to a loopback host:port for ws dial.
 func httpDialHostPortForVoicedialog(addr string) string {
-	addr = strings.TrimSpace(addr)
-	if addr == "" {
-		return "127.0.0.1:8080"
-	}
-	if strings.HasPrefix(addr, ":") {
-		return "127.0.0.1" + addr
-	}
-	host, port, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort("127.0.0.1" + addr)
 	if err != nil {
 		return "127.0.0.1:8080"
 	}
@@ -75,27 +69,16 @@ func httpDialHostPortForVoicedialog(addr string) string {
 	return net.JoinHostPort(host, port)
 }
 
-func sipDSNForLog(dsn string) string {
-	dsn = strings.TrimSpace(dsn)
-	if dsn == "" {
-		return "(empty)"
-	}
-	const max = 220
-	if len(dsn) > max {
-		return fmt.Sprintf("%s…(len=%d)", dsn[:max], len(dsn))
-	}
-	return dsn
-}
-
 // Start wires outbound manager, SIP server, DB persistence, WebSeat hub, and starts UDP.
 func Start(cfg Config) (*Embedded, error) {
-	SetRegisterOutboundRequestURIServerPort(cfg.Port)
-	// SDP c=/Call-ID host: CLI (cfg.LocalIP) first; empty → SIP_LOCAL_IP (.env / process env).
-	// If both miss, outbound/server still default to 127.0.0.1 inside their packages.
-	localIP := strings.TrimSpace(cfg.LocalIP)
-	if localIP == "" {
-		localIP = strings.TrimSpace(utils.GetEnv("SIP_LOCAL_IP"))
+	if cfg.DB == nil {
+		return nil, fmt.Errorf("sipapp: Config.DB is required")
 	}
+	acdDB := cfg.DB
+
+	persist.SetRegisterOutboundRequestURIServerPort(cfg.Port)
+	// SDP c=/Call-ID host: cfg.LocalIP (e.g. cmd/server -sip-local-ip). Empty → 127.0.0.1 in server/outbound.
+	localIP := strings.TrimSpace(cfg.LocalIP)
 
 	sipHost := cfg.Host
 	if sipHost == "0.0.0.0" {
@@ -103,10 +86,9 @@ func Start(cfg Config) (*Embedded, error) {
 	}
 
 	var sipServerPtr *server.SIPServer
-	var sipRegStore *GormStore
-	var sipCallPersist *Store
+	var sipRegStore *persist.GormStore
+	var sipCallPersist *persist.CallStore
 	var campaignSvc *CampaignService
-	var acdDB *gorm.DB
 
 	callerUser, callerDisplay := config.CallerIdentityFromEnv()
 	outMgr := outbound.NewManager(outbound.ManagerConfig{
@@ -188,71 +170,25 @@ func Start(cfg Config) (*Embedded, error) {
 		outMgr:    outMgr,
 	}
 
-	if cfg.DB != nil {
-		acdDB = cfg.DB
-		campaignSvc = NewCampaignService(cfg.DB)
-		sipRegStore = NewGormStore(cfg.DB)
-		campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
-			return sipRegStore.DialTargetForUsername(ctx, phone)
-		})
-		campaignSvc.StartWorker(outMgr)
-		sipServerPtr.SetRegisterStore(sipRegStore)
-		sipCallPersist = New(cfg.DB, logger.Lg)
-		sipServerPtr.SetCallPersist(sipCallPersist)
-		conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
-			sipCallPersist.SaveConversationTurn(ctx, callID, turn)
-		})
-		conversation.SetTransferDialTargetResolver(func(ctx context.Context, inboundCallID string) (outbound.DialTarget, bool) {
-			return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID)
-		})
-		if logger.Lg != nil {
-			logger.Lg.Info("sipapp: using shared database handle from web server")
-		}
-		em.campaignSvc = campaignSvc
-	} else if config.GlobalConfig != nil {
-		driver := strings.TrimSpace(config.GlobalConfig.Database.Driver)
-		dsn := strings.TrimSpace(config.GlobalConfig.Database.DSN)
-		if dsn != "" {
-			if logger.Lg != nil {
-				logger.Lg.Info("sipapp: opening database for persistence",
-					zap.String("driver", driver),
-					zap.String("dsn", sipDSNForLog(dsn)),
-				)
-			}
-			db, err := utils.InitDatabase(nil, driver, dsn)
-			if err != nil {
-				if logger.Lg != nil {
-					logger.Lg.Warn("sipapp: database unavailable, REGISTER / dialog persistence disabled", zap.Error(err))
-				}
-			} else {
-				acdDB = db
-				campaignSvc = NewCampaignService(db)
-				sipRegStore = NewGormStore(db)
-				campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
-					return sipRegStore.DialTargetForUsername(ctx, phone)
-				})
-				campaignSvc.StartWorker(outMgr)
-				sipServerPtr.SetRegisterStore(sipRegStore)
-				sipCallPersist = New(db, logger.Lg)
-				sipServerPtr.SetCallPersist(sipCallPersist)
-				conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
-					sipCallPersist.SaveConversationTurn(ctx, callID, turn)
-				})
-				conversation.SetTransferDialTargetResolver(func(ctx context.Context, inboundCallID string) (outbound.DialTarget, bool) {
-					return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID)
-				})
-				if logger.Lg != nil {
-					logger.Lg.Info("sipapp: database persistence enabled",
-						zap.String("dsn", sipDSNForLog(dsn)),
-					)
-				}
-				em.campaignSvc = campaignSvc
-			}
-		} else if logger.Lg != nil {
-			logger.Lg.Warn("sipapp: database DSN is empty in config — set DSN / DB_DRIVER like cmd/server")
-		}
+	campaignSvc = NewCampaignService(cfg.DB)
+	sipRegStore = persist.NewGormStore(cfg.DB)
+	campaignSvc.SetDialTargetResolver(func(ctx context.Context, phone string) (outbound.DialTarget, bool) {
+		return sipRegStore.DialTargetForUsername(ctx, phone)
+	})
+	campaignSvc.StartWorker(outMgr)
+	sipServerPtr.SetRegisterStore(sipRegStore)
+	sipCallPersist = persist.NewCallStore(cfg.DB, logger.Lg)
+	sipServerPtr.SetCallPersist(sipCallPersist)
+	conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
+		sipCallPersist.SaveConversationTurn(ctx, callID, turn)
+	})
+	conversation.SetTransferDialTargetResolver(func(ctx context.Context, inboundCallID string) (outbound.DialTarget, bool) {
+		return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID)
+	})
+	if logger.Lg != nil {
+		logger.Lg.Info("sipapp: SIP persistence and campaign worker wired to application database pool")
 	}
-
+	em.campaignSvc = campaignSvc
 	outMgr.BindSender(sipServerPtr)
 	conversation.SetTransferDialer(outMgr)
 	conversation.SetInboundSessionLookup(func(callID string) *sipSession.CallSession {
@@ -272,14 +208,11 @@ func Start(cfg Config) (*Embedded, error) {
 			if logger.Lg != nil {
 				logger.Lg.Info("sip: hangup outbound BYE sent", zap.String("call_id", callID))
 			}
-			// Finalize local leg persistence immediately for outbound calls:
-			// OnBye/end_status/recording_url are otherwise skipped when we only get 200 to BYE.
 			sipServerPtr.HangupInboundCall(callID)
 			return
 		}
 		sipServerPtr.HangupInboundCall(callID)
 	})
-
 	webseat.InitDefault(webseat.Config{
 		RemoveCallSession:     sipServerPtr.RemoveCallSession,
 		ForgetUASDialog:       sipServerPtr.ForgetUASDialog,
@@ -306,21 +239,8 @@ func Start(cfg Config) (*Embedded, error) {
 		},
 	})
 	conversation.SetWebSeatTransfer(conversation.StartWebSeatHandoff)
-
-	httpAddr := ":8082"
-	apiPrefix := "/api"
-	useTLS := false
-	if config.GlobalConfig != nil {
-		if strings.TrimSpace(config.GlobalConfig.Server.Addr) != "" {
-			httpAddr = config.GlobalConfig.Server.Addr
-		}
-		if strings.TrimSpace(config.GlobalConfig.Server.APIPrefix) != "" {
-			apiPrefix = config.GlobalConfig.Server.APIPrefix
-		}
-		useTLS = config.GlobalConfig.Server.SSLEnabled
-	}
-	loopDialHostPort := httpDialHostPortForVoicedialog(httpAddr)
-
+	useTLS := config.GlobalConfig.Server.SSLEnabled
+	loopDialHostPort := httpDialHostPortForVoicedialog(config.GlobalConfig.Server.Addr)
 	voicedialog.InitDefault(voicedialog.Config{
 		HangupInbound: func(callID string) {
 			if sipServerPtr != nil {
@@ -331,14 +251,13 @@ func Start(cfg Config) (*Embedded, error) {
 		LoopbackUseTLS:                useTLS,
 		LoopbackTLSInsecureSkipVerify: false,
 		LoopbackHTTPHostPort:          loopDialHostPort,
-		APIPrefix:                     apiPrefix,
+		APIPrefix:                     config.GlobalConfig.Server.APIPrefix,
 	})
 
 	logger.Info("sipapp: inbound SIP legs use voicedialog WebSocket bridge (HTTP); outbound AI uses embedded pipeline",
 		zap.Bool("voicedialog_inbound_loopback_ws", true),
 		zap.String("voicedialog_loopback_dial_host_port", loopDialHostPort),
 	)
-
 	if err := sipServerPtr.Start(); err != nil {
 		return nil, fmt.Errorf("sipapp: sip start: %w", err)
 	}
@@ -352,7 +271,6 @@ func Start(cfg Config) (*Embedded, error) {
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "sipapp: listening on udp %s:%d (SDP local-ip effective=%q cli=%q)\n", cfg.Host, cfg.Port, localIP, strings.TrimSpace(cfg.LocalIP))
 	}
-
 	if dt, ok := resolveOutboundDialTarget(sipRegStore); ok {
 		if logger.Lg != nil {
 			logger.Lg.Info("sipapp: outbound target from env",
@@ -362,31 +280,9 @@ func Start(cfg Config) (*Embedded, error) {
 		} else {
 			_, _ = fmt.Fprintf(os.Stdout, "sipapp: outbound target from env: uri=%s signaling=%s\n", dt.RequestURI, dt.SignalingAddr)
 		}
-		if config.AutoDialFromEnv() {
-			go func() {
-				cid, err := outMgr.Dial(context.Background(), outbound.DialRequest{
-					Scenario:     outbound.ScenarioCampaign,
-					Target:       dt,
-					MediaProfile: outbound.MediaProfileAI,
-				})
-				if err != nil {
-					if logger.Lg != nil {
-						logger.Lg.Warn("sip outbound auto-dial failed", zap.Error(err))
-					} else {
-						_, _ = fmt.Fprintf(os.Stderr, "sipapp: outbound auto-dial: %v\n", err)
-					}
-					return
-				}
-				if logger.Lg != nil {
-					logger.Lg.Info("sip outbound auto-dial started", zap.String("call_id", cid))
-				} else {
-					_, _ = fmt.Fprintf(os.Stdout, "sipapp: outbound auto-dial call_id=%s\n", cid)
-				}
-			}()
-		}
 	} else {
-		if strings.TrimSpace(utils.GetEnv(constants.EnvSIPTargetNumber)) != "" {
-			_, _ = fmt.Fprintf(os.Stderr, "sipapp: SIP_TARGET_NUMBER is set but outbound target is incomplete; set SIP_OUTBOUND_HOST (or SIP_OUTBOUND_REQUEST_URI + SIP_SIGNALING_ADDR). See docs/SIP_OUTBOUND_MODULE.md\n")
+		if utils.GetEnv(constants.EnvSIPTargetNumber) != "" {
+			_, _ = fmt.Fprintf(os.Stderr, "sipapp: SIP_TARGET_NUMBER is set but outbound target is incomplete; set SIP_OUTBOUND_HOST (and optionally SIP_OUTBOUND_PORT, SIP_SIGNALING_ADDR). See docs/SIP_OUTBOUND_MODULE.md\n")
 		}
 	}
 
@@ -416,10 +312,7 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 // Ordering: weight DESC, id ASC (highest weight wins; tie-break lower id first).
 //   - web → WebSeat (browser agent leg).
 //   - sip trunk → DialTargetFromACDTrunk; sip internal → reg.DialTargetForUsername.
-//
-// SIP rows: sipCallerId / sipCallerDisplayName copied onto DialTarget when set.
-// Web rows: when inboundCallID is set, marks the row ringing and binds call_id → row for webseat ACD state updates.
-func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *GormStore, inboundCallID string) (outbound.DialTarget, bool) {
+func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormStore, inboundCallID string) (outbound.DialTarget, bool) {
 	if db == nil {
 		return outbound.DialTarget{}, false
 	}

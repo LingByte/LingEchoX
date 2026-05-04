@@ -143,15 +143,20 @@ func (s *CampaignService) enqueueDispatchTask(campaign models.SIPCampaign, conta
 	s.dispatchMeta[t.ID] = taskBody
 	s.dispatchMu.Unlock()
 	pos := s.dispatcher.GetTaskPosition(t.ID)
+	st := s.dispatcher.Stats()
 	s.appendEvent(context.Background(), models.SIPCampaignEvent{
 		CampaignID: campaign.ID,
 		ContactID:  contact.ID,
 		Type:       "dispatch",
 		Level:      "info",
-		Message:    fmt.Sprintf("task queued id=%s priority=%d queue_pos=%d", t.ID, priority, pos),
+		Message: fmt.Sprintf(
+			"task queued id=%s priority=%d queue_pos=%d ahead=%d queued_depth=%d running=%d unfinished~=%d",
+			t.ID, priority, pos,
+			t.QueueAhead(), t.QueuedTotal(), st.Running, t.UnfinishedEstimate(),
+		),
 	})
 	go func(taskID string, cID, ctID uint) {
-		err := <-t.Err
+		_, err := t.Wait()
 		s.dispatchMu.Lock()
 		delete(s.dispatchMeta, taskID)
 		s.dispatchMu.Unlock()
@@ -400,11 +405,12 @@ func (s *CampaignService) resolveRegisteredDialTarget(ctx context.Context, phone
 	if err != nil || row.RemoteIP == "" || row.RemotePort <= 0 {
 		return outbound.DialTarget{}, false
 	}
-	if !isSIPRegisterFresh(row.LastSeenAt) {
+	if !persist.IsRegisterFresh(row.LastSeenAt) {
 		return outbound.DialTarget{}, false
 	}
-	domain := effectiveDialDomain(row.Domain, row.RemoteIP)
-	reqURI := fmt.Sprintf("sip:%s@%s:6050", row.Username, domain)
+	domain := persist.EffectiveDialDomain(row.Domain, row.RemoteIP)
+	uriPort := persist.EffectiveRegisterDialRequestURIPort(6050)
+	reqURI := fmt.Sprintf("sip:%s@%s:%d", row.Username, domain, uriPort)
 	sig := row.RemoteIP + ":" + strconv.Itoa(row.RemotePort)
 	return outbound.DialTarget{RequestURI: reqURI, SignalingAddr: sig}, true
 }
@@ -504,17 +510,17 @@ func (s *CampaignService) isDuplicateWithinWindow(ctx context.Context, contactID
 }
 
 func buildDialTarget(c models.SIPCampaign, ct models.SIPCampaignContact) (outbound.DialTarget, error) {
-	host := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundHost))
+	host := utils.GetEnv(constants.EnvSIPOutboundHost)
 	if host == "" {
 		return outbound.DialTarget{}, fmt.Errorf("SIP_OUTBOUND_HOST is required")
 	}
 	port := 6050
-	if s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundPort)); s != "" {
+	if s := utils.GetEnv(constants.EnvSIPOutboundPort); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 65535 {
 			port = n
 		}
 	}
-	defaultSig := strings.TrimSpace(utils.GetEnv(constants.EnvSIPSignalingAddr))
+	defaultSig := utils.GetEnv(constants.EnvSIPSignalingAddr)
 	if defaultSig == "" {
 		defaultSig = fmt.Sprintf("%s:%d", host, port)
 	}

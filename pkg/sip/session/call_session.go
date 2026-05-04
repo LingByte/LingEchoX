@@ -5,22 +5,18 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
 	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
-	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 )
-
-const maxInboundRecordingBytes = 50 * 1024 * 1024
 
 // SIP recording blob format v3 (sippersist): magic "SN3" then repeated
 // [dir u8][seq u16LE][rtpTs u32LE][wallNs u64LE][len u16LE][payload].
@@ -39,27 +35,6 @@ const (
 	RecordingDirUser = recDirUser
 	RecordingDirAI   = recDirAI
 )
-
-// EnvSIPMediaMaxSeconds caps the SIP AI voice pipeline (MediaSession) for one call, in seconds.
-// 0 means no limit. When unset, a 1-hour default is used (legacy NewDefaultSession was 10 minutes).
-const EnvSIPMediaMaxSeconds = "SIP_MEDIA_MAX_SECONDS"
-
-const defaultSIPMediaMaxSeconds = 3600
-
-func sipMediaOutputQueueSize() int {
-	const def = 512
-	const minQ = 64
-	const maxQ = 2048
-	s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPMediaTXQueueSize))
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < minQ || n > maxQ {
-		return def
-	}
-	return n
-}
 
 // CallSession binds an RTP session to a MediaSession for SIP calls.
 //
@@ -231,13 +206,13 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sdp.Codec) 
 	cs.txTransport = txTransport
 
 	ms := media.NewDefaultSession().Context(ctx).SetSessionID("sip-call-" + callID)
-	ms.QueueSize = sipMediaOutputQueueSize()
+	ms.QueueSize = config.MediaTxQueueSizeFromEnv()
 	ms.Decode(dec).
 		Encode(enc).
 		Input(rxTransport).
 		Output(txTransport)
 	ms.Set(media.KeySIPSuppressUplinkEcho, true)
-	ms.MaxSessionDuration = sipMediaMaxSecondsFromEnv()
+	ms.MaxSessionDuration = config.MediaMaxSecondsFromEnv()
 	cs.media = ms
 
 	return cs, nil
@@ -444,7 +419,7 @@ func (cs *CallSession) appendRecordingFrame(dir byte, seq uint16, ts uint32, p [
 	if dir != recDirUser && dir != recDirAI {
 		return
 	}
-	maxB := maxInboundRecordingBytes
+	maxB := 50 * 1024 * 1024
 	cs.recMu.Lock()
 	defer cs.recMu.Unlock()
 	if len(cs.recBuf) >= maxB {
@@ -492,16 +467,4 @@ func (cs *CallSession) TakeRecording() []byte {
 	cs.recBuf = cs.recBuf[:0]
 	cs.recTimeOrigin = time.Time{}
 	return out
-}
-
-func sipMediaMaxSecondsFromEnv() int {
-	v := strings.TrimSpace(utils.GetEnv(EnvSIPMediaMaxSeconds))
-	if v == "" {
-		return defaultSIPMediaMaxSeconds
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return defaultSIPMediaMaxSeconds
-	}
-	return n
 }

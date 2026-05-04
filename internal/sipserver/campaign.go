@@ -15,8 +15,8 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/task"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
@@ -556,7 +556,7 @@ type turnFetchResult struct {
 // scriptListenPollInterval is how often we poll DB for a new user turn during script listen (default 120ms).
 func scriptListenPollInterval() time.Duration {
 	ms := 120
-	if s := strings.TrimSpace(utils.GetEnv(constants.EnvSIPScriptListenPollMS)); s != "" {
+	if s := utils.GetEnv(constants.EnvSIPScriptListenPollMS); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n >= 50 && n <= 500 {
 			ms = n
 		}

@@ -21,17 +21,17 @@ func DialTargetFromACDTrunk(userPart, host, signalingOverride string, port int) 
 		return DialTarget{}, false
 	}
 	if host == "" {
-		host = strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferHost))
+		host = utils.GetEnv(constants.EnvSIPTransferHost)
 	}
 	if host == "" {
-		host = strings.TrimSpace(utils.GetEnv(constants.EnvSIPOutboundHost))
+		host = utils.GetEnv(constants.EnvSIPOutboundHost)
 	}
 	if host == "" {
 		return DialTarget{}, false
 	}
 	if port <= 0 || port >= 65536 {
 		port = 50400
-		if ps := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferPort)); ps != "" {
+		if ps := utils.GetEnv(constants.EnvSIPTransferPort); ps != "" {
 			if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
 				port = p
 				logger.Info("parse ture", zap.Int("port", port))
@@ -45,7 +45,7 @@ func DialTargetFromACDTrunk(userPart, host, signalingOverride string, port int) 
 	t.RequestURI = normalizeSIPRequestURI(fmt.Sprintf("sip:%s@%s:%d", userPart, host, port))
 	sig := strings.TrimSpace(signalingOverride)
 	if sig == "" {
-		sig = strings.TrimSpace(utils.GetEnv(constants.EnvSIPTransferSigAddr))
+		sig = utils.GetEnv(constants.EnvSIPTransferSigAddr)
 	}
 	if sig != "" {
 		t.SignalingAddr = sig
