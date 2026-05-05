@@ -17,20 +17,24 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
 	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
 	"go.uber.org/zap"
 )
 
-// SIPServer is a minimal SIP over UDP server skeleton.
+// SIPServer is the inbound SIP UAS (UDP primary; optional TCP/TLS in tcp_sig.go).
 //
-// It supports:
-// - INVITE: parses SDP, creates an RTP session, and replies 200 OK with SDP.
-// - BYE: closes the associated RTP session (if any).
+// Core methods include INVITE/ACK/BYE, outbound-oriented REFER (RFC 3515) with NOTIFY/sipfrag,
+// REGISTER, SUBSCRIBE/NOTIFY + PUBLISH presence fan-out, session UPDATE, MESSAGE, SRTP SDES,
+// re-INVITE for same-codec refresh, and partial RFC 3261 server-transaction behavior via pkg/sip/transaction.
 //
-// On ACK, inbound media attaches the HTTP WebSocket dialogue bridge (pkg/sip/voicedialog) only — no embedded
-// SIP-side LLM pipeline on inbound.
+// On ACK, inbound media attaches the HTTP WebSocket dialogue bridge (pkg/sip/voicedialog) unless transfer/WebSeat owns media.
 type SIPServer struct {
 	ep *stack.Endpoint
+
+	txMgr       *transaction.Manager
+	pendingInvMu sync.Mutex
+	pendingInv   map[string]pendingInviteSnap
 
 	localIP    string
 	listenHost string
@@ -253,8 +257,13 @@ func New(cfg Config) *SIPServer {
 	s.ep.RegisterHandler(stack.MethodRegister, s.handleRegister)
 	s.ep.RegisterHandler(stack.MethodInfo, s.handleInfo)
 	s.ep.RegisterHandler(stack.MethodCancel, s.handleCancel)
-	s.ep.RegisterHandler(stack.MethodPublish, s.handlePublish)
+	s.ep.RegisterHandler(stack.MethodPublish, s.handlePublishPresence)
 	s.ep.RegisterHandler(stack.MethodPrack, s.handlePrack)
+	s.ep.RegisterHandler(stack.MethodSubscribe, s.handleSubscribe)
+	s.ep.RegisterHandler(stack.MethodNotify, s.handleNotify)
+	s.ep.RegisterHandler(stack.MethodRefer, s.handleRefer)
+	s.ep.RegisterHandler(stack.MethodUpdate, s.handleUpdate)
+	s.ep.RegisterHandler(stack.MethodMessage, s.handleMessage)
 	s.ep.SetNoRouteHandler(func(_ *stack.Message, _ *net.UDPAddr) *stack.Message {
 		return &stack.Message{
 			IsRequest:  false,
@@ -281,6 +290,7 @@ func New(cfg Config) *SIPServer {
 		os.Getenv("SIP_DIGEST_PASSWORD"),
 	)
 	s.inviteEnv = parseInviteEnvConfig()
+	s.wireTransactionLayer()
 	return s
 }
 
@@ -453,6 +463,10 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		return s.makeResponse(msg, 400, "Bad Request", "", "")
 	}
 
+	if s.absorbInviteRetransmit(msg, addr) {
+		return nil
+	}
+
 	if addr != nil && addr.IP != nil {
 		if !ipAllowed(s.inviteAllowNets, addr.IP) {
 			return s.makeResponse(msg, 403, "Forbidden", "", "")
@@ -467,6 +481,14 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 			return s.makeResponse(msg, 500, "Internal Server Error", "", "")
 		}
 		return resp
+	}
+
+	if cs := s.GetCallSession(callID); cs != nil && headerHasToTag(msg.GetHeader("To")) {
+		if s.ep != nil && addr != nil {
+			trying := s.makeResponse(msg, 100, "Trying", "", "")
+			_ = s.ep.Send(trying, addr)
+		}
+		return s.handleReInvite(msg, addr, cs)
 	}
 
 	// Provisional response: 100 Trying (helps many clients' state machines).
@@ -542,6 +564,9 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 			}
 		}
 	}
+
+	toTagEarly := ensureToTag(msg.GetHeader("To"))
+	s.registerPendingInvite(msg, addr, toTagEarly)
 
 	remoteIP := net.ParseIP(offer.IP)
 	if remoteIP == nil || offer.Port <= 0 {
@@ -713,6 +738,12 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		stack.MethodCancel,
 		stack.MethodInfo,
 		stack.MethodPrack,
+		stack.MethodSubscribe,
+		stack.MethodNotify,
+		stack.MethodPublish,
+		stack.MethodRefer,
+		stack.MethodMessage,
+		stack.MethodUpdate,
 	}, ", "))
 	respMsg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(respSDP)))
 
@@ -759,9 +790,12 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 	return respMsg
 }
 
-func (s *SIPServer) handleAck(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+func (s *SIPServer) handleAck(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodAck {
 		return nil
+	}
+	if s.txMgr != nil {
+		_ = s.txMgr.HandleAck(msg, addr)
 	}
 	callID := msg.GetHeader("Call-ID")
 	if callID == "" {
@@ -807,8 +841,11 @@ func (s *SIPServer) handleAck(msg *stack.Message, _ *net.UDPAddr) *stack.Message
 	return nil
 }
 
-func (s *SIPServer) handleBye(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != "BYE" {
+		return nil
+	}
+	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
 	callID := msg.GetHeader("Call-ID")
@@ -870,8 +907,11 @@ func (s *SIPServer) handleBye(msg *stack.Message, _ *net.UDPAddr) *stack.Message
 	return s.makeResponse(msg, 200, "OK", "", "")
 }
 
-func (s *SIPServer) handleOptions(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+func (s *SIPServer) handleOptions(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodOptions {
+		return nil
+	}
+	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
 	resp := s.makeResponse(msg, 200, "OK", "", "")
@@ -885,6 +925,12 @@ func (s *SIPServer) handleOptions(msg *stack.Message, _ *net.UDPAddr) *stack.Mes
 		stack.MethodCancel,
 		stack.MethodInfo,
 		stack.MethodPrack,
+		stack.MethodSubscribe,
+		stack.MethodNotify,
+		stack.MethodPublish,
+		stack.MethodRefer,
+		stack.MethodMessage,
+		stack.MethodUpdate,
 	}, ", "))
 	resp.SetHeader("Content-Length", "0")
 	return resp
@@ -892,6 +938,9 @@ func (s *SIPServer) handleOptions(msg *stack.Message, _ *net.UDPAddr) *stack.Mes
 
 func (s *SIPServer) handleRegister(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodRegister {
+		return nil
+	}
+	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
 	if !registerPasswordOK(msg) {
@@ -916,8 +965,11 @@ func (s *SIPServer) handleRegister(msg *stack.Message, addr *net.UDPAddr) *stack
 	return resp
 }
 
-func (s *SIPServer) handleInfo(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+func (s *SIPServer) handleInfo(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodInfo {
+		return nil
+	}
+	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
 	callID := msg.GetHeader("Call-ID")
@@ -932,22 +984,41 @@ func (s *SIPServer) handleInfo(msg *stack.Message, _ *net.UDPAddr) *stack.Messag
 	return resp
 }
 
-func (s *SIPServer) handleCancel(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
+func (s *SIPServer) handleCancel(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodCancel {
 		return nil
 	}
-	// Minimal behavior: 200 OK for CANCEL. (Full SIP transaction mapping omitted.)
-	resp := s.makeResponse(msg, 200, "OK", "", "")
-	resp.SetHeader("Content-Length", "0")
-	return resp
-}
-
-func (s *SIPServer) handlePublish(msg *stack.Message, _ *net.UDPAddr) *stack.Message {
-	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != "PUBLISH" {
+	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
-	// Many softphones send PUBLISH for presence; accept to reduce noise.
-	resp := s.makeResponse(msg, 200, "OK", "", "")
+	sendFn := func(m *stack.Message, a *net.UDPAddr) error {
+		if s.ep == nil {
+			return nil
+		}
+		return s.ep.Send(m, a)
+	}
+	if s.txMgr != nil && s.txMgr.HandleCancelRequest(msg, addr, sendFn) {
+		callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
+		snap := s.takePendingInviteSnap(callID)
+		if snap != nil && s.ep != nil {
+			if inv, err := stack.Parse(snap.rawInvite); err == nil && inv != nil {
+				r487 := s.makeResponse(inv, 487, "Request Terminated", "", snap.toTag)
+				r487.SetHeader("To", snap.toTag)
+				_ = s.ep.Send(r487, snap.addr)
+				s.finalizeInviteServerTx(inv, r487, snap.addr)
+			}
+		}
+		s.inviteAsyncEnd(callID)
+		s.inviteFinalRetransmitCleanup(callID)
+		if fkVal, ok := s.inviteFlightKeyByCall.Load(callID); ok {
+			if fk, _ := fkVal.(string); fk != "" {
+				s.inviteFlights.Delete(fk)
+			}
+		}
+		s.stopCallSessionLocked(callID)
+		return nil
+	}
+	resp := s.makeResponse(msg, 481, "Call/Transaction Does Not Exist", "", "")
 	resp.SetHeader("Content-Length", "0")
 	return resp
 }

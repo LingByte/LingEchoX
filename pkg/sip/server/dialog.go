@@ -112,15 +112,17 @@ func (s *SIPServer) buildUASBye(callID string) (*stack.Message, *net.UDPAddr, er
 	if s == nil || callID == "" {
 		return nil, nil, fmt.Errorf("sip: invalid hangup")
 	}
-	s.dlgMu.RLock()
+	s.dlgMu.Lock()
+	defer s.dlgMu.Unlock()
 	d := s.uasDlg[callID]
-	s.dlgMu.RUnlock()
 	if d == nil || d.remote == nil {
 		return nil, nil, fmt.Errorf("sip: no dialog for call-id")
 	}
 	if strings.TrimSpace(d.byeFrom) == "" || strings.TrimSpace(d.byeTo) == "" {
 		return nil, nil, fmt.Errorf("sip: incomplete dialog headers")
 	}
+	cseq := d.nextCSeq
+	d.nextCSeq++
 	branch := randomHexBranch()
 	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
 		strings.TrimSpace(s.localIP), s.listenPort, branch)
@@ -135,9 +137,51 @@ func (s *SIPServer) buildUASBye(callID string) (*stack.Message, *net.UDPAddr, er
 	msg.SetHeader("From", d.byeFrom)
 	msg.SetHeader("To", d.byeTo)
 	msg.SetHeader("Call-ID", callID)
-	msg.SetHeader("CSeq", fmt.Sprintf("%d BYE", d.nextCSeq))
+	msg.SetHeader("CSeq", fmt.Sprintf("%d BYE", cseq))
 	msg.SetHeader("Content-Length", "0")
-	return msg, d.remote, nil
+	return msg, cloneUDP(d.remote), nil
+}
+
+// buildReferNotify builds an in-dialog NOTIFY (Event: refer) with a message/sipfrag body.
+func (s *SIPServer) buildReferNotify(callID string, sipfragBody string, subscriptionState string) (*stack.Message, *net.UDPAddr, error) {
+	if s == nil || callID == "" {
+		return nil, nil, fmt.Errorf("sip: invalid refer notify")
+	}
+	s.dlgMu.Lock()
+	defer s.dlgMu.Unlock()
+	d := s.uasDlg[callID]
+	if d == nil || d.remote == nil {
+		return nil, nil, fmt.Errorf("sip: no dialog for call-id")
+	}
+	if strings.TrimSpace(d.byeFrom) == "" || strings.TrimSpace(d.byeTo) == "" {
+		return nil, nil, fmt.Errorf("sip: incomplete dialog headers")
+	}
+	cseq := d.nextCSeq
+	d.nextCSeq++
+	branch := randomHexBranch()
+	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
+		strings.TrimSpace(s.localIP), s.listenPort, branch)
+	msg := &stack.Message{
+		IsRequest:  true,
+		Method:     stack.MethodNotify,
+		RequestURI: d.byeReqURI,
+		Version:    "SIP/2.0",
+	}
+	msg.SetHeader("Via", via)
+	msg.SetHeader("Max-Forwards", "70")
+	msg.SetHeader("From", d.byeFrom)
+	msg.SetHeader("To", d.byeTo)
+	msg.SetHeader("Call-ID", callID)
+	msg.SetHeader("CSeq", fmt.Sprintf("%d NOTIFY", cseq))
+	msg.SetHeader("Event", "refer")
+	if strings.TrimSpace(subscriptionState) == "" {
+		subscriptionState = "active;expires=60"
+	}
+	msg.SetHeader("Subscription-State", subscriptionState)
+	msg.SetHeader("Content-Type", "message/sipfrag;version=2.0")
+	msg.Body = strings.TrimRight(strings.TrimSpace(sipfragBody), "\r\n") + "\r\n"
+	msg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(msg.Body)))
+	return msg, cloneUDP(d.remote), nil
 }
 
 func randomHexBranch() string {

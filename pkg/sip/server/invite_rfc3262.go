@@ -159,6 +159,7 @@ func (s *SIPServer) abortInviteFlight(flight *inviteFlightState, req *stack.Mess
 	if s.ep != nil && addr != nil && req != nil {
 		t504 := s.makeResponse(req, 504, "Server Time-out", "", toTag)
 		_ = s.ep.Send(t504, addr)
+		s.finalizeInviteServerTx(req, t504, addr)
 	}
 	s.stopCallSessionLocked(cid)
 	s.inviteAsyncEnd(cid)
@@ -298,11 +299,15 @@ func (s *SIPServer) runInviteAsync(
 		if err := s.ep.Send(resp200, addr); err != nil && logger.Lg != nil {
 			logger.Lg.Warn("sip invite send 200", zap.String("call_id", callID), zap.Error(err))
 		}
+		s.finalizeInviteServerTx(req, resp200, addr)
 	}
 }
 
 func (s *SIPServer) handlePrack(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != stack.MethodPrack {
+		return nil
+	}
+	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
 	callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
