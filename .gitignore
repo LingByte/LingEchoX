@@ -31,7 +31,7 @@ uploads/.env
 .env.production
 
 # Editor/IDE
-# .idea/
+.idea/
 .vscode/
 
 # Angular specific
