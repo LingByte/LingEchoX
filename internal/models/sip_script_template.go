@@ -72,7 +72,7 @@ func ParseScriptTemplateSpec(raw string) (datatypes.JSON, error) {
 	if !json.Valid([]byte(raw)) {
 		return nil, fmt.Errorf("invalid scriptSpec JSON")
 	}
-	return datatypes.JSON([]byte(raw)), nil
+	return datatypes.JSON(raw), nil
 }
 
 // RandomScriptTemplateID returns a unique script_* id for new templates when caller omits scriptId.

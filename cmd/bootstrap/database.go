@@ -178,5 +178,15 @@ func RunMigrations(db *gorm.DB) error {
 		&models.SIPScriptRun{},
 		&models.SIPCampaignEvent{},
 		&models.SIPScriptTemplate{},
+		&models.Trunk{},
+		&models.TrunkNumber{},
+		&models.Tenant{},
+		&models.TenantGroup{},
+		&models.TenantUser{},
+		&models.TenantUserGroup{},
+		&models.Permission{},
+		&models.TenantRole{},
+		&models.TenantRolePermission{},
+		&models.TenantUserRole{},
 	})
 }

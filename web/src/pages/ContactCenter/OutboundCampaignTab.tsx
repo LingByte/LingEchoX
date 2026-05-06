@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import Button from '@/components/UI/Button'
-import Modal from '@/components/UI/Modal'
+import { Button, Modal } from '@arco-design/web-react'
 import { showAlert } from '@/utils/notification'
 import {
   createOutboundCampaign,
@@ -12,7 +11,6 @@ import {
   getOutboundCampaignMetrics,
   getOutboundCampaignWorkerMetrics,
   listOutboundCampaigns,
-  listSIPScriptTemplates,
   pauseOutboundCampaign,
   resumeOutboundCampaign,
   startOutboundCampaign,
@@ -22,8 +20,8 @@ import {
   type OutboundCampaignContactRow,
   type OutboundCampaignMetrics,
   type OutboundCampaignWorkerMetrics,
-  type SIPScriptTemplateRow,
-} from '@/api/sipContactCenter'
+} from '@/api/outboundCampaigns'
+import { listSIPScriptTemplates, type SIPScriptTemplateRow } from '@/api/sipScripts'
 
 function normCampaignStatus(s?: string): string {
   return String(s || '').trim().toLowerCase()
@@ -233,11 +231,11 @@ export default function OutboundCampaignTab() {
     <div className="mt-4 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground leading-relaxed rounded-lg border border-border bg-muted/30 px-3 py-2.5 flex-1">外呼任务支持创建、导入联系人、启动/暂停/继续/停止、日志与指标查看。</p>
-        <Button onClick={() => { resetCreateForm(); setCreateModalOpen(true) }}>新建任务</Button>
+        <Button type="primary" onClick={() => { resetCreateForm(); setCreateModalOpen(true) }}>新建任务</Button>
       </div>
       <p className="text-xs text-foreground/90 leading-relaxed rounded-lg border border-border bg-primary/5 px-3 py-2.5">暂停可继续，停止后不可继续，只能重建任务。</p>
       <div className="rounded-lg border border-border bg-card p-3 space-y-3">
-        <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">任务列表</h3><Button size="sm" variant="outline" onClick={() => void loadCampaigns()}>刷新</Button></div>
+        <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">任务列表</h3><Button size="small" type="outline" onClick={() => void loadCampaigns()}>刷新</Button></div>
         {campaignsLoading ? <div className="p-4 text-sm text-muted-foreground">加载中...</div> : (
           <div className="max-h-[520px] overflow-auto rounded border border-border">
             <table className="w-full text-xs">
@@ -250,7 +248,7 @@ export default function OutboundCampaignTab() {
                   return (
                     <tr key={c.id} className="border-t">
                       <td className="p-2">{c.id}</td><td className="p-2">{c.name}</td><td className="p-2 font-mono">{c.scriptId || '—'}</td><td className="p-2">{campaignStatusLabel(c.status)}</td><td className="p-2">{c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '—'}</td>
-                      <td className="p-2"><div className="flex flex-wrap gap-1"><Button size="sm" variant="outline" disabled={busy} onClick={() => { setDetailCampaignId(c.id); setDetailModalOpen(true) }}>详情</Button><Button size="sm" disabled={busy || !flags.canStartOrResume} onClick={() => void doCampaignOp(c.id, isPaused ? 'resume' : 'start')}>{isPaused ? '继续' : '启动'}</Button><Button size="sm" variant="outline" disabled={busy || !flags.canPause} onClick={() => void doCampaignOp(c.id, 'pause')}>暂停</Button><Button size="sm" variant="outline" disabled={busy || !flags.canStop} onClick={() => void doCampaignOp(c.id, 'stop')}>停止</Button><Button size="sm" variant="outline" disabled={deletingId === c.id || !flags.canDelete} onClick={() => void removeCampaign(c)}>删除</Button></div></td>
+                      <td className="p-2"><div className="flex flex-wrap gap-1"><Button size="small" type="outline" disabled={busy} onClick={() => { setDetailCampaignId(c.id); setDetailModalOpen(true) }}>详情</Button><Button size="small" type="primary" disabled={busy || !flags.canStartOrResume} onClick={() => void doCampaignOp(c.id, isPaused ? 'resume' : 'start')}>{isPaused ? '继续' : '启动'}</Button><Button size="small" type="outline" disabled={busy || !flags.canPause} onClick={() => void doCampaignOp(c.id, 'pause')}>暂停</Button><Button size="small" type="outline" disabled={busy || !flags.canStop} onClick={() => void doCampaignOp(c.id, 'stop')}>停止</Button><Button size="small" type="outline" disabled={deletingId === c.id || !flags.canDelete} onClick={() => void removeCampaign(c)}>删除</Button></div></td>
                     </tr>
                   )
                 })}
@@ -259,35 +257,35 @@ export default function OutboundCampaignTab() {
             </table>
           </div>
         )}
-        <div className="flex gap-2"><Button variant="outline" size="sm" disabled={campaignsPage <= 1} onClick={() => setCampaignsPage((p) => Math.max(1, p - 1))}>上一页</Button><Button variant="outline" size="sm" disabled={campaignsPage * pageSize >= campaignsTotal} onClick={() => setCampaignsPage((p) => p + 1)}>下一页</Button></div>
+        <div className="flex gap-2"><Button type="outline" size="small" disabled={campaignsPage <= 1} onClick={() => setCampaignsPage((p) => Math.max(1, p - 1))}>上一页</Button><Button type="outline" size="small" disabled={campaignsPage * pageSize >= campaignsTotal} onClick={() => setCampaignsPage((p) => p + 1)}>下一页</Button></div>
       </div>
 
-      <Modal isOpen={createModalOpen} onClose={() => setCreateModalOpen(false)} title="新建外呼任务" size="lg">
+      <Modal visible={createModalOpen} onCancel={() => setCreateModalOpen(false)} title="新建外呼任务" footer={null} style={{ width: 720 }}>
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">脚本模板</label><select className="border border-border rounded-md px-3 py-2 bg-background w-full text-sm" value={selectedScriptId} onChange={(e) => setSelectedScriptId(e.target.value)}><option value="">无</option>{scripts.map((s) => <option key={s.id} value={String(s.id)}>{s.name} ({s.scriptId})</option>)}</select></div>
             <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">任务名称</label><input className="border border-border rounded-md px-3 py-2 bg-background w-full" value={name} onChange={(e) => setName(e.target.value)} /></div>
           </div>
-          <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setCreateModalOpen(false)} disabled={creating}>取消</Button><Button onClick={() => void createCampaign()} disabled={creating}>{creating ? '创建中...' : '创建'}</Button></div>
+          <div className="flex justify-end gap-2"><Button type="outline" onClick={() => setCreateModalOpen(false)} disabled={creating}>取消</Button><Button type="primary" onClick={() => void createCampaign()} disabled={creating}>{creating ? '创建中...' : '创建'}</Button></div>
         </div>
       </Modal>
 
-      <Modal isOpen={detailModalOpen} onClose={() => setDetailModalOpen(false)} title={detailCampaign ? `任务详情 #${detailCampaign.id} · ${detailCampaign.name} · ${campaignStatusLabel(detailCampaign.status)}` : '任务详情'} size="xl">
+      <Modal visible={detailModalOpen} onCancel={() => setDetailModalOpen(false)} title={detailCampaign ? `任务详情 #${detailCampaign.id} · ${detailCampaign.name} · ${campaignStatusLabel(detailCampaign.status)}` : '任务详情'} footer={null} style={{ width: 'min(1100px, 92vw)' }}>
         <div className="space-y-3">
           <p className="text-xs text-foreground/90 leading-relaxed rounded-md border border-border bg-muted/20 px-3 py-2">暂停可继续，停止后不可继续，只能重建任务。</p>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, detailIsPaused ? 'resume' : 'start')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canStartOrResume}>{detailIsPaused ? '继续' : '启动'}</Button>
-            <Button size="sm" variant="outline" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, 'pause')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canPause}>暂停</Button>
-            <Button size="sm" variant="outline" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, 'stop')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canStop}>停止</Button>
+            <Button size="small" type="primary" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, detailIsPaused ? 'resume' : 'start')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canStartOrResume}>{detailIsPaused ? '继续' : '启动'}</Button>
+            <Button size="small" type="outline" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, 'pause')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canPause}>暂停</Button>
+            <Button size="small" type="outline" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, 'stop')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canStop}>停止</Button>
           </div>
-          <div className="space-y-2"><label className="text-xs text-muted-foreground">联系人（每行一个号码）</label><textarea className="border border-border rounded-md px-3 py-2 bg-background w-full h-24 font-mono text-xs" value={contactsText} onChange={(e) => setContactsText(e.target.value)} /><Button size="sm" variant="outline" onClick={() => void submitContacts()} disabled={submittingContacts || !detailCampaignId}>{submittingContacts ? '导入中...' : '导入联系人'}</Button><Button size="sm" variant="outline" onClick={() => void resetSuppressedContacts()} disabled={!detailCampaignId || resetSuppressedBusy}>{resetSuppressedBusy ? '处理中...' : '重置被抑制号码'}</Button></div>
+          <div className="space-y-2"><label className="text-xs text-muted-foreground">联系人（每行一个号码）</label><textarea className="border border-border rounded-md px-3 py-2 bg-background w-full h-24 font-mono text-xs" value={contactsText} onChange={(e) => setContactsText(e.target.value)} /><Button size="small" type="outline" onClick={() => void submitContacts()} disabled={submittingContacts || !detailCampaignId}>{submittingContacts ? '导入中...' : '导入联系人'}</Button><Button size="small" type="outline" onClick={() => void resetSuppressedContacts()} disabled={!detailCampaignId || resetSuppressedBusy}>{resetSuppressedBusy ? '处理中...' : '重置被抑制号码'}</Button></div>
           <div className="rounded-lg border border-border bg-card p-3 space-y-2">
-            <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">已导入联系人</h3><Button size="sm" variant="outline" onClick={() => void loadContacts()} disabled={!detailCampaignId || contactsLoading}>{contactsLoading ? '加载中...' : '刷新'}</Button></div>
+            <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">已导入联系人</h3><Button size="small" type="outline" onClick={() => void loadContacts()} disabled={!detailCampaignId || contactsLoading}>{contactsLoading ? '加载中...' : '刷新'}</Button></div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs"><div className="rounded border border-border p-2">总联系人: {queueView.total}</div><div className="rounded border border-border p-2">队列中: {queueView.waiting}</div><div className="rounded border border-border p-2">拨号中: {queueView.dialing}</div><div className="rounded border border-border p-2">活跃任务: {queueView.active}</div></div>
             <div className="max-h-52 overflow-auto rounded border border-border"><table className="w-full text-xs"><thead className="bg-muted/50"><tr><th className="text-left p-2">号码</th><th className="text-left p-2">队列位置</th><th className="text-left p-2">状态</th><th className="text-left p-2">尝试</th><th className="text-left p-2">失败原因</th><th className="text-left p-2">下次重试</th></tr></thead><tbody>{contactsRows.map((row) => <tr key={row.id} className="border-t"><td className="p-2 font-mono">{row.phone}</td><td className="p-2">{queueView.positionById.get(row.id) || '—'}</td><td className="p-2">{row.status || '—'}</td><td className="p-2">{`${row.attemptCount ?? 0}/${row.maxAttempts ?? 0}`}</td><td className="p-2">{row.failureReason || '—'}</td><td className="p-2">{row.nextRunAt ? new Date(row.nextRunAt).toLocaleString() : '—'}</td></tr>)}{contactsRows.length === 0 && <tr><td colSpan={6} className="p-3 text-center text-muted-foreground">暂无联系人</td></tr>}</tbody></table></div>
           </div>
           <div className="rounded-lg border border-border bg-card p-3 space-y-2">
-            <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">全局指标</h3><Button size="sm" variant="outline" onClick={() => void refreshMetrics()} disabled={metricsLoading}>{metricsLoading ? '加载中...' : '刷新'}</Button></div>
+            <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">全局指标</h3><Button size="small" type="outline" onClick={() => void refreshMetrics()} disabled={metricsLoading}>{metricsLoading ? '加载中...' : '刷新'}</Button></div>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs"><div className="rounded border border-border p-2">invited: {metrics?.invited_total ?? 0}</div><div className="rounded border border-border p-2">answered: {metrics?.answered_total ?? 0}</div><div className="rounded border border-border p-2">failed: {metrics?.failed_total ?? 0}</div><div className="rounded border border-border p-2">retrying: {metrics?.retrying_total ?? 0}</div><div className="rounded border border-border p-2">suppressed: {metrics?.suppressed_total ?? 0}</div></div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs"><div className="rounded border border-border p-2">task queued: {workerMetrics?.task_queued ?? 0}</div><div className="rounded border border-border p-2">task running: {workerMetrics?.task_running ?? 0}</div><div className="rounded border border-border p-2">task channel: {workerMetrics?.task_channel_len ?? 0}</div><div className="rounded border border-border p-2">task unfinished: {workerMetrics?.task_unfinished ?? 0}</div></div>
             {detailCampaignId ? (
@@ -298,7 +296,7 @@ export default function OutboundCampaignTab() {
             ) : null}
           </div>
           <div className="rounded-lg border border-border bg-card p-3 space-y-2">
-            <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">执行日志终端</h3><Button size="sm" variant="outline" onClick={() => void refreshLogs()} disabled={!detailCampaignId || logsLoading}>{logsLoading ? '加载中...' : '刷新'}</Button></div>
+            <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">执行日志终端</h3><Button size="small" type="outline" onClick={() => void refreshLogs()} disabled={!detailCampaignId || logsLoading}>{logsLoading ? '加载中...' : '刷新'}</Button></div>
             <div className="rounded border border-border bg-black text-green-300 text-xs font-mono p-2 h-64 overflow-auto">{!detailCampaignId && <div className="text-zinc-400">请选择任务后查看日志</div>}{detailCampaignId && logs.length === 0 && <div className="text-zinc-400">暂无执行日志</div>}{logs.map((row) => <div key={`${row.type}-${row.id}-${row.at}`} className="leading-5 break-all"><span className="text-zinc-400">[{new Date(row.at).toLocaleString()}]</span>{' '}<span className={row.level === 'error' ? 'text-red-300' : 'text-cyan-300'}>{row.type.toUpperCase()}</span>{' '}{row.phone ? <span className="text-yellow-200">phone={row.phone} </span> : null}{row.callId ? <span className="text-yellow-200">call={row.callId} </span> : null}<span>{row.message}</span></div>)}</div>
           </div>
         </div>

@@ -1,16 +1,18 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft } from 'lucide-react'
-import AdminLayout from '@/components/Layout/AdminLayout'
-import Button from '@/components/UI/Button'
+import { Button, Checkbox, Input, Space } from '@arco-design/web-react'
+import { IconLeft } from '@arco-design/web-react/icon'
+import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import ScriptSpecEditor from '@/pages/ContactCenter/ScriptSpecEditor'
 import {
   newHybridScriptDraftWithAutoIdentity,
   parseHybridScriptDraft,
   serializeHybridScriptDraft,
 } from '@/pages/ContactCenter/scriptSpecTypes'
-import { createSIPScriptTemplate } from '@/api/sipContactCenter'
+import { createSIPScriptTemplate } from '@/api/sipScripts'
 import { showAlert } from '@/utils/notification'
+
+const TextArea = Input.TextArea
 
 export default function ScriptManagerNew() {
   const navigate = useNavigate()
@@ -53,51 +55,33 @@ export default function ScriptManagerNew() {
   }
 
   return (
-    <AdminLayout
+    <BaseLayout
       title="新建脚本"
       description="脚本逻辑 ID 与版本由系统自动生成；请填写模板名称并编排流程步骤。"
       actions={
-        <Button
-          variant="outline"
-          size="sm"
-          leftIcon={<ChevronLeft className="h-4 w-4" />}
-          onClick={() => navigate('/script-manager')}
-        >
+        <Button type="outline" size="small" icon={<IconLeft />} onClick={() => navigate('/script-manager')}>
           返回列表
         </Button>
       }
     >
       <div className="mt-4 max-w-4xl space-y-4">
-        <input
-          className="border border-border rounded-md px-3 py-2 bg-card w-full text-sm"
-          placeholder="脚本名称（必填）"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <textarea
-          className="border border-border rounded-md px-3 py-2 bg-card w-full text-sm min-h-[72px]"
-          placeholder="描述（可选）"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          启用
-        </label>
+        <Input placeholder="脚本名称（必填）" value={name} onChange={setName} />
+        <TextArea placeholder="描述（可选）" autoSize={{ minRows: 3 }} value={description} onChange={setDescription} />
+        <Checkbox checked={enabled} onChange={(c) => setEnabled(!!c)}>启用</Checkbox>
         <ScriptSpecEditor
           value={scriptSpec}
           onChange={setScriptSpec}
           lockedScriptIdentity={created.lockedIdentity}
         />
-        <div className="flex flex-wrap gap-2 pb-8">
-          <Button onClick={() => void save()} disabled={saving}>
+        <Space className="pb-8">
+          <Button type="primary" onClick={() => void save()} disabled={saving}>
             {saving ? '保存中...' : '创建脚本'}
           </Button>
-          <Button variant="outline" disabled={saving} onClick={() => navigate('/script-manager')}>
+          <Button type="outline" disabled={saving} onClick={() => navigate('/script-manager')}>
             取消
           </Button>
-        </div>
+        </Space>
       </div>
-    </AdminLayout>
+    </BaseLayout>
   )
 }

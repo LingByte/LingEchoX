@@ -42,6 +42,7 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	h.registerSIPContactCenterRoutes(r)
 	h.registerLingechoWebSeatRoutes(r)
 	h.registerVoiceDialogRoutes(r)
+	h.registerTenantUserRoutes(r)
 }
 
 func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
@@ -80,6 +81,16 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		g.GET("/campaigns/metrics", h.getSIPCampaignMetrics)
 		g.GET("/campaigns/worker-metrics", h.getSIPCampaignWorkerMetrics)
 		g.GET("/campaigns/:id/logs", h.getSIPCampaignLogs)
+		g.GET("/trunks", h.listTrunks)
+		g.POST("/trunks", h.createTrunk)
+		g.GET("/trunks/:id", h.getTrunk)
+		g.PUT("/trunks/:id", h.updateTrunk)
+		g.DELETE("/trunks/:id", h.deleteTrunk)
+		g.GET("/trunk-numbers", h.listTrunkNumbers)
+		g.POST("/trunk-numbers", h.createTrunkNumber)
+		g.GET("/trunk-numbers/:id", h.getTrunkNumber)
+		g.PUT("/trunk-numbers/:id", h.updateTrunkNumber)
+		g.DELETE("/trunk-numbers/:id", h.deleteTrunkNumber)
 	}
 }
 
@@ -97,4 +108,18 @@ func (h *Handlers) registerLingechoWebSeatRoutes(r *gin.RouterGroup) {
 func (h *Handlers) registerVoiceDialogRoutes(r *gin.RouterGroup) {
 	g := r.Group(constants.LingechoVoiceDialogPathPrefix)
 	g.GET("/ws", voiceDialogWebSocket)
+}
+
+func (h *Handlers) registerTenantUserRoutes(r *gin.RouterGroup) {
+	g := r.Group("tenant-users")
+	{
+		g.GET("", h.listTenantUsers)
+		g.POST("", h.createTenantUser)
+		g.GET("/:id", h.getTenantUser)
+		g.PUT("/:id", h.updateTenantUser)
+		g.PUT("/:id/status", h.updateTenantUserStatus)
+		g.DELETE("/:id", h.deleteTenantUser)
+		g.POST("/:id/restore", h.restoreTenantUser)
+		g.GET("/stats", h.getTenantUserStats)
+	}
 }

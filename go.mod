@@ -5,7 +5,6 @@ go 1.25
 require (
 	cloud.google.com/go/speech v1.28.1
 	cloud.google.com/go/texttospeech v1.16.0
-	github.com/LingByte/lingstorage-sdk-go v0.0.0-20260112052154-e5a3085361f9
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
@@ -21,6 +20,7 @@ require (
 	github.com/gin-gonic/gin v1.10.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-ego/gse v0.80.3
+	github.com/golang-jwt/jwt/v5 v5.2.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/csrf v1.7.3
 	github.com/gorilla/websocket v1.5.3
@@ -33,10 +33,12 @@ require (
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/pion/srtp/v2 v2.0.20
 	github.com/pion/webrtc/v3 v3.3.6
+	github.com/pquerna/otp v1.5.0
 	github.com/qiniu/go-sdk/v7 v7.26.10
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/sirupsen/logrus v1.9.3
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/stretchr/testify v1.11.1
 	github.com/tencentcloud/tencentcloud-speech-sdk-go v1.0.17
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.73
@@ -72,6 +74,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
 	github.com/aws/smithy-go v1.25.1 // indirect
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/bytedance/sonic v1.12.6 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -95,7 +98,6 @@ require (
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
 	github.com/google/go-querystring v1.0.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect

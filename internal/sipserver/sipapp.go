@@ -153,6 +153,9 @@ func Start(cfg Config) (*Embedded, error) {
 			}
 		},
 		OnEvent: func(evt outbound.DialEvent) {
+			if evt.Scenario == outbound.ScenarioTransferAgent && evt.MediaProfile == outbound.MediaProfileTransferBridge {
+				conversation.HandleTransferAgentDialEvent(evt)
+			}
 			if campaignSvc != nil {
 				campaignSvc.HandleDialEvent(context.Background(), evt)
 			}
@@ -217,9 +220,10 @@ func Start(cfg Config) (*Embedded, error) {
 	conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
 		sipCallPersist.SaveConversationTurn(ctx, callID, turn)
 	})
-	conversation.SetTransferDialTargetResolver(func(ctx context.Context, inboundCallID string) (outbound.DialTarget, bool) {
-		return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID)
+	conversation.SetTransferDialTargetResolver(func(ctx context.Context, inboundCallID string, exclude []uint) (outbound.DialTarget, bool) {
+		return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID, exclude)
 	})
+	conversation.SetTransferLegAbandoner(outMgr.AbandonEarlyTransferInvite)
 	if logger.Lg != nil {
 		logger.Lg.Info("sipapp: SIP persistence and campaign worker wired to application database pool")
 	}
@@ -253,6 +257,10 @@ func Start(cfg Config) (*Embedded, error) {
 		ForgetUASDialog:       sipServerPtr.ForgetUASDialog,
 		SendUASBye:            sipServerPtr.SendUASBye,
 		ReleaseTransferDedupe: conversation.ReleaseTransferStartDedupe,
+		OnWebSeatBridgeEstablished: func(callID string) {
+			conversation.ResetTransferRoutingState(callID)
+		},
+		OnWebSeatJoinTimeout: conversation.OnWebSeatJoinTimeout,
 		SetACDWebSeatWorkState: func(ctx context.Context, targetID uint, workState string) error {
 			if acdDB == nil || targetID == 0 {
 				return nil
@@ -347,11 +355,11 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 // Ordering: weight DESC, id ASC (highest weight wins; tie-break lower id first).
 //   - web → WebSeat (browser agent leg).
 //   - sip trunk → DialTargetFromACDTrunk; sip internal → reg.DialTargetForUsername.
-func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormStore, inboundCallID string) (outbound.DialTarget, bool) {
+func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormStore, inboundCallID string, exclude []uint) (outbound.DialTarget, bool) {
 	if db == nil {
 		return outbound.DialTarget{}, false
 	}
-	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db)
+	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db, exclude)
 	if err != nil {
 		return outbound.DialTarget{}, false
 	}
@@ -362,7 +370,7 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 				webseat.BindInboundCallToWebACD(strings.TrimSpace(inboundCallID), row.ID)
 			}
 		}
-		return outbound.DialTarget{WebSeat: true}, true
+		return outbound.DialTarget{WebSeat: true, ACDPoolTargetID: row.ID}, true
 	}
 
 	var dt outbound.DialTarget
@@ -390,5 +398,6 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 	}
 	dt.CallerUser = strings.TrimSpace(row.SipCallerID)
 	dt.CallerDisplayName = strings.TrimSpace(row.SipCallerDisplayName)
+	dt.ACDPoolTargetID = row.ID
 	return dt, true
 }

@@ -50,6 +50,10 @@ type Config struct {
 	// FinalizeInboundPersist runs once when a web-seat handoff ends (BYE, hangup, or bridge teardown).
 	// callID is the inbound PSTN Call-ID; initiator is "remote" (customer BYE) or "local" (operator / full hangup).
 	FinalizeInboundPersist func(ctx context.Context, callID, initiator string, raw []byte, codecName string, recordSampleRate, recordOpusChannels int)
+	// OnWebSeatBridgeEstablished runs after the browser SDP answer is accepted (bridge setup begins).
+	OnWebSeatBridgeEstablished func(callID string)
+	// OnWebSeatJoinTimeout runs when no browser join arrives within SIP_WEBSEAT_JOIN_TIMEOUT (after dedupe release).
+	OnWebSeatJoinTimeout func(callID string, acdPoolTargetID uint)
 }
 
 // Hub tracks pending joins and active bridges.
@@ -333,7 +337,7 @@ func (h *Hub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) awaitWatchdog(callID string) {
-	wait := 5 * time.Minute
+	wait := 30 * time.Second
 	if v := utils.GetEnv("SIP_WEBSEAT_JOIN_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			wait = d
@@ -347,9 +351,18 @@ func (h *Hub) awaitWatchdog(callID string) {
 		if e.lg != nil {
 			e.lg.Warn("webseat: join timeout, releasing slot", zap.String("call_id", callID))
 		}
+		var acdID uint
+		if v, ok := h.acdBinding.Load(callID); ok {
+			if id, ok := v.(uint); ok {
+				acdID = id
+			}
+		}
 		h.acdReleaseBindingToAvailable(callID)
 		if h.cfg.ReleaseTransferDedupe != nil {
 			h.cfg.ReleaseTransferDedupe(callID)
+		}
+		if h.cfg.OnWebSeatJoinTimeout != nil {
+			h.cfg.OnWebSeatJoinTimeout(callID, acdID)
 		}
 	}
 }
@@ -683,6 +696,10 @@ func (h *Hub) completeJoin(ctx context.Context, callID string, inbound *sipSessi
 		pc:      pc,
 	}
 	h.mu.Unlock()
+
+	if h.cfg.OnWebSeatBridgeEstablished != nil {
+		h.cfg.OnWebSeatBridgeEstablished(callID)
+	}
 
 	go h.waitRemoteTrackAndBridge(callID, inbound, pc, txLocal, trackCh, lg)
 

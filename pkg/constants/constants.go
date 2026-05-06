@@ -16,6 +16,18 @@ const (
 	SIP_CAMPAIGN_EVENT_TABLE_NAME   = "sip_campaign_events"
 	SIP_SCRIPT_TEMPLATE_TABLE_NAME  = "sip_script_templates"
 	ACD_POOL_TARGET_TABLE_NAME      = "acd_pool_targets" // ACD: unified SIP + Web routing pool (targets + weights)
+	SIP_TRUNK_TABLE_NAME            = "sip_trunks"
+	SIP_TRUNK_NUMBER_TABLE_NAME     = "sip_trunk_numbers"
+
+	// SaaS multi-tenant + RBAC (tenant-scoped users, groups, roles; global permission catalog).
+	TENANT_TABLE_NAME                = "tenants"
+	TENANT_GROUP_TABLE_NAME          = "tenant_groups"
+	TENANT_USER_TABLE_NAME           = "tenant_users"
+	TENANT_USER_GROUP_TABLE_NAME     = "tenant_user_groups"
+	PERMISSION_TABLE_NAME            = "permissions"
+	TENANT_ROLE_TABLE_NAME           = "tenant_roles"
+	TENANT_ROLE_PERMISSION_TABLE_NAME = "tenant_role_permissions"
+	TENANT_USER_ROLE_TABLE_NAME      = "tenant_user_roles"
 )
 
 // Default Value: 1024

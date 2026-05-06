@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import Button from '@/components/UI/Button'
+import { Button } from '@arco-design/web-react'
 import {
   ChevronDown,
   ChevronUp,
@@ -212,9 +212,9 @@ export default function ScriptSpecEditor({ value, onChange, lockedScriptIdentity
           />
           <div className="flex flex-wrap gap-2">
             <Button
-              type="button"
-              variant="outline"
-              size="sm"
+              htmlType="button"
+              type="outline"
+              size="small"
               onClick={() => {
                 const base = defaultHybridScriptDraft()
                 const next = applyIdentity(base)
@@ -330,7 +330,7 @@ export default function ScriptSpecEditor({ value, onChange, lockedScriptIdentity
               <h4 className="text-sm font-medium">流程步骤</h4>
               <div className="flex flex-wrap gap-1">
                 {(['say', 'listen', 'condition', 'llm_reply', 'end'] as const).map((t) => (
-                  <Button key={t} type="button" variant="outline" size="sm" onClick={() => addStep(t)}>
+                  <Button key={t} htmlType="button" type="outline" size="small" onClick={() => addStep(t)}>
                     <Plus className="h-3.5 w-3.5 mr-1" />
                     {HYBRID_STEP_TYPE_LABELS[t]}
                   </Button>
@@ -614,7 +614,7 @@ function BranchList({
     <div className="rounded-md border border-border/80 bg-muted/10 p-2 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium">{title}</span>
-        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={add}>
+        <Button htmlType="button" type="outline" size="small" className="h-7 text-xs" onClick={add}>
           <Plus className="h-3 w-3 mr-1" />
           添加分支
         </Button>
@@ -681,7 +681,7 @@ function BranchList({
                       ))}
                   </select>
                 </label>
-                <Button type="button" variant="outline" size="sm" className="h-8 shrink-0" onClick={() => remove(idx)}>
+                <Button htmlType="button" type="outline" size="small" className="h-8 shrink-0" onClick={() => remove(idx)}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>
@@ -716,7 +716,7 @@ function DtmfList({
     <div className="rounded-md border border-border/80 bg-muted/10 p-2 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium">电话按键映射（dtmf_transitions）</span>
-        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={add}>
+        <Button htmlType="button" type="outline" size="small" className="h-7 text-xs" onClick={add}>
           <Plus className="h-3 w-3 mr-1" />
           添加按键
         </Button>
@@ -758,7 +758,7 @@ function DtmfList({
                     ))}
                 </select>
               </label>
-              <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => remove(idx)}>
+              <Button htmlType="button" type="outline" size="small" className="h-8" onClick={() => remove(idx)}>
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </li>

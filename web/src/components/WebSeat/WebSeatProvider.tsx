@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useAuthStore } from '@/stores/authStore'
-import { clearWebSeatAcdPoolAnchor, ensureWebSeatAcdPoolRowOnline, postWebSeatAcdHeartbeat, setWebSeatAcdPoolRowOffline } from '@/api/sipContactCenter'
+import { clearWebSeatAcdPoolAnchor, ensureWebSeatAcdPoolRowOnline, postWebSeatAcdHeartbeat, setWebSeatAcdPoolRowOffline } from '@/api/webSeatAcd'
 import { showAlert } from '@/utils/notification'
 import { WebSeatContext, type WebSeatContextValue, type WebSeatWsState } from './WebSeatContext'
 import { getUserMediaAudioOnly } from './getUserMediaCompat'

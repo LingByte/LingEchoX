@@ -1,11 +1,11 @@
-import AdminLayout from '@/components/Layout/AdminLayout'
+import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import WebSeatContactTab from '@/pages/ContactCenter/WebSeatContactTab'
 
 const WebAgents = () => {
   return (
-    <AdminLayout title="Web 坐席" description="云联络中心 / Web 坐席">
+    <BaseLayout title="Web 坐席" description="云联络中心 / Web 坐席">
       <WebSeatContactTab />
-    </AdminLayout>
+    </BaseLayout>
   )
 }
 

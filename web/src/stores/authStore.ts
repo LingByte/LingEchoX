@@ -1,8 +1,5 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { getCurrentUser } from '@/services/adminApi'
-import { get } from '@/utils/request'
-import { getApiBaseURL } from '@/config/apiConfig'
 
 // 用户类型定义（可以根据实际需求修改）
 export interface User {
@@ -91,39 +88,25 @@ export const useAuthStore = create<AuthState>()(
         set({ user: null, isAuthenticated: false, token: null })
       },
 
-      // 刷新用户信息
+      // 从本地恢复用户信息（SIP 控制台可不依赖独立账号接口）
       refreshUserInfo: async () => {
         const token = localStorage.getItem('auth_token')
         if (!token) return
-
-        try {
-          const userData = await getCurrentUser()
-          localStorage.setItem('auth_user', JSON.stringify(userData))
-          set({ 
-            user: userData, 
-            isAuthenticated: true, 
-            token 
-          })
-        } catch (error) {
-          console.error('Failed to refresh user info:', error)
-          // 如果获取失败，尝试从localStorage恢复
-          const storedUser = localStorage.getItem('auth_user')
-          if (storedUser) {
-            try {
-              set({ 
-                user: JSON.parse(storedUser), 
-                isAuthenticated: true, 
-                token 
-              })
-            } catch (e) {
-              localStorage.removeItem('auth_token')
-              set({ user: null, isAuthenticated: false, token: null })
-            }
-          } else {
-            localStorage.removeItem('auth_token')
-            set({ user: null, isAuthenticated: false, token: null })
+        const storedUser = localStorage.getItem('auth_user')
+        if (storedUser) {
+          try {
+            set({
+              user: JSON.parse(storedUser),
+              isAuthenticated: true,
+              token,
+            })
+            return
+          } catch {
+            /* fallthrough */
           }
         }
+        set({ user: null, isAuthenticated: false, token: null })
+        localStorage.removeItem('auth_token')
       }
     }),
     {
@@ -136,6 +119,3 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 )
-
-// 导出User类型供其他组件使用
-export type { User }

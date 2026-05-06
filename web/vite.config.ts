@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   base: '/',
   resolve: {
+    dedupe: ['react', 'react-dom'],
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
@@ -31,10 +32,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // 将第三方库分离到单独的chunk
           vendor: ['react', 'react-dom'],
-          ui: ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-tabs'],
-          motion: ['framer-motion'],
+          arco: ['@arco-design/web-react'],
           router: ['react-router-dom'],
           utils: ['zustand', 'clsx', 'tailwind-merge'],
         },
@@ -50,7 +49,7 @@ export default defineConfig({
     include: [
       'react',
       'react-dom',
-      'framer-motion',
+      '@arco-design/web-react',
       'react-router-dom',
       'zustand',
     ],

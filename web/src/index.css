@@ -189,7 +189,7 @@
     --card-foreground: 240 10% 3.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 3.9%;
-    --primary: 206 85% 56%;
+    --primary: 262 83% 42%;
     --primary-foreground: 0 0% 100%;
     --secondary: 205 95% 97%;
     --secondary-foreground: 205 40% 24%;
@@ -201,7 +201,7 @@
     --destructive-foreground: 0 0% 98%;
     --border: 240 5.9% 90%;
     --input: 240 5.9% 90%;
-    --ring: 206 85% 56%;
+    --ring: 262 83% 42%;
     --radius: 0.5rem;
     
     /* Modern shadow system */
@@ -219,8 +219,8 @@
     --card-foreground: 0 0% 98%;
     --popover: 240 10% 3.9%;
     --popover-foreground: 0 0% 98%;
-    --primary: 203 92% 72%;
-    --primary-foreground: 210 40% 12%;
+    --primary: 262 75% 68%;
+    --primary-foreground: 260 30% 12%;
     --secondary: 211 35% 17%;
     --secondary-foreground: 0 0% 98%;
     --muted: 240 3.7% 15.9%;
@@ -231,7 +231,7 @@
     --destructive-foreground: 0 0% 98%;
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
-    --ring: 203 92% 72%;
+    --ring: 262 75% 68%;
 
     /* Dark mode shadows */
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);

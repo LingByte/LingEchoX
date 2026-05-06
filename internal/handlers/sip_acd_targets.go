@@ -27,6 +27,8 @@ type acdPoolTargetWriteReq struct {
 	SipCallerDisplayName  string `json:"sipCallerDisplayName"`
 	Weight                int    `json:"weight"`
 	WorkState             string `json:"workState"`
+	// ShiftSchedule JSON: e.g. [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}] (weekdays 0=Sun .. 6=Sat). Empty = 24/7.
+	ShiftSchedule string `json:"shiftSchedule"`
 }
 
 func acdOperator(c *gin.Context) string {
@@ -121,6 +123,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		req.SipTrunkHost, req.SipTrunkPort, req.SipTrunkSignalingAddr,
 		req.SipCallerID, req.SipCallerDisplayName,
 		req.Weight, ws, now, webSeen,
+		req.ShiftSchedule,
 	)
 	op := acdOperator(c)
 	if op != "" {
@@ -142,6 +145,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 				"", 0, "",
 				"", "",
 				req.Weight, ws, now, op,
+				req.ShiftSchedule,
 			)
 			if err := h.db.WithContext(ctx).Model(&models.ACDPoolTarget{}).Where("id = ?", keep.ID).Updates(updates).Error; err != nil {
 				response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -203,6 +207,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		req.SipTrunkHost, req.SipTrunkPort, req.SipTrunkSignalingAddr,
 		req.SipCallerID, req.SipCallerDisplayName,
 		req.Weight, ws, now, op,
+		req.ShiftSchedule,
 	)
 	if err := h.db.Model(&row).Updates(updates).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

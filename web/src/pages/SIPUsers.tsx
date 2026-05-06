@@ -1,12 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Eye, Trash2 } from 'lucide-react'
-import AdminLayout from '@/components/Layout/AdminLayout'
-import Card from '@/components/UI/Card'
-import Button from '@/components/UI/Button'
-import { listSIPUsers, deleteSIPUser, type SIPUserRow } from '@/api/sipContactCenter'
+import { Button, Card, Modal, Space, Typography } from '@arco-design/web-react'
+import { IconEye, IconDelete } from '@arco-design/web-react/icon'
+import BaseLayout from '@/components/Layout/BaseLayout.tsx'
+import { listSIPUsers, deleteSIPUser, type SIPUserRow } from '@/api/sipUsers'
 import { showAlert } from '@/utils/notification'
-import Modal from '@/components/UI/Modal'
-import ConfirmDialog from '@/components/UI/ConfirmDialog'
 
 const SIPUsers = () => {
   const [loading, setLoading] = useState(false)
@@ -17,6 +14,7 @@ const SIPUsers = () => {
   const [current, setCurrent] = useState<SIPUserRow | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<number | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
   const pageSize = 20
 
   const load = async () => {
@@ -29,8 +27,8 @@ const SIPUsers = () => {
       } else {
         showAlert(res.msg || '加载失败', 'error')
       }
-    } catch (e: any) {
-      showAlert(e?.msg || '加载失败', 'error')
+    } catch (e: unknown) {
+      showAlert((e as { msg?: string })?.msg || '加载失败', 'error')
     } finally {
       setLoading(false)
     }
@@ -57,145 +55,132 @@ const SIPUsers = () => {
 
   const confirmDelete = async () => {
     if (deleteId == null) return
+    setDeleteLoading(true)
     try {
-      await deleteSIPUser(deleteId)
+      const res = await deleteSIPUser(deleteId)
+      if (res.code !== 200) {
+        showAlert(res.msg || '删除失败', 'error')
+        return
+      }
       showAlert('删除成功', 'success')
       await load()
-    } catch (e: any) {
-      showAlert(e?.msg || '删除失败', 'error')
-      throw e
-    } finally {
       setDeleteOpen(false)
       setDeleteId(null)
+    } catch (e: unknown) {
+      showAlert((e as { msg?: string })?.msg || '删除失败', 'error')
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
   return (
-    <AdminLayout title="SIP 用户" description="云联络中心 / SIP 用户">
-      <Card className="p-0 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-[860px] w-full text-sm">
-            <thead className="bg-slate-100 dark:bg-slate-800">
+    <BaseLayout title="SIP 用户" description="云联络中心 / SIP 用户">
+      <Card bordered={false}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ minWidth: 860, width: '100%', fontSize: 13 }}>
+            <thead style={{ background: 'var(--color-fill-2)' }}>
               <tr>
-                <th className="text-left p-3">ID</th>
-                <th className="text-left p-3">AOR</th>
-                <th className="text-left p-3">状态</th>
-                <th className="text-left p-3">注册失效</th>
-                <th className="text-left p-3">最后活跃</th>
-                <th className="text-right p-3">操作</th>
+                <th style={{ textAlign: 'left', padding: 12 }}>ID</th>
+                <th style={{ textAlign: 'left', padding: 12 }}>AOR</th>
+                <th style={{ textAlign: 'left', padding: 12 }}>状态</th>
+                <th style={{ textAlign: 'left', padding: 12 }}>注册失效</th>
+                <th style={{ textAlign: 'left', padding: 12 }}>最后活跃</th>
+                <th style={{ textAlign: 'right', padding: 12 }}>操作</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="p-6 text-center" colSpan={6}>加载中...</td></tr>
+                <tr><td style={{ padding: 24, textAlign: 'center' }} colSpan={6}>加载中...</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td className="p-6 text-center" colSpan={6}>暂无数据</td></tr>
+                <tr><td style={{ padding: 24, textAlign: 'center' }} colSpan={6}>暂无数据</td></tr>
               ) : rows.map((u) => (
-                <tr key={u.id} className="border-t border-slate-200 dark:border-slate-700">
-                  <td className="p-3">{u.id}</td>
-                  <td className="p-3 break-all">{u.username}@{u.domain}</td>
-                  <td className="p-3">{onlineLabel(u.online)}</td>
-                  <td className="p-3">{fmt(u.expiresAt)}</td>
-                  <td className="p-3">{fmt(u.lastSeenAt)}</td>
-                  <td className="p-3 text-right space-x-2 whitespace-nowrap">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      leftIcon={<Eye className="w-4 h-4" />}
-                      className="!rounded-full !px-4"
-                      onClick={() => openDetail(u)}
-                    >
-                      详情
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      leftIcon={<Trash2 className="w-4 h-4" />}
-                      className="!rounded-full !px-4 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950/40"
-                      onClick={() => openDelete(u.id)}
-                    >
-                      删除
-                    </Button>
+                <tr key={u.id} style={{ borderTop: '1px solid var(--color-border)' }}>
+                  <td style={{ padding: 12 }}>{u.id}</td>
+                  <td style={{ padding: 12, wordBreak: 'break-all' }}>{u.username}@{u.domain}</td>
+                  <td style={{ padding: 12 }}>{onlineLabel(u.online)}</td>
+                  <td style={{ padding: 12 }}>{fmt(u.expiresAt)}</td>
+                  <td style={{ padding: 12 }}>{fmt(u.lastSeenAt)}</td>
+                  <td style={{ padding: 12, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <Space>
+                      <Button type="outline" size="small" icon={<IconEye />} onClick={() => openDetail(u)}>详情</Button>
+                      <Button type="outline" status="danger" size="small" icon={<IconDelete />} onClick={() => openDelete(u.id)}>删除</Button>
+                    </Space>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div className="flex items-center justify-between p-3 border-t border-slate-200 dark:border-slate-700">
-          <span className="text-sm text-slate-500">总计: {total}</span>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</Button>
-            <Button variant="outline" size="sm" disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>下一页</Button>
-          </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+          <Typography.Text type="secondary">总计: {total}</Typography.Text>
+          <Space>
+            <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</Button>
+            <Button size="small" disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>下一页</Button>
+          </Space>
         </div>
       </Card>
 
       <Modal
-        isOpen={detailOpen}
-        onClose={() => {
-          setDetailOpen(false)
-          setCurrent(null)
-        }}
         title="SIP 用户详情"
-        size="lg"
+        visible={detailOpen}
+        onCancel={() => { setDetailOpen(false); setCurrent(null) }}
+        footer={null}
+        style={{ width: 720 }}
       >
         {current && (
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500 mb-1">ID</div>
-              <div className="font-medium">{current.id}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 13 }}>
+            <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>ID</div>
+              <div style={{ fontWeight: 500 }}>{current.id}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500 mb-1">状态</div>
-              <div className="font-medium">{current.online ? 'online' : 'offline'}</div>
+            <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>状态</div>
+              <div style={{ fontWeight: 500 }}>{current.online ? 'online' : 'offline'}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3 col-span-2">
-              <div className="text-xs text-slate-500 mb-1">AOR</div>
-              <div className="font-medium break-all">{current.username}@{current.domain}</div>
+            <div style={{ gridColumn: '1 / -1', border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>AOR</div>
+              <div style={{ fontWeight: 500, wordBreak: 'break-all' }}>{current.username}@{current.domain}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3 col-span-2">
-              <div className="text-xs text-slate-500 mb-1">Contact</div>
-              <div className="font-medium break-all">{current.contactUri || '—'}</div>
+            <div style={{ gridColumn: '1 / -1', border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>Contact</div>
+              <div style={{ fontWeight: 500, wordBreak: 'break-all' }}>{current.contactUri || '—'}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500 mb-1">信令地址</div>
-              <div className="font-medium break-all">{signalAddr(current)}</div>
+            <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>信令地址</div>
+              <div style={{ fontWeight: 500, wordBreak: 'break-all' }}>{signalAddr(current)}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500 mb-1">UA</div>
-              <div className="font-medium break-all">{current.userAgent || '—'}</div>
+            <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>UA</div>
+              <div style={{ fontWeight: 500, wordBreak: 'break-all' }}>{current.userAgent || '—'}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500 mb-1">注册失效</div>
-              <div className="font-medium">{fmt(current.expiresAt)}</div>
+            <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>注册失效</div>
+              <div style={{ fontWeight: 500 }}>{fmt(current.expiresAt)}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3">
-              <div className="text-xs text-slate-500 mb-1">最后活跃</div>
-              <div className="font-medium">{fmt(current.lastSeenAt)}</div>
+            <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>最后活跃</div>
+              <div style={{ fontWeight: 500 }}>{fmt(current.lastSeenAt)}</div>
             </div>
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-3 col-span-2">
-              <div className="text-xs text-slate-500 mb-1">创建时间</div>
-              <div className="font-medium">{fmt(current.createdAt)}</div>
+            <div style={{ gridColumn: '1 / -1', border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>创建时间</div>
+              <div style={{ fontWeight: 500 }}>{fmt(current.createdAt)}</div>
             </div>
           </div>
         )}
       </Modal>
 
-      <ConfirmDialog
-        isOpen={deleteOpen}
-        onClose={() => {
-          setDeleteOpen(false)
-          setDeleteId(null)
-        }}
-        onConfirm={confirmDelete}
+      <Modal
         title="确认删除 SIP 用户"
-        message="删除后不可恢复，确认继续吗？"
-        confirmText="确认删除"
+        visible={deleteOpen}
+        onOk={() => void confirmDelete()}
+        onCancel={() => { setDeleteOpen(false); setDeleteId(null) }}
+        okText="确认删除"
         cancelText="取消"
-        variant="danger"
-      />
-    </AdminLayout>
+        okButtonProps={{ status: 'danger', loading: deleteLoading }}
+      >
+        <Typography.Text>删除后不可恢复，确认继续吗？</Typography.Text>
+      </Modal>
+    </BaseLayout>
   )
 }
 

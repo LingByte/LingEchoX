@@ -32,6 +32,9 @@ type DialTarget struct {
 	CallerUser string
 	// Optional quoted display-name in From when CallerUser is set (or alone if DialRequest sets caller).
 	CallerDisplayName string
+
+	// ACDPoolTargetID is set when the target comes from acd_pool_targets (transfer routing); used for retries / bookkeeping.
+	ACDPoolTargetID uint `json:"-"`
 }
 
 // DialRequest is one outbound attempt.

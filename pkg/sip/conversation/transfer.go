@@ -30,7 +30,8 @@ var (
 	transferDialer   TransferDialer
 	// Optional: DB-backed dial target (e.g. sip_users) tried before TransferDialTargetFromEnv.
 	// inboundCallID is the PSTN inbound Call-ID (used to bind Web ACD rows to this call).
-	transferDialTarget func(context.Context, string) (outbound.DialTarget, bool)
+	// excludeIDs lists acd_pool_targets ids already attempted for this inbound leg (SIP busy / no-answer chain).
+	transferDialTarget func(context.Context, string, []uint) (outbound.DialTarget, bool)
 	// WebSeatTransfer starts inbound ↔ browser WebRTC bridging when DialTarget.WebSeat (SIP_TRANSFER_NUMBER=web).
 	// If nil and WebSeat is requested, transfer logs a warning and releases the dedupe slot.
 	webSeatTransfer func(inboundCallID string, lg *zap.Logger)
@@ -48,7 +49,7 @@ func SetTransferDialer(d TransferDialer) {
 
 // SetTransferDialTargetResolver sets an optional resolver (e.g. DB lookup by SIP_TRANSFER_NUMBER).
 // When it returns ok=false, outbound.TransferDialTargetFromEnv is used.
-func SetTransferDialTargetResolver(fn func(context.Context, string) (outbound.DialTarget, bool)) {
+func SetTransferDialTargetResolver(fn func(context.Context, string, []uint) (outbound.DialTarget, bool)) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
 	transferDialTarget = fn
@@ -95,7 +96,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	var tgt outbound.DialTarget
 	var ok bool
 	if resolveTgt != nil {
-		tgt, ok = resolveTgt(ctx, inboundCallID)
+		tgt, ok = resolveTgt(ctx, inboundCallID, transferExcludeSnapshot(inboundCallID))
 	}
 	// When cmd/sip wires a DB resolver, targets come only from acd_pool_targets — do not fall back to SIP_TRANSFER_* env.
 	if !ok && resolveTgt == nil {
@@ -115,6 +116,10 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	if _, loaded := transferStarted.LoadOrStore(inboundCallID, true); loaded {
 		lg.Info("sip transfer: already started for this call", zap.String("call_id", inboundCallID))
 		return
+	}
+
+	if tgt.ACDPoolTargetID != 0 {
+		transferLastACDRowByInbound.Store(inboundCallID, tgt.ACDPoolTargetID)
 	}
 
 	notifyTransferPhase(inboundCallID, "requested", map[string]any{
@@ -297,6 +302,7 @@ func sipTransferGoodbyeTailWait() time.Duration {
 }
 
 func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *zap.Logger) {
+	transferExcludeReset(inboundCallID)
 	inbound := lookupInboundSession(inboundCallID)
 	if inbound == nil {
 		RequestSIPHangup(inboundCallID)

@@ -1,6 +1,14 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { type SiteConfig } from '@/services/adminApi'
 import { useLocalStorage } from '@/hooks/useLocalStorage'
+
+export interface SiteConfig {
+  SITE_NAME?: string
+  SITE_DESCRIPTION?: string
+  SITE_TERMS_URL?: string
+  SITE_URL?: string
+  SITE_LOGO_URL?: string
+  SITE_FAVICON_URL?: string
+}
 
 interface SiteConfigContextType {
   config: SiteConfig | null

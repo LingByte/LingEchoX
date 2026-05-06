@@ -30,7 +30,7 @@ func getDefaultStoreKind() string {
 		return KindLocal
 	}
 	switch kind {
-	case KindLocal, KindCos, KindMinio, KindQiNiu, KindOss:
+	case KindLocal, KindCos, KindMinio, KindQiNiu, KindOss, KinsS3:
 		return kind
 	default:
 		// 无效的类型，使用默认值并记录警告

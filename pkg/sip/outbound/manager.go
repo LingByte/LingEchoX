@@ -397,6 +397,57 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 	return callID, nil
 }
 
+// AbandonEarlyTransferInvite tears down an outbound INVITE leg that never reached 200 OK (e.g. ring timeout)
+// and emits DialEventFailed with status 408 so the transfer layer can fall through to the next agent.
+func (m *Manager) AbandonEarlyTransferInvite(callID string) bool {
+	if m == nil {
+		return false
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return false
+	}
+	m.mu.Lock()
+	leg := m.legs[callID]
+	if leg == nil {
+		m.mu.Unlock()
+		return false
+	}
+	leg.mu.Lock()
+	established := leg.established
+	leg.mu.Unlock()
+	if established {
+		m.mu.Unlock()
+		return false
+	}
+	req := leg.req
+	remoteStr := ""
+	if leg.dst != nil {
+		remoteStr = udpAddrString(leg.dst)
+	}
+	requestURI := strings.TrimSpace(req.Target.RequestURI)
+	m.mu.Unlock()
+
+	leg.cleanupLeg()
+
+	if m.cfg.OnEvent != nil {
+		m.cfg.OnEvent(DialEvent{
+			CallID:        callID,
+			CorrelationID: strings.TrimSpace(req.CorrelationID),
+			Scenario:      req.Scenario,
+			MediaProfile:  req.MediaProfile,
+			State:         DialEventFailed,
+			StatusCode:    408,
+			Reason:        "transfer_invite_timeout",
+			StatusText:    "Request Timeout",
+			RequestURI:    requestURI,
+			RemoteAddr:    remoteStr,
+			At:            time.Now(),
+		})
+	}
+	return true
+}
+
 type outLeg struct {
 	m       *Manager
 	params  inviteParams

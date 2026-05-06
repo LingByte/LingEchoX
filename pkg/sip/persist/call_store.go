@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,15 +10,15 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
+	"github.com/LingByte/SoulNexus/pkg/stores"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
 	"github.com/LingByte/SoulNexus/pkg/utils"
-	"github.com/LingByte/lingstorage-sdk-go"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
-// CallStore persists SIPCall (including AI dialog JSON in `turns`) and uploads call recordings via config.GlobalStore.
+// CallStore persists SIPCall (including AI dialog JSON in `turns`) and uploads call recordings via pkg/stores.
 type CallStore struct {
 	db *gorm.DB
 	lg *zap.Logger
@@ -70,7 +71,7 @@ func (s *CallStore) OnEstablished(ctx context.Context, callID string) {
 }
 
 // OnBye finalizes SIPCall, optionally uploads SN3/SN2 recording as stereo WAV (L=user R=AI per-leg decode),
-// falling back to legacy mono mix, via config.GlobalStore.
+// falling back to legacy mono mix, via pkg/stores.Default().
 func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	if s == nil || s.db == nil || p.CallID == "" {
 		return
@@ -101,10 +102,13 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	}
 
 	c := strings.ToLower(codecName)
-	bucketOK := config.GlobalStore != nil && config.GlobalConfig != nil &&
-		strings.TrimSpace(config.GlobalConfig.Services.Storage.Bucket) != ""
+	store := stores.Default()
+	bucket := ""
+	if config.GlobalConfig != nil {
+		bucket = strings.TrimSpace(config.GlobalConfig.Services.Storage.Bucket)
+	}
 	var wav []byte
-	if len(raw) > 0 && bucketOK {
+	if len(raw) > 0 && store != nil {
 		switch {
 		case strings.Contains(c, "pcmu") || strings.Contains(c, "pcma"):
 			wav = utils.G711TaggedRecordingToStereoWav(raw, codecName)
@@ -152,39 +156,27 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 		}
 		if len(wav) > 0 {
 			key := fmt.Sprintf("sip/recordings/%s_%d.wav", sanitizeRecordingKey(callID), now.Unix())
-			res, err := config.GlobalStore.UploadBytes(&lingstorage.UploadBytesRequest{
-				Bucket:   config.GlobalConfig.Services.Storage.Bucket,
-				Data:     wav,
-				Filename: key,
-				Key:      key,
-			})
-			if err != nil {
+			if err := store.Write(bucket, key, bytes.NewReader(wav)); err != nil {
 				s.lg.Warn("sippersist recording upload", zap.String("call_id", callID), zap.Error(err))
-			} else if res != nil && res.URL != "" {
-				updates["recording_url"] = res.URL
+			} else if pub := strings.TrimSpace(stores.PublicObjectURL(store, bucket, key)); pub != "" {
+				updates["recording_url"] = pub
 				updates["recording_wav_bytes"] = len(wav)
 				s.lg.Info("sippersist recording uploaded", zap.String("call_id", callID), zap.String("codec", codecName))
 			}
 		} else if len(raw) >= 3 && raw[0] == 'S' && raw[1] == 'N' && (raw[2] == '3' || raw[2] == '2' || raw[2] == '1') {
 			snKey := fmt.Sprintf("sip/recordings/%s_%d.sn2", sanitizeRecordingKey(callID), now.Unix())
-			res, err := config.GlobalStore.UploadBytes(&lingstorage.UploadBytesRequest{
-				Bucket:   config.GlobalConfig.Services.Storage.Bucket,
-				Data:     raw,
-				Filename: snKey,
-				Key:      snKey,
-			})
-			if err != nil {
+			if err := store.Write(bucket, snKey, bytes.NewReader(raw)); err != nil {
 				s.lg.Warn("sippersist raw recording upload", zap.String("call_id", callID), zap.Error(err))
-			} else if res != nil && res.URL != "" {
-				updates["recording_url"] = res.URL
+			} else if pub := strings.TrimSpace(stores.PublicObjectURL(store, bucket, snKey)); pub != "" {
+				updates["recording_url"] = pub
 				s.lg.Info("sippersist raw SN recording uploaded (no WAV)", zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 			}
 		} else if len(raw) > 0 {
 			s.lg.Warn("sippersist recording not converted to WAV and not SN1/SN2/SN3 tagged",
 				zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 		}
-	} else if len(raw) > 0 && !bucketOK {
-		s.lg.Warn("sippersist recording not uploaded (GlobalStore or storage bucket not configured)",
+	} else if len(raw) > 0 && store == nil {
+		s.lg.Warn("sippersist recording not uploaded (storage backend unavailable)",
 			zap.String("call_id", callID), zap.String("codec", codecName))
 	}
 

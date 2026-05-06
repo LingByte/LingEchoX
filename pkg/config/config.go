@@ -8,11 +8,11 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/utils"
-	"github.com/LingByte/lingstorage-sdk-go"
 )
 
 // Config main configuration structure
@@ -78,12 +78,11 @@ type LLMConfig struct {
 	Model   string `env:"LLM_MODEL"`
 }
 
-// StorageConfig storage configuration
+// StorageConfig selects pkg/stores backend (STORAGE_KIND) and optional bucket / public URL overrides for recordings.
 type StorageConfig struct {
-	BaseURL   string `env:"LINGSTORAGE_BASE_URL"`
-	APIKey    string `env:"LINGSTORAGE_API_KEY"`
-	APISecret string `env:"LINGSTORAGE_API_SECRET"`
-	Bucket    string `env:"LINGSTORAGE_BUCKET"`
+	Kind       string `env:"STORAGE_KIND"`
+	Bucket     string `env:"STORAGE_BUCKET"`
+	PublicBase string `env:"STORAGE_PUBLIC_BASE_URL"`
 }
 
 // FeaturesConfig feature flags configuration
@@ -138,8 +137,6 @@ type CircuitBreakerConfig struct {
 
 var GlobalConfig *Config
 
-var GlobalStore *lingstorage.Client
-
 func Load() error {
 	// 1. Load .env file based on environment (don't error if it doesn't exist, use default values)
 	env := os.Getenv("MODE")
@@ -191,10 +188,9 @@ func Load() error {
 				Model:   getStringOrDefault("LLM_MODEL", "gpt-3.5-turbo"),
 			},
 			Storage: StorageConfig{
-				BaseURL:   getStringOrDefault("LINGSTORAGE_BASE_URL", "https://api.lingstorage.com"),
-				APIKey:    getStringOrDefault("LINGSTORAGE_API_KEY", ""),
-				APISecret: getStringOrDefault("LINGSTORAGE_API_SECRET", ""),
-				Bucket:    getStringOrDefault("LINGSTORAGE_BUCKET", "default"),
+				Kind:       getStringOrDefault("STORAGE_KIND", "local"),
+				Bucket:     getStringOrDefault("STORAGE_BUCKET", ""),
+				PublicBase: getStringOrDefault("STORAGE_PUBLIC_BASE_URL", ""),
 			},
 		},
 		Features: FeaturesConfig{
@@ -209,11 +205,12 @@ func Load() error {
 			SIPVADConsecFrames: getIntOrDefault("SIP_VAD_CONSEC_FRAMES", 4),
 		},
 	}
-	GlobalStore = lingstorage.NewClient(&lingstorage.Config{
-		BaseURL:   GlobalConfig.Services.Storage.BaseURL,
-		APIKey:    GlobalConfig.Services.Storage.APIKey,
-		APISecret: GlobalConfig.Services.Storage.APISecret,
-	})
+	if s := strings.TrimSpace(GlobalConfig.Services.Storage.PublicBase); s != "" {
+		_ = os.Setenv("STORAGE_PUBLIC_BASE_URL", s)
+	}
+	if s := strings.TrimSpace(GlobalConfig.Services.Storage.Kind); s != "" {
+		_ = os.Setenv("STORAGE_KIND", s)
+	}
 
 	return nil
 }

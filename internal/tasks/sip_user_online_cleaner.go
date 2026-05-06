@@ -75,10 +75,19 @@ func (c *SIPUserOnlineCleaner) sweep() {
 		if logger.Lg != nil {
 			logger.Lg.Warn("web seat cleaner failed", zap.Error(webErr))
 		}
-		return
 	}
 	if webRows > 0 && logger.Lg != nil {
 		logger.Lg.Info("web seat cleaner marked seats offline", zap.Int64("rows", webRows))
+	}
+
+	shiftRows, shiftErr := models.MarkACDPoolTargetsOfflineOutsideSchedule(context.Background(), c.db, time.Now())
+	if shiftErr != nil {
+		if logger.Lg != nil {
+			logger.Lg.Warn("acd shift cleaner failed", zap.Error(shiftErr))
+		}
+	}
+	if shiftRows > 0 && logger.Lg != nil {
+		logger.Lg.Info("acd shift cleaner marked seats offline", zap.Int64("rows", shiftRows))
 	}
 }
 

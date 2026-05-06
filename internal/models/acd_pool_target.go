@@ -55,6 +55,8 @@ type ACDPoolTarget struct {
 	WorkState             string     `json:"workState" gorm:"size:24;not null;default:offline;index"` // WorkState: see ACDWorkState*; default offline until sign-in or integration sets available.
 	WorkStateAt           *time.Time `json:"workStateAt"`                                             // WorkStateAt: optional last transition (ring timeouts, metrics).
 	WebSeatLastSeenAt     *time.Time `json:"webSeatLastSeenAt" gorm:"column:web_seat_last_seen_at"`   // WebSeatLastSeenAt: route_type=web only; last heartbeat from browser (keepalive). Used for pick + admin "链路在线".
+	// ShiftScheduleJSON optional weekly windows, e.g. [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}] (weekdays: 0=Sun .. 6=Sat). Empty = no restriction.
+	ShiftScheduleJSON string `json:"shiftSchedule" gorm:"column:shift_schedule_json;type:text"`
 }
 
 // WebSeatLastSeenFresh reports whether a web seat heartbeat is recent enough to treat the row as reachable.
@@ -209,6 +211,7 @@ func NewACDPoolTargetForCreate(
 	weight int, workState string,
 	now time.Time,
 	webSeatLastSeen *time.Time,
+	shiftScheduleJSON string,
 ) ACDPoolTarget {
 	th, tp, ts := ACDTrunkStorageFields(routeType, sipSource, trunkHost, trunkPort, trunkSig)
 	cid, cdn := ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName)
@@ -226,6 +229,7 @@ func NewACDPoolTargetForCreate(
 		WorkState:             workState,
 		WorkStateAt:           &now,
 		WebSeatLastSeenAt:     webSeatLastSeen,
+		ShiftScheduleJSON:     strings.TrimSpace(shiftScheduleJSON),
 	}
 }
 
@@ -238,6 +242,7 @@ func BuildACDPoolTargetUpdateMap(
 	weight int, workState string,
 	now time.Time,
 	updateBy string,
+	shiftScheduleJSON string,
 ) map[string]any {
 	th, tp, ts := ACDTrunkStorageFields(routeType, sipSource, trunkHost, trunkPort, trunkSig)
 	cid, cdn := ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName)
@@ -254,6 +259,7 @@ func BuildACDPoolTargetUpdateMap(
 		"weight":                   weight,
 		"work_state":               workState,
 		"updated_at":               now,
+		"shift_schedule_json":      strings.TrimSpace(shiftScheduleJSON),
 	}
 	if existing.WorkState != workState {
 		u["work_state_at"] = now
@@ -311,19 +317,80 @@ func WebSeatActorMayTouchRow(row ACDPoolTarget, operator string) bool {
 	return cb == operator
 }
 
-// PickEligibleACDPoolTargetForTransfer loads highest-weight available target (same rule as sipserver.PickTransferDialTarget query).
-func PickEligibleACDPoolTargetForTransfer(ctx context.Context, db *gorm.DB) (ACDPoolTarget, error) {
+// ListEligibleACDPoolTargetsForTransfer returns pool rows eligible for transfer, honoring exclude IDs and shift_schedule_json.
+func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, limit int) ([]ACDPoolTarget, error) {
+	if db == nil {
+		return nil, gorm.ErrInvalidDB
+	}
+	if limit <= 0 {
+		limit = 64
+	}
 	freshWebSince := time.Now().Add(-WebSeatStaleAfter)
-	var row ACDPoolTarget
-	err := db.WithContext(ctx).
-		Where("is_deleted = ? AND weight > ? AND work_state = ? AND route_type IN ?",
-			SoftDeleteStatusActive, 0, ACDWorkStateAvailable,
+	q := ActiveACDPoolTargets(db.WithContext(ctx)).
+		Where("weight > ? AND work_state = ? AND route_type IN ?",
+			0, ACDWorkStateAvailable,
 			[]string{ACDPoolRouteTypeSIP, ACDPoolRouteTypeWeb}).
 		Where("(route_type != ? OR (web_seat_last_seen_at IS NOT NULL AND web_seat_last_seen_at > ?))",
 			ACDPoolRouteTypeWeb, freshWebSince).
 		Order("weight DESC").Order("id ASC").
-		First(&row).Error
-	return row, err
+		Limit(limit)
+	if len(excludeIDs) > 0 {
+		q = q.Where("id NOT IN ?", excludeIDs)
+	}
+	var rows []ACDPoolTarget
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	loc := ACDShiftTimeLocation()
+	now := time.Now()
+	out := make([]ACDPoolTarget, 0, len(rows))
+	for _, row := range rows {
+		if ACDFitsShiftSchedule(row.ShiftScheduleJSON, now, loc) {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+// PickEligibleACDPoolTargetForTransfer loads highest-weight available target (same rule as sipserver.PickTransferDialTarget query).
+func PickEligibleACDPoolTargetForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint) (ACDPoolTarget, error) {
+	rows, err := ListEligibleACDPoolTargetsForTransfer(ctx, db, excludeIDs, 64)
+	if err != nil {
+		return ACDPoolTarget{}, err
+	}
+	if len(rows) == 0 {
+		return ACDPoolTarget{}, gorm.ErrRecordNotFound
+	}
+	return rows[0], nil
+}
+
+// MarkACDPoolTargetsOfflineOutsideSchedule forces offline when current time is outside configured shift windows.
+func MarkACDPoolTargetsOfflineOutsideSchedule(ctx context.Context, db *gorm.DB, now time.Time) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	loc := ACDShiftTimeLocation()
+	var rows []ACDPoolTarget
+	err := ActiveACDPoolTargets(db.WithContext(ctx)).
+		Where("shift_schedule_json IS NOT NULL AND shift_schedule_json <> ?", "").
+		Where("work_state IN ?", []string{
+			ACDWorkStateAvailable, ACDWorkStateRinging, ACDWorkStateBreak, ACDWorkStateACW,
+		}).
+		Find(&rows).Error
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, row := range rows {
+		if ACDFitsShiftSchedule(row.ShiftScheduleJSON, now, loc) {
+			continue
+		}
+		if err := UpdateACDPoolTargetWorkState(ctx, db, row.ID, ACDWorkStateOffline, "acd-shift"); err != nil {
+			continue
+		}
+		n++
+	}
+	return n, nil
 }
 
 // ListActiveWebACDPoolTargetsByCreateBy lists active web rows owned by the same creator.

@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
-import { AlertCircle, MicOff, X } from 'lucide-react'
-import AdminLayout from '@/components/Layout/AdminLayout'
-import Card from '@/components/UI/Card'
-import Button from '@/components/UI/Button'
+import { AlertCircle, MicOff } from 'lucide-react'
+import { Button, Card, Drawer } from '@arco-design/web-react'
+import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import {
   getSIPCall,
   listSIPCalls,
@@ -11,7 +9,7 @@ import {
   sipAiEndStatusI18nKey,
   type SIPCallDialogTurn,
   type SIPCallRow,
-} from '@/api/sipContactCenter'
+} from '@/api/sipCalls'
 import { showAlert } from '@/utils/notification'
 import { EllipsisHoverCell } from '@/pages/ContactCenter/EllipsisHoverCell'
 import CallAudioPlayer from '@/components/CallAudioPlayer'
@@ -128,7 +126,7 @@ const CallRecords = () => {
   }
 
   return (
-    <AdminLayout title="通话记录" description="云联络中心 / 通话记录">
+    <BaseLayout title="通话记录" description="云联络中心 / 通话记录">
       <div className="mb-3 flex flex-wrap gap-2 items-center">
         <input
           className="border border-border rounded-md px-3 py-1.5 text-sm bg-background max-w-xs"
@@ -143,7 +141,8 @@ const CallRecords = () => {
           }}
         />
         <Button
-          size="sm"
+          type="primary"
+          size="small"
           onClick={() => {
             setCallsPage(1)
             setCallsSearchNonce((n) => n + 1)
@@ -153,7 +152,7 @@ const CallRecords = () => {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground max-w-2xl mb-3">点击查看详情可查看录音、对话回合和完整 SIP 信息。</p>
-      <Card className="p-0 overflow-hidden">
+      <Card bordered={false} bodyStyle={{ padding: 0 }}>
         <div className="overflow-x-auto">
           <table className="min-w-[1480px] w-full text-sm">
             <thead className="bg-muted/50">
@@ -196,7 +195,7 @@ const CallRecords = () => {
                       <td className="p-3 whitespace-nowrap text-xs">{hasRec ? <span className="text-primary font-medium">有录音</span> : <span className="text-muted-foreground">—</span>}</td>
                       <td className="p-3 max-w-[200px] align-top"><EllipsisHoverCell text={c.failureReason} lines={2} className="text-xs" /></td>
                       <td className="p-3 text-right whitespace-nowrap">
-                        <Button variant="outline" size="sm" className="text-xs" onClick={() => void openCallDetailDrawer(c.id)}>
+                        <Button type="outline" size="small" className="text-xs" onClick={() => void openCallDetailDrawer(c.id)}>
                           查看详情
                         </Button>
                       </td>
@@ -210,32 +209,30 @@ const CallRecords = () => {
         <div className="flex items-center justify-between p-3 border-t border-border text-sm">
           <span className="text-muted-foreground">总计: {callsTotal}</span>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={callsPage <= 1} onClick={() => setCallsPage((p) => Math.max(1, p - 1))}>上一页</Button>
-            <Button variant="outline" size="sm" disabled={callsPage * pageSize >= callsTotal} onClick={() => setCallsPage((p) => p + 1)}>下一页</Button>
+            <Button type="outline" size="small" disabled={callsPage <= 1} onClick={() => setCallsPage((p) => Math.max(1, p - 1))}>上一页</Button>
+            <Button type="outline" size="small" disabled={callsPage * pageSize >= callsTotal} onClick={() => setCallsPage((p) => p + 1)}>下一页</Button>
           </div>
         </div>
       </Card>
 
-      <AnimatePresence>
-        {callDetailDrawerId != null && (
-          <>
-            <motion.button
-              type="button"
-              className="fixed inset-0 z-[100] bg-black/40"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              onClick={closeCallDetailDrawer}
-            />
-            <motion.aside
-              className="fixed top-0 right-0 z-[101] flex h-full w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl"
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 30, stiffness: 320 }}
-            >
-              {(() => {
+      <Drawer
+        width={520}
+        title={
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>通话详情</div>
+            {callDetailDrawerData || calls.find((c) => c.id === callDetailDrawerId) ? (
+              <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: 11, color: 'var(--color-text-3)', wordBreak: 'break-all' }}>
+                {(callDetailDrawerData ?? calls.find((c) => c.id === callDetailDrawerId))?.callId}
+              </div>
+            ) : null}
+          </div>
+        }
+        visible={callDetailDrawerId != null}
+        onCancel={closeCallDetailDrawer}
+        footer={null}
+        closable
+      >
+        {(() => {
                 const d = callDetailDrawerData ?? calls.find((c) => c.id === callDetailDrawerId) ?? null
                 if (!d) return <div className="flex flex-1 items-center justify-center p-6">加载中...</div>
                 const turns = callDetailDrawerData?.turns
@@ -244,17 +241,8 @@ const CallRecords = () => {
                     ? resolveSipRecordingUrl(callDetailDrawerData.recordingUrl)
                     : ''
                 return (
-                  <>
-                    <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border px-4 py-3">
-                      <div className="min-w-0">
-                        <h2 className="text-lg font-semibold leading-tight">通话详情</h2>
-                        <p className="mt-1 font-mono text-xs text-muted-foreground break-all">{d.callId}</p>
-                      </div>
-                      <Button type="button" variant="ghost" size="sm" className="shrink-0 h-9 w-9 p-0" onClick={closeCallDetailDrawer}>
-                        <X className="h-5 w-5" />
-                      </Button>
-                    </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 space-y-5">
+                  <div className="space-y-5">
+                    <div className="min-h-0 overflow-y-auto space-y-5">
                       <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
                         {detailField('ID', d.id)}
                         {detailField('状态', d.state || '—')}
@@ -290,7 +278,7 @@ const CallRecords = () => {
                           <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-destructive/40 bg-destructive/5 px-4 py-8 text-center">
                             <AlertCircle className="h-8 w-8 shrink-0 text-destructive/80" />
                             <p className="text-sm text-foreground">录音加载失败</p>
-                            <Button variant="outline" size="sm" type="button" onClick={() => callDetailDrawerId != null && void openCallDetailDrawer(callDetailDrawerId)}>
+                            <Button type="outline" size="small" htmlType="button" onClick={() => callDetailDrawerId != null && void openCallDetailDrawer(callDetailDrawerId)}>
                               重试
                             </Button>
                           </div>
@@ -343,14 +331,11 @@ const CallRecords = () => {
                         )}
                       </div>
                     </div>
-                  </>
+                  </div>
                 )
               })()}
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
-    </AdminLayout>
+      </Drawer>
+    </BaseLayout>
   )
 }
 

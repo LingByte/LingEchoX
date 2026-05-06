@@ -1,9 +1,8 @@
 import { lazy, Suspense } from 'react'
+import { Spin } from '@arco-design/web-react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import ErrorBoundary from '@/components/ErrorBoundary/ErrorBoundary'
 import PWAInstaller from '@/components/PWA/PWAInstaller'
-import NotificationContainer from '@/components/UI/NotificationContainer'
-import GlobalSearch from '@/components/UI/GlobalSearch'
 import DevErrorHandler from '@/components/Dev/DevErrorHandler'
 import { SidebarProvider } from '@/contexts/SidebarContext'
 import { SiteConfigProvider } from '@/contexts/SiteConfigContext'
@@ -16,6 +15,8 @@ const OutboundTasks = lazy(() => import('@/pages/OutboundTasks'))
 const ScriptManager = lazy(() => import('@/pages/ScriptManager'))
 const ScriptManagerNew = lazy(() => import('@/pages/ScriptManagerNew'))
 const WebAgents = lazy(() => import('@/pages/WebAgents'))
+const SIPTrunks = lazy(() => import('@/pages/SIPTrunks'))
+const SIPTrunkNumbers = lazy(() => import('@/pages/SIPTrunkNumbers'))
 
 function App() {
   return (
@@ -24,8 +25,14 @@ function App() {
         <SidebarProvider>
           <Router>
             <WebSeatProvider>
-              <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-                <Suspense fallback={<div className="p-8 text-center text-slate-500">页面加载中...</div>}>
+              <div style={{ minHeight: '100vh', background: 'var(--color-bg-1)' }}>
+                <Suspense
+                  fallback={
+                    <div style={{ padding: 48, display: 'flex', justifyContent: 'center' }}>
+                      <Spin size={32} tip="页面加载中..." />
+                    </div>
+                  }
+                >
                   <Routes>
                     <Route path="/sip-users" element={<SIPUsers />} />
                     <Route path="/call-records" element={<CallRecords />} />
@@ -34,14 +41,14 @@ function App() {
                     <Route path="/script-manager/new" element={<ScriptManagerNew />} />
                     <Route path="/script-manager" element={<ScriptManager />} />
                     <Route path="/web-agents" element={<WebAgents />} />
+                    <Route path="/sip-trunks" element={<SIPTrunks />} />
+                    <Route path="/sip-trunk-numbers" element={<SIPTrunkNumbers />} />
                     <Route path="/" element={<Navigate to="/sip-users" replace />} />
                     <Route path="*" element={<Navigate to="/sip-users" replace />} />
                   </Routes>
                 </Suspense>
                 <PWAInstaller showOnLoad={true} delay={5000} position="bottom-right" />
-                <NotificationContainer />
                 <DevErrorHandler />
-                <GlobalSearch />
               </div>
             </WebSeatProvider>
           </Router>
