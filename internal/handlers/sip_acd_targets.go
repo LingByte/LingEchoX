@@ -49,6 +49,10 @@ type acdPoolTargetListItem struct {
 }
 
 func (h *Handlers) listACDPoolTargets(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
@@ -60,7 +64,7 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 	if size > 100 {
 		size = 100
 	}
-	list, total, err := models.ListACDPoolTargetsPage(h.db, page, size, c.Query("routeType"))
+	list, total, err := models.ListACDPoolTargetsPage(h.db, tid, page, size, c.Query("routeType"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -80,13 +84,17 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 }
 
 func (h *Handlers) getACDPoolTarget(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, uint(id))
-	if err != nil {
+	if err != nil || !tenantOwns(row.TenantID, tid) {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -101,6 +109,10 @@ func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 }
 
 func (h *Handlers) createACDPoolTarget(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	var req acdPoolTargetWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -129,6 +141,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		req.Weight, ws, now, webSeen,
 		req.ShiftSchedule,
 	)
+	row.TenantID = tid
 	op := acdOperator(c)
 	if op != "" {
 		row.SetCreateInfo(op)
@@ -137,7 +150,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 	// Reuse one row and clean up older duplicates.
 	if rt == models.ACDPoolRouteTypeWeb && op != "" {
 		ctx := c.Request.Context()
-		existing, err := models.ListActiveWebACDPoolTargetsByCreateBy(ctx, h.db, op)
+		existing, err := models.ListActiveWebACDPoolTargetsByCreateBy(ctx, h.db, op, tid)
 		if err != nil {
 			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 			return
@@ -178,6 +191,10 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 }
 
 func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -194,7 +211,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, uint(id))
-	if err != nil {
+	if err != nil || !tenantOwns(row.TenantID, tid) {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -225,12 +242,16 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 }
 
 func (h *Handlers) deleteACDPoolTarget(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	n, err := models.SoftDeleteACDPoolTargetByID(h.db, uint(id), acdOperator(c))
+	n, err := models.SoftDeleteACDPoolTargetByIDForTenant(h.db, uint(id), tid, acdOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -248,6 +269,10 @@ type webSeatACDHeartbeatReq struct {
 
 // webSeatACDHeartbeat refreshes web_seat_last_seen_at for the anchored browser row (keepalive).
 func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	var req webSeatACDHeartbeatReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.TargetID == 0 {
 		response.Fail(c, "invalid body: need targetId", nil)
@@ -259,7 +284,7 @@ func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, req.TargetID)
-	if err != nil {
+	if err != nil || !tenantOwns(row.TenantID, tid) {
 		response.Fail(c, "not found", nil)
 		return
 	}

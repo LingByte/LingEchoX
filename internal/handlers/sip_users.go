@@ -65,6 +65,10 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 }
 
 func (h *Handlers) listSIPCalls(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
@@ -76,24 +80,32 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 	if size > 100 {
 		size = 100
 	}
-	list, total, err := persist.ListSIPCallsPage(h.db, page, size, c.Query("callId"), c.Query("state"))
+	list, total, err := persist.ListSIPCallsPage(h.db, tid, page, size, c.Query("callId"), c.Query("state"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
+	}
+	for i := range list {
+		persist.EnrichSIPCallResponse(&list[i])
 	}
 	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
 }
 
 func (h *Handlers) getSIPCall(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := persist.GetActiveSIPCallByID(h.db, uint(id))
+	row, err := persist.GetActiveSIPCallForTenant(h.db, uint(id), tid)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
+	persist.EnrichSIPCallResponse(&row)
 	response.Success(c, "success", row)
 }

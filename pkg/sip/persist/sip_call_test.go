@@ -144,7 +144,7 @@ func TestApplyRTPMediaToSIPCall(t *testing.T) {
 
 func TestNewSIPCallRinging_DefaultDirection(t *testing.T) {
 	now := time.Now()
-	c := NewSIPCallRinging("id", "", "", "", "", "", "", "", 0, "", 0, now)
+	c := NewSIPCallRinging("id", "", "", "", "", "", "", "", 0, "", 0, now, 0)
 	if c.Direction != DirectionInbound {
 		t.Fatal(c.Direction)
 	}

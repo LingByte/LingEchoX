@@ -42,6 +42,7 @@ const (
 // Web rows: TargetValue usually empty; WebSeat handoff when this row wins over SIP rows by Weight.
 type ACDPoolTarget struct {
 	BaseModel
+	TenantID              uint       `json:"tenantId" gorm:"index;not null;default:0"`           // SaaS isolation
 	Name                  string     `json:"name" gorm:"size:128"`                               // optional admin label
 	RouteType             string     `json:"routeType" gorm:"size:16;not null;index"`            // RouteType is ACDPoolRouteTypeSIP or ACDPoolRouteTypeWeb.
 	TargetValue           string     `json:"targetValue" gorm:"size:256"`                        // TargetValue: sip internal → sip_users.username; sip trunk → dial digits / URI; web → usually empty.
@@ -157,8 +158,8 @@ func ActiveACDPoolTargets(db *gorm.DB) *gorm.DB {
 }
 
 // ListACDPoolTargetsPage lists active targets; routeType empty skips filter.
-func ListACDPoolTargetsPage(db *gorm.DB, page, size int, routeType string) ([]ACDPoolTarget, int64, error) {
-	q := ActiveACDPoolTargets(db)
+func ListACDPoolTargetsPage(db *gorm.DB, tenantID uint, page, size int, routeType string) ([]ACDPoolTarget, int64, error) {
+	q := ActiveACDPoolTargets(db).Where("tenant_id = ?", tenantID)
 	if rt := strings.TrimSpace(routeType); rt != "" {
 		if t, ok := ParseACDRouteType(rt); ok {
 			q = q.Where("route_type = ?", t)
@@ -200,6 +201,21 @@ func SoftDeleteACDPoolTargetByID(db *gorm.DB, id uint, updateBy string) (int64, 
 		u["update_by"] = updateBy
 	}
 	res := db.Model(&ACDPoolTarget{}).Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).Updates(u)
+	return res.RowsAffected, res.Error
+}
+
+// SoftDeleteACDPoolTargetByIDForTenant deletes within tenant scope.
+func SoftDeleteACDPoolTargetByIDForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
+	u := map[string]any{
+		"is_deleted": SoftDeleteStatusDeleted,
+		"updated_at": time.Now(),
+	}
+	if updateBy != "" {
+		u["update_by"] = updateBy
+	}
+	res := db.Model(&ACDPoolTarget{}).
+		Where("id = ? AND tenant_id = ? AND is_deleted = ?", id, tenantID, SoftDeleteStatusActive).
+		Updates(u)
 	return res.RowsAffected, res.Error
 }
 
@@ -318,7 +334,7 @@ func WebSeatActorMayTouchRow(row ACDPoolTarget, operator string) bool {
 }
 
 // ListEligibleACDPoolTargetsForTransfer returns pool rows eligible for transfer, honoring exclude IDs and shift_schedule_json.
-func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, limit int) ([]ACDPoolTarget, error) {
+func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, limit int, tenantID uint) ([]ACDPoolTarget, error) {
 	if db == nil {
 		return nil, gorm.ErrInvalidDB
 	}
@@ -326,10 +342,13 @@ func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, exc
 		limit = 64
 	}
 	freshWebSince := time.Now().Add(-WebSeatStaleAfter)
-	q := ActiveACDPoolTargets(db.WithContext(ctx)).
-		Where("weight > ? AND work_state = ? AND route_type IN ?",
-			0, ACDWorkStateAvailable,
-			[]string{ACDPoolRouteTypeSIP, ACDPoolRouteTypeWeb}).
+	q := ActiveACDPoolTargets(db.WithContext(ctx))
+	if tenantID > 0 {
+		q = q.Where("tenant_id = ?", tenantID)
+	}
+	q = q.Where("weight > ? AND work_state = ? AND route_type IN ?",
+		0, ACDWorkStateAvailable,
+		[]string{ACDPoolRouteTypeSIP, ACDPoolRouteTypeWeb}).
 		Where("(route_type != ? OR (web_seat_last_seen_at IS NOT NULL AND web_seat_last_seen_at > ?))",
 			ACDPoolRouteTypeWeb, freshWebSince).
 		Order("weight DESC").Order("id ASC").
@@ -353,8 +372,9 @@ func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, exc
 }
 
 // PickEligibleACDPoolTargetForTransfer loads highest-weight available target (same rule as sipserver.PickTransferDialTarget query).
-func PickEligibleACDPoolTargetForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint) (ACDPoolTarget, error) {
-	rows, err := ListEligibleACDPoolTargetsForTransfer(ctx, db, excludeIDs, 64)
+// tenantID>0 restricts to rows for that tenant; 0 preserves legacy behaviour (pool shared until inbound calls carry tenant scope).
+func PickEligibleACDPoolTargetForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, tenantID uint) (ACDPoolTarget, error) {
+	rows, err := ListEligibleACDPoolTargetsForTransfer(ctx, db, excludeIDs, 64, tenantID)
 	if err != nil {
 		return ACDPoolTarget{}, err
 	}
@@ -393,17 +413,17 @@ func MarkACDPoolTargetsOfflineOutsideSchedule(ctx context.Context, db *gorm.DB, 
 	return n, nil
 }
 
-// ListActiveWebACDPoolTargetsByCreateBy lists active web rows owned by the same creator.
-func ListActiveWebACDPoolTargetsByCreateBy(ctx context.Context, db *gorm.DB, createBy string) ([]ACDPoolTarget, error) {
+// ListActiveWebACDPoolTargetsByCreateBy lists active web rows owned by the same creator within tenant.
+func ListActiveWebACDPoolTargetsByCreateBy(ctx context.Context, db *gorm.DB, createBy string, tenantID uint) ([]ACDPoolTarget, error) {
 	createBy = strings.TrimSpace(createBy)
 	if createBy == "" {
 		return nil, nil
 	}
 	var rows []ACDPoolTarget
-	err := ActiveACDPoolTargets(db.WithContext(ctx)).
+	q := ActiveACDPoolTargets(db.WithContext(ctx)).
 		Where("route_type = ? AND create_by = ?", ACDPoolRouteTypeWeb, createBy).
-		Order("updated_at DESC").Order("id DESC").
-		Find(&rows).Error
+		Where("tenant_id = ?", tenantID)
+	err := q.Order("updated_at DESC").Order("id DESC").Find(&rows).Error
 	return rows, err
 }
 

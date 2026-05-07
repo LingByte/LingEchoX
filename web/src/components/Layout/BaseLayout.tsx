@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { Button, Select } from '@arco-design/web-react'
-import { IconMoon, IconSun } from '@arco-design/web-react/icon'
+import { IconMoon, IconSun, IconMenuFold, IconMenuUnfold } from '@arco-design/web-react/icon'
 import Sidebar from './Sidebar.tsx'
 import { useThemeStore } from '@/stores/themeStore'
 import { useSidebar } from '@/contexts/SidebarContext'
@@ -17,7 +17,7 @@ const BaseLayout = ({ children, title, description, actions }: AdminLayoutProps)
   const { toggleMode, isDark } = useThemeStore()
   const locale = useLocaleStore((s) => s.locale)
   const setLocale = useLocaleStore((s) => s.setLocale)
-  const { isCollapsed } = useSidebar()
+  const { isCollapsed, toggleCollapse } = useSidebar()
   const [isLg, setIsLg] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : false
   )
@@ -66,7 +66,7 @@ const BaseLayout = ({ children, title, description, actions }: AdminLayoutProps)
                 <div style={{ fontSize: 13, color: 'var(--color-text-3)', marginTop: 2 }}>{description}</div>
               )}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               <Select
                 size="small"
                 value={locale}
@@ -84,6 +84,15 @@ const BaseLayout = ({ children, title, description, actions }: AdminLayoutProps)
                 onClick={toggleMode}
               />
               {actions}
+              {isLg && (
+                <Button
+                  type="secondary"
+                  size="small"
+                  icon={isCollapsed ? <IconMenuUnfold /> : <IconMenuFold />}
+                  onClick={toggleCollapse}
+                  title={isCollapsed ? '展开侧栏' : '收起侧栏'}
+                />
+              )}
             </div>
           </div>
         </header>

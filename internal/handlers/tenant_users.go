@@ -96,7 +96,7 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		return
 	}
 
-	email := strings.TrimSpace(req.Email)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" {
 		response.Fail(c, "email required", nil)
 		return
@@ -179,7 +179,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 
 	updates := make(map[string]any)
 	if req.Email != "" {
-		email := strings.TrimSpace(req.Email)
+		email := strings.TrimSpace(strings.ToLower(req.Email))
 		exists, _ := models.CheckTenantUserEmailExists(h.db, existing.TenantID, email, uint(id))
 		if exists {
 			response.Fail(c, "email already exists", nil)

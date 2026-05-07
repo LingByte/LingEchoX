@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Input, Modal, Space, Typography } from '@arco-design/web-react'
+import { Button, Card, Drawer, Input, Space, Typography } from '@arco-design/web-react'
 import { IconDelete } from '@arco-design/web-react/icon'
 import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import { createTrunk, deleteTrunk, listTrunks, updateTrunk, type TrunkRow } from '@/api/trunks'
@@ -179,14 +179,20 @@ const SIPTrunks = () => {
           )}
         </Card>
 
-        <Modal
+        <Drawer
           title={editingId == null ? '新增中继线路' : '编辑中继线路'}
           visible={modalOpen}
+          placement="right"
+          width={520}
           onCancel={closeModal}
-          onOk={() => void save()}
-          okText={saving ? '保存中...' : '保存'}
-          confirmLoading={saving}
-          style={{ width: 520 }}
+          footer={
+            <Space>
+              <Button onClick={closeModal} disabled={saving}>取消</Button>
+              <Button type="primary" loading={saving} onClick={() => void save()}>
+                {saving ? '保存中...' : '保存'}
+              </Button>
+            </Space>
+          }
         >
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <div>
@@ -210,18 +216,27 @@ const SIPTrunks = () => {
               <Input type="number" value={form.providerId} onChange={(v) => setForm((f) => ({ ...f, providerId: v }))} />
             </div>
           </Space>
-        </Modal>
+        </Drawer>
 
-        <Modal
+        <Drawer
           title="确认删除中继线路"
           visible={delOpen}
-          onOk={() => void confirmDelete()}
+          placement="right"
+          width={420}
           onCancel={() => { if (!delLoading) { setDelOpen(false); setDelId(null) } }}
-          okText="确认删除"
-          okButtonProps={{ status: 'danger', loading: delLoading }}
+          footer={
+            <Space>
+              <Button onClick={() => { if (!delLoading) { setDelOpen(false); setDelId(null) } }} disabled={delLoading}>
+                取消
+              </Button>
+              <Button status="danger" loading={delLoading} onClick={() => void confirmDelete()}>
+                确认删除
+              </Button>
+            </Space>
+          }
         >
           <Typography.Text>将同时软删除其下中继号码，确认继续吗？</Typography.Text>
-        </Modal>
+        </Drawer>
       </Space>
     </BaseLayout>
   )

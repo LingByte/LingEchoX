@@ -16,45 +16,44 @@ const (
 	CtxAuthRole       = "auth.role"
 )
 
-// RequireTenantAuth verifies Bearer JWT and injects auth claims into Gin context.
+// TryAttachTenantJWT parses Authorization: Bearer JWT and sets tenant auth context. Returns false if absent or invalid (no response written).
+func TryAttachTenantJWT(c *gin.Context) bool {
+	authz := strings.TrimSpace(c.GetHeader("Authorization"))
+	if authz == "" || !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
+		return false
+	}
+	token := strings.TrimSpace(authz[len("Bearer "):])
+	if token == "" {
+		return false
+	}
+	km := access.JWTKeyManager()
+	if km == nil {
+		return false
+	}
+	p, err := access.ParseAccessTokenWithKey(token, km)
+	if err != nil || p.TenantID == 0 {
+		return false
+	}
+	c.Set(CtxAuthUserID, p.UserID)
+	c.Set(CtxAuthTenantID, p.TenantID)
+	c.Set(CtxAuthTenantSlug, p.TenantSlug)
+	c.Set(CtxAuthEmail, p.Email)
+	c.Set(CtxAuthRole, p.Role)
+	return true
+}
+
+// RequireTenantAuth verifies Bearer JWT only (no AK/SK).
 func RequireTenantAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authz := strings.TrimSpace(c.GetHeader("Authorization"))
-		if authz == "" {
+		if authz == "" || !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "missing authorization token", "data": nil})
 			return
 		}
-		if !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "invalid authorization header", "data": nil})
-			return
-		}
-		token := strings.TrimSpace(authz[len("Bearer "):])
-		if token == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "empty bearer token", "data": nil})
-			return
-		}
-
-		km := access.JWTKeyManager()
-		if km == nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "jwt verifier unavailable", "data": nil})
-			return
-		}
-
-		p, err := access.ParseAccessTokenWithKey(token, km)
-		if err != nil {
+		if !TryAttachTenantJWT(c) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "invalid or expired token", "data": nil})
 			return
 		}
-		if p.TenantID == 0 {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "tenant scope required", "data": nil})
-			return
-		}
-
-		c.Set(CtxAuthUserID, p.UserID)
-		c.Set(CtxAuthTenantID, p.TenantID)
-		c.Set(CtxAuthTenantSlug, p.TenantSlug)
-		c.Set(CtxAuthEmail, p.Email)
-		c.Set(CtxAuthRole, p.Role)
 		c.Next()
 	}
 }

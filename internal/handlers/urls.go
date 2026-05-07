@@ -42,11 +42,15 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	h.registerTenantPublicRoutes(r)
 
 	protected := r.Group("")
-	protected.Use(middleware.RequireTenantAuth())
+	protected.Use(middleware.RequireTenantJWTOrAKSK())
 	h.registerSIPContactCenterRoutes(protected)
-	h.registerLingechoWebSeatRoutes(protected)
 	h.registerVoiceDialogRoutes(protected)
 	h.registerTenantUserRoutes(protected)
+	h.registerCredentialRoutes(protected)
+
+	// WebSeat signaling is token-gated inside webseat package; keep it outside JWT/AKSK middleware
+	// so browser WebSocket/HTTP calls can connect with ?token=... only.
+	h.registerLingechoWebSeatRoutes(r)
 }
 
 func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
@@ -133,6 +137,14 @@ func (h *Handlers) registerTenantUserRoutes(r *gin.RouterGroup) {
 	r.PUT("/me", h.updateMe)
 	r.PUT("/me/password", h.updateMyPassword)
 	r.POST("/auth/logout", h.logout)
+}
+
+func (h *Handlers) registerCredentialRoutes(r *gin.RouterGroup) {
+	g := r.Group("credentials")
+	{
+		g.POST("", h.createCredential)
+		g.GET("", h.listCredentials)
+	}
 }
 
 // JWKSHandler returns the JSON Web Key Set (JWKS) endpoint

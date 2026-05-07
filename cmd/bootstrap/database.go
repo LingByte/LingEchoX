@@ -188,5 +188,7 @@ func RunMigrations(db *gorm.DB) error {
 		&models.TenantRole{},
 		&models.TenantRolePermission{},
 		&models.TenantUserRole{},
+		&models.Credential{},
+		&models.PlatformAdmin{},
 	})
 }

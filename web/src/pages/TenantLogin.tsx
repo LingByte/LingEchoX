@@ -15,7 +15,7 @@ export default function TenantLogin() {
   return (
     <AuthShell
       title="租户登录"
-      subtitle="使用组织标识与账号邮箱登录控制台。"
+      subtitle="邮箱在系统内全局唯一，使用邮箱与密码登录即可。"
       footer={
         <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--color-text-3)' }}>
           还没有组织？
@@ -32,7 +32,6 @@ export default function TenantLogin() {
         onSubmit={async (v) => {
           try {
             const res = await tenantLogin({
-              tenantSlug: String(v.tenantSlug || '').trim(),
               email: String(v.email || '').trim(),
               password: String(v.password || ''),
             })
@@ -40,12 +39,28 @@ export default function TenantLogin() {
               Message.error(res.msg || '登录失败')
               return
             }
-            const { token, user, tenant } = res.data
-            await login(token, {
-              ...user,
-              tenantSlug: tenant?.slug,
-              tenantName: tenant?.name,
-            })
+            const d = res.data
+            if (d.principal === 'platform' && d.platformAdmin) {
+              const a = d.platformAdmin
+              await login(d.token, {
+                id: a.id,
+                email: a.email,
+                displayName: a.displayName,
+                isPlatformAdmin: true,
+                principal: 'platform' as const,
+              })
+            } else if (d.principal === 'tenant' && d.user && d.tenant) {
+              const { token, user, tenant } = d
+              await login(token, {
+                ...user,
+                tenantSlug: tenant.slug,
+                tenantName: tenant.name,
+                principal: 'tenant' as const,
+              })
+            } else {
+              Message.error('登录响应无效')
+              return
+            }
             Message.success('登录成功')
             navigate('/overview', { replace: true })
           } catch (e: unknown) {
@@ -54,13 +69,6 @@ export default function TenantLogin() {
           }
         }}
       >
-        <FormItem
-          label="组织标识"
-          field="tenantSlug"
-          rules={[{ required: true, message: '请输入组织标识（slug）' }]}
-        >
-          <Input placeholder="例如 acme-corp" autoComplete="organization" />
-        </FormItem>
         <FormItem label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }]}>
           <Input placeholder="name@company.com" autoComplete="email" />
         </FormItem>
@@ -75,7 +83,7 @@ export default function TenantLogin() {
       </Form>
       <div style={{ marginTop: 20, fontSize: 12, color: 'var(--color-text-4)', lineHeight: 1.6 }}>
         <IconUser style={{ marginRight: 6, verticalAlign: -2 }} />
-        组织标识即注册时填写的 slug，用于区分不同企业空间。
+        一家企业注册成功后，系统将自动为新组织生成唯一 slug（由公司名拼音/英文与随机后缀组成）。
         <br />
         <IconLock style={{ marginRight: 6, verticalAlign: -2 }} />
         令牌仅保存在本机浏览器，请勿在公共设备勾选「记住密码」类插件写入明文。

@@ -53,6 +53,10 @@ func parseOptionalRFC3339(s *string) (*time.Time, error) {
 }
 
 func (h *Handlers) listTrunks(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
@@ -64,7 +68,7 @@ func (h *Handlers) listTrunks(c *gin.Context) {
 	if size > 100 {
 		size = 100
 	}
-	list, total, err := models.ListTrunksPage(h.db, page, size, c.Query("name"))
+	list, total, err := models.ListTrunksPage(h.db, 0, page, size, c.Query("name"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -73,6 +77,10 @@ func (h *Handlers) listTrunks(c *gin.Context) {
 }
 
 func (h *Handlers) createTrunk(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	var req trunkWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -84,6 +92,7 @@ func (h *Handlers) createTrunk(c *gin.Context) {
 		return
 	}
 	row := models.Trunk{
+		TenantID:    0,
 		Name:        name,
 		Description: strings.TrimSpace(req.Description),
 		Prefix:      strings.TrimSpace(req.Prefix),
@@ -98,6 +107,10 @@ func (h *Handlers) createTrunk(c *gin.Context) {
 }
 
 func (h *Handlers) getTrunk(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -112,6 +125,10 @@ func (h *Handlers) getTrunk(c *gin.Context) {
 }
 
 func (h *Handlers) updateTrunk(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -147,6 +164,10 @@ func (h *Handlers) updateTrunk(c *gin.Context) {
 }
 
 func (h *Handlers) deleteTrunk(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -164,6 +185,10 @@ func (h *Handlers) deleteTrunk(c *gin.Context) {
 }
 
 func (h *Handlers) listTrunkNumbers(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
@@ -184,7 +209,13 @@ func (h *Handlers) listTrunkNumbers(c *gin.Context) {
 		}
 		trunkID = uint(v)
 	}
-	list, total, err := models.ListTrunkNumbersPage(h.db, trunkID, page, size, c.Query("number"))
+	if trunkID > 0 {
+		if _, err := models.GetTrunkByIDBare(h.db, trunkID); err != nil {
+			response.Fail(c, "trunk not found", nil)
+			return
+		}
+	}
+	list, total, err := models.ListTrunkNumbersPage(h.db, 0, trunkID, page, size, c.Query("number"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -193,6 +224,10 @@ func (h *Handlers) listTrunkNumbers(c *gin.Context) {
 }
 
 func (h *Handlers) createTrunkNumber(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	var req trunkNumberWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -239,6 +274,10 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 }
 
 func (h *Handlers) getTrunkNumber(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -253,6 +292,10 @@ func (h *Handlers) getTrunkNumber(c *gin.Context) {
 }
 
 func (h *Handlers) updateTrunkNumber(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -309,6 +352,10 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 }
 
 func (h *Handlers) deleteTrunkNumber(c *gin.Context) {
+	_, ok := requirePlatformAdmin(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)

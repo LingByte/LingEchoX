@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   Button,
   Checkbox,
+  Drawer,
   Input,
-  Modal,
   Select,
   Space,
   Tag,
@@ -317,14 +317,20 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         </div>
       )}
 
-      <Modal
+      <Drawer
         title={editingId == null ? '新增 SIP 目标' : '编辑目标'}
         visible={modalOpen}
+        placement="right"
+        width={620}
         onCancel={closeModal}
-        onOk={() => void save()}
-        okText={saving ? '保存中...' : '保存'}
-        confirmLoading={saving}
-        style={{ width: 620 }}
+        footer={
+          <Space>
+            <Button onClick={closeModal} disabled={saving}>取消</Button>
+            <Button type="primary" loading={saving} onClick={() => void save()}>
+              {saving ? '保存中...' : '保存'}
+            </Button>
+          </Space>
+        }
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <div>
@@ -481,18 +487,27 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
             </Button>
           </div>
         </Space>
-      </Modal>
+      </Drawer>
 
-      <Modal
+      <Drawer
         title="确认删除号码池目标"
         visible={acdDeleteOpen}
-        onOk={() => void confirmAcdDelete()}
+        placement="right"
+        width={420}
         onCancel={() => { if (!acdDeleteLoading) { setAcdDeleteOpen(false); setAcdDeleteId(null) } }}
-        okText="确认删除"
-        okButtonProps={{ status: 'danger', loading: acdDeleteLoading }}
+        footer={
+          <Space>
+            <Button onClick={() => { if (!acdDeleteLoading) { setAcdDeleteOpen(false); setAcdDeleteId(null) } }} disabled={acdDeleteLoading}>
+              取消
+            </Button>
+            <Button status="danger" loading={acdDeleteLoading} onClick={() => void confirmAcdDelete()}>
+              确认删除
+            </Button>
+          </Space>
+        }
       >
         <Typography.Text>删除后不可恢复，确认继续吗？</Typography.Text>
-      </Modal>
+      </Drawer>
     </div>
   )
 }

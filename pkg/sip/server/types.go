@@ -19,6 +19,7 @@ type SIPRegisterStore interface {
 
 // InvitePersistParams describes one inbound/outbound INVITE persistence snapshot.
 type InvitePersistParams struct {
+	TenantID    uint
 	CallID      string
 	From        string
 	To          string

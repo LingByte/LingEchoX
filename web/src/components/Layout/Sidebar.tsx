@@ -1,9 +1,5 @@
 import { useState } from 'react'
 import { Button, Drawer, Layout, Menu } from '@arco-design/web-react'
-import {
-  IconMenuFold,
-  IconMenuUnfold,
-} from '@arco-design/web-react/icon'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -38,9 +34,11 @@ const navigation: NavDef[] = [
   { name: 'Web 坐席', href: '/web-agents', icon: Headphones },
 ]
 
-function selectedMenuKey(pathname: string): string {
+const platformOnlyHrefs = new Set(['/sip-trunks', '/sip-trunk-numbers'])
+
+function selectedMenuKey(pathname: string, items: NavDef[]): string {
   const hit =
-    navigation.find((n) => pathname === n.href || pathname.startsWith(`${n.href}/`)) ?? navigation[0]
+    items.find((n) => pathname === n.href || pathname.startsWith(`${n.href}/`)) ?? items[0] ?? navigation[0]
   return hit.href
 }
 
@@ -56,9 +54,11 @@ function NavMenuBody({
   const { config } = useSiteConfig()
   const { configured, wsState, wsStatusText, goOnline } = useWebSeat()
   const user = useAuthStore((s) => s.user)
+  const isPlatformAdmin = Boolean(user?.isPlatformAdmin || user?.principal === 'platform')
+  const visibleNavigation = isPlatformAdmin ? navigation : navigation.filter((n) => !platformOnlyHrefs.has(n.href))
   const siteName = config?.SITE_NAME || '灵语'
   const logoUrl = '/icon-lingyu.png'
-  const selected = selectedMenuKey(location.pathname)
+  const selected = selectedMenuKey(location.pathname, visibleNavigation)
 
   return (
     <>
@@ -92,6 +92,7 @@ function NavMenuBody({
       </div>
 
       <Menu
+        className={collapsed ? 'ling-sidebar-menu--collapsed-icons' : undefined}
         collapse={collapsed}
         style={{ flex: 1, border: 'none' }}
         selectedKeys={[selected]}
@@ -100,11 +101,19 @@ function NavMenuBody({
           onNavigate?.()
         }}
       >
-        {navigation.map((item) => {
+        {visibleNavigation.map((item) => {
           const Icon = item.icon
           return (
             <Menu.Item key={item.href}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+              <span
+                style={{
+                  width: '100%',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: collapsed ? 0 : 10,
+                  justifyContent: collapsed ? 'center' : 'flex-start',
+                }}
+              >
                 <Icon size={18} strokeWidth={2} />
                 {!collapsed && item.name}
               </span>
@@ -158,7 +167,7 @@ function NavMenuBody({
 }
 
 const Sidebar = () => {
-  const { isCollapsed, toggleCollapse } = useSidebar()
+  const { isCollapsed } = useSidebar()
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (
@@ -206,17 +215,6 @@ const Sidebar = () => {
       >
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <NavMenuBody collapsed={isCollapsed} />
-          <div style={{ padding: '8px 12px 12px' }}>
-            <Button
-              type="secondary"
-              size="small"
-              long
-              icon={isCollapsed ? <IconMenuUnfold /> : <IconMenuFold />}
-              onClick={toggleCollapse}
-            >
-              {!isCollapsed ? '收起' : ''}
-            </Button>
-          </div>
         </div>
       </Sider>
     </>

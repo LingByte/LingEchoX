@@ -32,7 +32,6 @@ export default function TenantRegister() {
           try {
             const res = await registerTenant({
               companyName: String(v.companyName || '').trim(),
-              slug: String(v.slug || '').trim() || undefined,
               adminEmail: String(v.adminEmail || '').trim(),
               adminPassword: String(v.adminPassword || ''),
               adminDisplayName: String(v.adminDisplayName || '').trim() || undefined,
@@ -41,11 +40,17 @@ export default function TenantRegister() {
               Message.error(res.msg || '注册失败')
               return
             }
-            const { token, user, tenant } = res.data
+            const d = res.data
+            if (!d.token || d.principal !== 'tenant' || !d.user || !d.tenant) {
+              Message.error('注册响应无效')
+              return
+            }
+            const { token, user, tenant } = d
             await login(token, {
               ...user,
-              tenantSlug: tenant?.slug,
-              tenantName: tenant?.name,
+              tenantSlug: tenant.slug,
+              tenantName: tenant.name,
+              principal: 'tenant' as const,
             })
             Message.success('注册成功')
             navigate('/overview', { replace: true })
@@ -61,13 +66,6 @@ export default function TenantRegister() {
           rules={[{ required: true, message: '请输入组织名称' }]}
         >
           <Input placeholder="例如 杭州某某科技有限公司" autoComplete="organization" />
-        </FormItem>
-        <FormItem
-          label="组织标识（可选）"
-          field="slug"
-          extra="留空则根据名称自动生成；仅小写字母、数字与连字符，2–64 位。"
-        >
-          <Input placeholder="如 acme-hz（可空）" autoComplete="off" />
         </FormItem>
         <FormItem label="管理员邮箱" field="adminEmail" rules={[{ required: true, message: '请输入邮箱' }]}>
           <Input placeholder="管理员登录邮箱" autoComplete="email" />

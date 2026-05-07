@@ -99,6 +99,9 @@ type FeaturesConfig struct {
 	BackupEnabled  bool   `env:"BACKUP_ENABLED"`
 	BackupPath     string `env:"BACKUP_PATH"`
 	BackupSchedule string `env:"BACKUP_SCHEDULE"`
+	// Optional one-time bootstrap for the first PlatformAdmin row (ignored if any admin exists).
+	PlatformAdminBootstrapEmail    string `env:"PLATFORM_ADMIN_BOOTSTRAP_EMAIL"`
+	PlatformAdminBootstrapPassword string `env:"PLATFORM_ADMIN_BOOTSTRAP_PASSWORD"`
 }
 
 // MiddlewareConfig middleware configuration
@@ -206,6 +209,8 @@ func Load() error {
 			BackupEnabled:  getBoolOrDefault("BACKUP_ENABLED", false),
 			BackupPath:     getStringOrDefault("BACKUP_PATH", "./backups"),
 			BackupSchedule: getStringOrDefault("BACKUP_SCHEDULE", "0 2 * * *"),
+			PlatformAdminBootstrapEmail:    getStringOrDefault("PLATFORM_ADMIN_BOOTSTRAP_EMAIL", ""),
+			PlatformAdminBootstrapPassword: getStringOrDefault("PLATFORM_ADMIN_BOOTSTRAP_PASSWORD", ""),
 		},
 		Middleware: loadMiddlewareConfig(),
 		SIP: SIPConfig{

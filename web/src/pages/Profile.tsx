@@ -26,16 +26,33 @@ export default function Profile() {
         return
       }
       setMe(res.data)
-      profileForm.setFieldsValue({
-        displayName: res.data.user?.displayName || '',
-        username: res.data.user?.username || '',
-        phone: res.data.user?.phone || '',
-      })
-      updateLocalProfile({
-        ...res.data.user,
-        tenantSlug: res.data.tenant?.slug,
-        tenantName: res.data.tenant?.name,
-      })
+      const d = res.data
+      if (d.principal === 'platform' && d.platformAdmin) {
+        profileForm.setFieldsValue({
+          displayName: d.platformAdmin.displayName || '',
+          username: '',
+          phone: '',
+        })
+        updateLocalProfile({
+          id: d.platformAdmin.id,
+          email: d.platformAdmin.email,
+          displayName: d.platformAdmin.displayName,
+          isPlatformAdmin: true,
+          principal: 'platform',
+        })
+      } else if (d.principal === 'tenant' && d.user) {
+        profileForm.setFieldsValue({
+          displayName: d.user.displayName || '',
+          username: d.user.username || '',
+          phone: d.user.phone || '',
+        })
+        updateLocalProfile({
+          ...d.user,
+          tenantSlug: d.tenant?.slug,
+          tenantName: d.tenant?.name,
+          principal: 'tenant',
+        })
+      }
     } catch (e: any) {
       Message.error(e?.msg || '加载失败')
     } finally {
@@ -47,52 +64,106 @@ export default function Profile() {
     void loadMe()
   }, [])
 
+  const isPlatform = me?.principal === 'platform'
+
   return (
-    <BaseLayout title="个人中心" description="查看并维护您的账号信息">
+    <BaseLayout title="个人中心" description={isPlatform ? '平台管理员账号' : '查看并维护您的账号信息'}>
       <Tabs defaultActiveTab="profile">
         <TabPane key="profile" title="资料信息">
           <Card loading={loading}>
-            <Descriptions column={1} style={{ marginBottom: 18 }}>
-              <Descriptions.Item label="组织">{me?.tenant?.name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="组织标识">{me?.tenant?.slug || '-'}</Descriptions.Item>
-              <Descriptions.Item label="账号邮箱">{me?.user?.email || '-'}</Descriptions.Item>
-            </Descriptions>
-            <Form
-              form={profileForm}
-              layout="vertical"
-              requiredSymbol={false}
-              onSubmit={async (v) => {
-                try {
-                  const res = await updateMeApi({
-                    displayName: String(v.displayName || '').trim(),
-                    username: String(v.username || '').trim(),
-                    phone: String(v.phone || '').trim(),
-                  })
-                  if (res.code !== 200 || !res.data) {
-                    Message.error(res.msg || '更新失败')
-                    return
-                  }
-                  Message.success('资料已更新')
-                  updateLocalProfile(res.data)
-                  await loadMe()
-                } catch (e: any) {
-                  Message.error(e?.msg || '更新失败')
-                }
-              }}
-            >
-              <FormItem label="显示名" field="displayName">
-                <Input placeholder="请输入显示名" />
-              </FormItem>
-              <FormItem label="用户名" field="username">
-                <Input placeholder="请输入用户名" />
-              </FormItem>
-              <FormItem label="手机号" field="phone">
-                <Input placeholder="请输入手机号" />
-              </FormItem>
-              <Button type="primary" htmlType="submit">
-                保存资料
-              </Button>
-            </Form>
+            {isPlatform ? (
+              <>
+                <Descriptions
+                  column={1}
+                  style={{ marginBottom: 18 }}
+                  data={[
+                    { label: '角色', value: '平台管理员' },
+                    { label: '邮箱', value: me?.platformAdmin?.email || '-' },
+                  ]}
+                />
+                <Form
+                  form={profileForm}
+                  layout="vertical"
+                  requiredSymbol={false}
+                  onSubmit={async (v) => {
+                    try {
+                      const res = await updateMeApi({
+                        displayName: String(v.displayName || '').trim(),
+                      })
+                      if (res.code !== 200 || !res.data) {
+                        Message.error(res.msg || '更新失败')
+                        return
+                      }
+                      Message.success('资料已更新')
+                      const pdata = res.data as { id?: number; email?: string; displayName?: string }
+                      updateLocalProfile({
+                        ...pdata,
+                        isPlatformAdmin: true,
+                        principal: 'platform',
+                      })
+                      await loadMe()
+                    } catch (e: any) {
+                      Message.error(e?.msg || '更新失败')
+                    }
+                  }}
+                >
+                  <FormItem label="显示名" field="displayName">
+                    <Input placeholder="显示名" />
+                  </FormItem>
+                  <Button type="primary" htmlType="submit">
+                    保存资料
+                  </Button>
+                </Form>
+              </>
+            ) : (
+              <>
+                <Descriptions
+                  column={1}
+                  style={{ marginBottom: 18 }}
+                  data={[
+                    { label: '组织', value: me?.tenant?.name || '-' },
+                    { label: '组织标识', value: me?.tenant?.slug || '-' },
+                    { label: '账号邮箱', value: me?.user?.email || '-' },
+                  ]}
+                />
+                <Form
+                  form={profileForm}
+                  layout="vertical"
+                  requiredSymbol={false}
+                  onSubmit={async (v) => {
+                    try {
+                      const res = await updateMeApi({
+                        displayName: String(v.displayName || '').trim(),
+                        username: String(v.username || '').trim(),
+                        phone: String(v.phone || '').trim(),
+                      })
+                      if (res.code !== 200 || !res.data) {
+                        Message.error(res.msg || '更新失败')
+                        return
+                      }
+                      Message.success('资料已更新')
+                      updateLocalProfile(res.data as never)
+                      await loadMe()
+                    } catch (e: any) {
+                      Message.error(e?.msg || '更新失败')
+                    }
+                  }}
+                >
+                  <FormItem label="显示名" field="displayName">
+                    <Input placeholder="请输入显示名" />
+                  </FormItem>
+                  <FormItem label="用户名" field="username">
+                    <Input placeholder="请输入用户名" />
+                  </FormItem>
+                  <FormItem label="手机号" field="phone">
+                    <Input placeholder="请输入手机号" />
+                  </FormItem>
+                  <Button type="primary" htmlType="submit">
+                    保存资料
+                  </Button>
+                </Form>
+              </>
+            )}
           </Card>
         </TabPane>
 

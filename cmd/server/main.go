@@ -97,6 +97,8 @@ func main() {
 		return
 	}
 
+	bootstrap.EnsurePlatformAdminFromEnv(db)
+
 	// 8. Load Base Configs
 	var addr = config.GlobalConfig.Server.Addr
 	if addr == "" {

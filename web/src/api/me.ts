@@ -17,10 +17,16 @@ export interface MeUser {
   status?: string
 }
 
-export interface MePayload {
-  user: MeUser
-  tenant: MeTenant
+export interface PlatformAdminMe {
+  id: number
+  email: string
+  displayName?: string
+  status?: string
 }
+
+export type MePayload =
+  | { principal: 'tenant'; user: MeUser; tenant: MeTenant; platformAdmin?: undefined }
+  | { principal: 'platform'; platformAdmin: PlatformAdminMe; user?: undefined; tenant?: undefined }
 
 export async function fetchMe(): Promise<ApiResponse<MePayload>> {
   return get<MePayload>('/me')
@@ -30,8 +36,8 @@ export async function updateMe(body: {
   displayName?: string
   phone?: string
   username?: string
-}): Promise<ApiResponse<MeUser>> {
-  return put<MeUser>('/me', body)
+}): Promise<ApiResponse<MeUser | PlatformAdminMe>> {
+  return put<MeUser | PlatformAdminMe>('/me', body)
 }
 
 export async function updateMyPassword(body: {

@@ -28,7 +28,8 @@ const (
 type SIPCampaign struct {
 	BaseModel
 
-	Name string `json:"name" gorm:"size:128;index;not null"`
+	TenantID uint   `json:"tenantId" gorm:"index;not null;default:0"`
+	Name     string `json:"name" gorm:"size:128;index;not null"`
 
 	Status          string         `json:"status" gorm:"size:24;index;not null;default:draft"`
 	Scenario        string         `json:"scenario" gorm:"size:24;index;not null;default:campaign"`
@@ -164,8 +165,8 @@ func ActiveSIPCampaigns(db *gorm.DB) *gorm.DB {
 }
 
 // ListSIPCampaignsPage lists active campaigns with optional status / name filters.
-func ListSIPCampaignsPage(db *gorm.DB, page, size int, status, nameContains string) ([]SIPCampaign, int64, error) {
-	q := ActiveSIPCampaigns(db)
+func ListSIPCampaignsPage(db *gorm.DB, tenantID uint, page, size int, status, nameContains string) ([]SIPCampaign, int64, error) {
+	q := ActiveSIPCampaigns(db).Where("tenant_id = ?", tenantID)
 	if s := strings.TrimSpace(status); s != "" {
 		q = q.Where("status = ?", s)
 	}
@@ -184,10 +185,10 @@ func ListSIPCampaignsPage(db *gorm.DB, page, size int, status, nameContains stri
 	return list, total, nil
 }
 
-// GetActiveSIPCampaignByID returns one active campaign by primary key.
-func GetActiveSIPCampaignByID(db *gorm.DB, id uint) (SIPCampaign, error) {
+// GetActiveSIPCampaignForTenant returns one active campaign belonging to tenantID.
+func GetActiveSIPCampaignForTenant(db *gorm.DB, id uint, tenantID uint) (SIPCampaign, error) {
 	var row SIPCampaign
-	err := ActiveSIPCampaigns(db).Where("id = ?", id).First(&row).Error
+	err := ActiveSIPCampaigns(db).Where("id = ? AND tenant_id = ?", id, tenantID).First(&row).Error
 	return row, err
 }
 
@@ -227,6 +228,17 @@ func UpdateActiveSIPCampaignStatus(db *gorm.DB, id uint, status, updateBy string
 	return res.RowsAffected, res.Error
 }
 
+// UpdateActiveSIPCampaignStatusForTenant sets status when the campaign belongs to tenantID.
+func UpdateActiveSIPCampaignStatusForTenant(db *gorm.DB, id uint, tenantID uint, status, updateBy string) (int64, error) {
+	now := time.Now()
+	u := SIPCampaignStatusUpdates(status, now)
+	if updateBy != "" {
+		u["update_by"] = updateBy
+	}
+	res := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ? AND is_deleted = ?", id, tenantID, SoftDeleteStatusActive).Updates(u)
+	return res.RowsAffected, res.Error
+}
+
 // SoftDeleteSIPCampaignByID soft-deletes a campaign row by id (caller should enforce not-running).
 func SoftDeleteSIPCampaignByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
 	u := map[string]any{"is_deleted": SoftDeleteStatusDeleted}
@@ -234,6 +246,16 @@ func SoftDeleteSIPCampaignByID(db *gorm.DB, id uint, updateBy string) (int64, er
 		u["update_by"] = updateBy
 	}
 	res := db.Model(&SIPCampaign{}).Where("id = ?", id).Updates(u)
+	return res.RowsAffected, res.Error
+}
+
+// SoftDeleteSIPCampaignForTenant soft-deletes within tenant scope.
+func SoftDeleteSIPCampaignForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
+	u := map[string]any{"is_deleted": SoftDeleteStatusDeleted}
+	if updateBy != "" {
+		u["update_by"] = updateBy
+	}
+	res := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u)
 	return res.RowsAffected, res.Error
 }
 
@@ -314,15 +336,52 @@ func CountAllSIPCallAttempts(db *gorm.DB) (int64, error) {
 	return n, err
 }
 
+// CountAllSIPCallAttemptsForTenant counts attempts tied to campaigns in tenantID.
+func CountAllSIPCallAttemptsForTenant(db *gorm.DB, tenantID uint) (int64, error) {
+	var n int64
+	ct := SIPCampaign{}.TableName()
+	at := SIPCallAttempt{}.TableName()
+	err := db.Table(at+" AS a").
+		Joins("INNER JOIN "+ct+" AS c ON c.id = a.campaign_id").
+		Where("c.tenant_id = ? AND c.is_deleted = ?", tenantID, SoftDeleteStatusActive).
+		Count(&n).Error
+	return n, err
+}
+
 func CountSIPCampaignContactsWithStatus(db *gorm.DB, status string) (int64, error) {
 	var n int64
 	err := db.Model(&SIPCampaignContact{}).Where("status = ?", status).Count(&n).Error
 	return n, err
 }
 
+// CountSIPCampaignContactsWithStatusForTenant limits contact aggregates to tenant campaigns.
+func CountSIPCampaignContactsWithStatusForTenant(db *gorm.DB, tenantID uint, status string) (int64, error) {
+	var n int64
+	cont := SIPCampaignContact{}.TableName()
+	camp := SIPCampaign{}.TableName()
+	err := db.Table(cont+" AS ct").
+		Joins("INNER JOIN "+camp+" AS cp ON cp.id = ct.campaign_id").
+		Where("cp.tenant_id = ? AND cp.is_deleted = ? AND ct.is_deleted = ?", tenantID, SoftDeleteStatusActive, SoftDeleteStatusActive).
+		Where("ct.status = ?", status).
+		Count(&n).Error
+	return n, err
+}
+
 func CountSIPCampaignContactsWithStatuses(db *gorm.DB, statuses []string) (int64, error) {
 	var n int64
 	err := db.Model(&SIPCampaignContact{}).Where("status IN ?", statuses).Count(&n).Error
+	return n, err
+}
+
+func CountSIPCampaignContactsWithStatusesForTenant(db *gorm.DB, tenantID uint, statuses []string) (int64, error) {
+	var n int64
+	cont := SIPCampaignContact{}.TableName()
+	camp := SIPCampaign{}.TableName()
+	err := db.Table(cont+" AS ct").
+		Joins("INNER JOIN "+camp+" AS cp ON cp.id = ct.campaign_id").
+		Where("cp.tenant_id = ? AND cp.is_deleted = ? AND ct.is_deleted = ?", tenantID, SoftDeleteStatusActive, SoftDeleteStatusActive).
+		Where("ct.status IN ?", statuses).
+		Count(&n).Error
 	return n, err
 }
 

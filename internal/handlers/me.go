@@ -38,6 +38,19 @@ func (h *Handlers) currentTenantUser(c *gin.Context) (models.TenantUser, bool) {
 }
 
 func (h *Handlers) getMe(c *gin.Context) {
+	if aid := middleware.AuthPlatformAdminID(c); aid > 0 {
+		var row models.PlatformAdmin
+		if err := h.db.Where("id = ? AND is_deleted = ?", aid, models.SoftDeleteStatusActive).First(&row).Error; err != nil {
+			response.Fail(c, "not found", nil)
+			return
+		}
+		response.Success(c, "success", gin.H{
+			"principal":     "platform",
+			"platformAdmin": platformAdminPublic(row),
+		})
+		return
+	}
+
 	u, ok := h.currentTenantUser(c)
 	if !ok {
 		return
@@ -48,12 +61,43 @@ func (h *Handlers) getMe(c *gin.Context) {
 		return
 	}
 	response.Success(c, "success", gin.H{
-		"user":   tenantUserPublic(u),
-		"tenant": tenantPublic(tenant),
+		"principal": "tenant",
+		"user":      tenantUserPublic(u),
+		"tenant":    tenantPublic(tenant),
 	})
 }
 
 func (h *Handlers) updateMe(c *gin.Context) {
+	if middleware.AuthPlatformAdminID(c) > 0 {
+		aid := middleware.AuthPlatformAdminID(c)
+		var req updateMeReq
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.Fail(c, "invalid body", err.Error())
+			return
+		}
+		updates := map[string]any{}
+		if v := strings.TrimSpace(req.DisplayName); v != "" {
+			updates["display_name"] = v
+		}
+		if len(updates) == 0 {
+			response.Fail(c, "no fields to update", nil)
+			return
+		}
+		if err := h.db.Model(&models.PlatformAdmin{}).
+			Where("id = ? AND is_deleted = ?", aid, models.SoftDeleteStatusActive).
+			Updates(updates).Error; err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+		var row models.PlatformAdmin
+		if err := h.db.Where("id = ?", aid).First(&row).Error; err != nil {
+			response.Fail(c, "not found", nil)
+			return
+		}
+		response.Success(c, "success", platformAdminPublic(row))
+		return
+	}
+
 	u, ok := h.currentTenantUser(c)
 	if !ok {
 		return
@@ -102,6 +146,39 @@ func (h *Handlers) updateMe(c *gin.Context) {
 }
 
 func (h *Handlers) updateMyPassword(c *gin.Context) {
+	if aid := middleware.AuthPlatformAdminID(c); aid > 0 {
+		var req updateMyPasswordReq
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.Fail(c, "invalid body", err.Error())
+			return
+		}
+		var row models.PlatformAdmin
+		if err := h.db.Where("id = ? AND is_deleted = ?", aid, models.SoftDeleteStatusActive).First(&row).Error; err != nil {
+			response.Fail(c, "not found", nil)
+			return
+		}
+		if !access.CheckPassword(row.PasswordHash, req.OldPassword) {
+			response.Fail(c, "old password incorrect", nil)
+			return
+		}
+		if req.OldPassword == req.NewPassword {
+			response.Fail(c, "new password must differ from old password", nil)
+			return
+		}
+		hash, err := access.HashPassword(req.NewPassword)
+		if err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+		if err := h.db.Model(&models.PlatformAdmin{}).Where("id = ?", aid).
+			Update("password_hash", hash).Error; err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+		response.Success(c, "success", gin.H{"id": aid})
+		return
+	}
+
 	u, ok := h.currentTenantUser(c)
 	if !ok {
 		return

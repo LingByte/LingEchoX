@@ -179,7 +179,14 @@ func Start(cfg Config) (*Embedded, error) {
 				}
 			}
 			ctx := context.Background()
+			var tenantID uint
+			if campID, _, _, ok := parseCorrelation(leg.CorrelationID); ok && campID > 0 {
+				if cm, err := models.GetSIPCampaignByID(ctx, acdDB, campID); err == nil {
+					tenantID = cm.TenantID
+				}
+			}
 			sipCallPersist.OnInvite(ctx, server.InvitePersistParams{
+				TenantID:    tenantID,
 				CallID:      leg.CallID,
 				From:        leg.FromHeader,
 				To:          leg.ToHeader,
@@ -359,7 +366,13 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 	if db == nil {
 		return outbound.DialTarget{}, false
 	}
-	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db, exclude)
+	var tenantID uint
+	if cid := strings.TrimSpace(inboundCallID); cid != "" {
+		if call, err := persist.FindSIPCallByCallID(ctx, db, cid); err == nil {
+			tenantID = call.TenantID
+		}
+	}
+	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db, exclude, tenantID)
 	if err != nil {
 		return outbound.DialTarget{}, false
 	}

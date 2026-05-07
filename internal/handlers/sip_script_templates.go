@@ -20,6 +20,10 @@ type sipScriptTemplateWriteReq struct {
 }
 
 func (h *Handlers) listSIPScriptTemplates(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
@@ -31,7 +35,7 @@ func (h *Handlers) listSIPScriptTemplates(c *gin.Context) {
 	if size > 100 {
 		size = 100
 	}
-	list, total, err := models.ListSIPScriptTemplatesPage(h.db, page, size, c.Query("scriptId"), c.Query("name"))
+	list, total, err := models.ListSIPScriptTemplatesPage(h.db, tid, page, size, c.Query("scriptId"), c.Query("name"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -40,12 +44,16 @@ func (h *Handlers) listSIPScriptTemplates(c *gin.Context) {
 }
 
 func (h *Handlers) getSIPScriptTemplate(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetActiveSIPScriptTemplateByID(h.db, uint(id))
+	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, uint(id), tid)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -54,6 +62,10 @@ func (h *Handlers) getSIPScriptTemplate(c *gin.Context) {
 }
 
 func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	var req sipScriptTemplateWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -85,6 +97,7 @@ func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
 		enabled,
 		spec,
 	)
+	row.TenantID = tid
 	if op := acdOperator(c); op != "" {
 		row.SetCreateInfo(op)
 	}
@@ -96,6 +109,10 @@ func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
 }
 
 func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -106,7 +123,7 @@ func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 		response.Fail(c, "invalid body", err.Error())
 		return
 	}
-	row, err := models.GetActiveSIPScriptTemplateByID(h.db, uint(id))
+	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, uint(id), tid)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -135,12 +152,16 @@ func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 }
 
 func (h *Handlers) deleteSIPScriptTemplate(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	n, err := models.SoftDeleteSIPScriptTemplateByID(h.db, uint(id), acdOperator(c))
+	n, err := models.SoftDeleteSIPScriptTemplateByIDForTenant(h.db, uint(id), tid, acdOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return

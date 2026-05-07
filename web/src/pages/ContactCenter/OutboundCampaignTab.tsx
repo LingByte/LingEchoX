@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Modal } from '@arco-design/web-react'
+import { Button, Drawer } from '@arco-design/web-react'
 import { showAlert } from '@/utils/notification'
 import {
   createOutboundCampaign,
@@ -260,7 +260,13 @@ export default function OutboundCampaignTab() {
         <div className="flex gap-2"><Button type="outline" size="small" disabled={campaignsPage <= 1} onClick={() => setCampaignsPage((p) => Math.max(1, p - 1))}>上一页</Button><Button type="outline" size="small" disabled={campaignsPage * pageSize >= campaignsTotal} onClick={() => setCampaignsPage((p) => p + 1)}>下一页</Button></div>
       </div>
 
-      <Modal visible={createModalOpen} onCancel={() => setCreateModalOpen(false)} title="新建外呼任务" footer={null} style={{ width: 720 }}>
+      <Drawer
+        visible={createModalOpen}
+        onCancel={() => setCreateModalOpen(false)}
+        title="新建外呼任务"
+        placement="right"
+        width={720}
+      >
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">脚本模板</label><select className="border border-border rounded-md px-3 py-2 bg-background w-full text-sm" value={selectedScriptId} onChange={(e) => setSelectedScriptId(e.target.value)}><option value="">无</option>{scripts.map((s) => <option key={s.id} value={String(s.id)}>{s.name} ({s.scriptId})</option>)}</select></div>
@@ -268,9 +274,15 @@ export default function OutboundCampaignTab() {
           </div>
           <div className="flex justify-end gap-2"><Button type="outline" onClick={() => setCreateModalOpen(false)} disabled={creating}>取消</Button><Button type="primary" onClick={() => void createCampaign()} disabled={creating}>{creating ? '创建中...' : '创建'}</Button></div>
         </div>
-      </Modal>
+      </Drawer>
 
-      <Modal visible={detailModalOpen} onCancel={() => setDetailModalOpen(false)} title={detailCampaign ? `任务详情 #${detailCampaign.id} · ${detailCampaign.name} · ${campaignStatusLabel(detailCampaign.status)}` : '任务详情'} footer={null} style={{ width: 'min(1100px, 92vw)' }}>
+      <Drawer
+        visible={detailModalOpen}
+        onCancel={() => setDetailModalOpen(false)}
+        title={detailCampaign ? `任务详情 #${detailCampaign.id} · ${detailCampaign.name} · ${campaignStatusLabel(detailCampaign.status)}` : '任务详情'}
+        placement="right"
+        width={1100}
+      >
         <div className="space-y-3">
           <p className="text-xs text-foreground/90 leading-relaxed rounded-md border border-border bg-muted/20 px-3 py-2">暂停可继续，停止后不可继续，只能重建任务。</p>
           <div className="flex flex-wrap gap-2">
@@ -300,7 +312,7 @@ export default function OutboundCampaignTab() {
             <div className="rounded border border-border bg-black text-green-300 text-xs font-mono p-2 h-64 overflow-auto">{!detailCampaignId && <div className="text-zinc-400">请选择任务后查看日志</div>}{detailCampaignId && logs.length === 0 && <div className="text-zinc-400">暂无执行日志</div>}{logs.map((row) => <div key={`${row.type}-${row.id}-${row.at}`} className="leading-5 break-all"><span className="text-zinc-400">[{new Date(row.at).toLocaleString()}]</span>{' '}<span className={row.level === 'error' ? 'text-red-300' : 'text-cyan-300'}>{row.type.toUpperCase()}</span>{' '}{row.phone ? <span className="text-yellow-200">phone={row.phone} </span> : null}{row.callId ? <span className="text-yellow-200">call={row.callId} </span> : null}<span>{row.message}</span></div>)}</div>
           </div>
         </div>
-      </Modal>
+      </Drawer>
     </div>
   )
 }

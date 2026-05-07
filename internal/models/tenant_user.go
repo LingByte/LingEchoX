@@ -21,10 +21,10 @@ const (
 type TenantUser struct {
 	BaseModel
 
-	TenantID     uint       `json:"tenantId" gorm:"uniqueIndex:idx_tenant_user_email;index;not null"`
-	Email        string     `json:"email" gorm:"size:256;uniqueIndex:idx_tenant_user_email"`
-	Phone        string     `json:"phone" gorm:"size:32;uniqueIndex:idx_tenant_phone"`
-	Username     string     `json:"username" gorm:"size:128;index"`
+	TenantID     uint   `json:"tenantId" gorm:"index;not null"`
+	Email        string `json:"email" gorm:"size:256;uniqueIndex:idx_global_tenant_user_email;not null"`
+	Phone        string `json:"phone" gorm:"size:32"`
+	Username     string `json:"username" gorm:"size:128"`
 	PasswordHash string     `json:"-" gorm:"size:256"`
 	DisplayName  string     `json:"displayName" gorm:"size:128"`
 	Status       string     `json:"status" gorm:"size:24;index;not null;default:active"` // active | disabled | pending
@@ -95,6 +95,13 @@ func GetTenantUserByEmail(db *gorm.DB, tenantID uint, email string) (TenantUser,
 func GetActiveTenantUserByEmail(db *gorm.DB, tenantID uint, email string) (TenantUser, error) {
 	var row TenantUser
 	err := ActiveTenantUsers(db).Where("tenant_id = ? AND email = ?", tenantID, strings.TrimSpace(email)).First(&row).Error
+	return row, err
+}
+
+// GetActiveTenantUserByEmailGlobal returns a non-deleted tenant user by email (unique across the system).
+func GetActiveTenantUserByEmailGlobal(db *gorm.DB, email string) (TenantUser, error) {
+	var row TenantUser
+	err := ActiveTenantUsers(db).Where("email = ?", strings.TrimSpace(strings.ToLower(email))).First(&row).Error
 	return row, err
 }
 
@@ -184,9 +191,10 @@ func CountTenantUsersByStatus(db *gorm.DB, tenantID uint, status string) (int64,
 	return count, err
 }
 
-// CheckTenantUserEmailExists checks if email exists in tenant (excluding optional user ID).
-func CheckTenantUserEmailExists(db *gorm.DB, tenantID uint, email string, excludeID uint) (bool, error) {
-	q := db.Model(&TenantUser{}).Where("tenant_id = ? AND email = ? AND is_deleted = ?", tenantID, email, SoftDeleteStatusActive)
+// CheckTenantUserEmailExists checks if email is already used by an active user (globally unique).
+func CheckTenantUserEmailExists(db *gorm.DB, _ uint, email string, excludeID uint) (bool, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	q := ActiveTenantUsers(db).Where("email = ?", email)
 	if excludeID > 0 {
 		q = q.Where("id != ?", excludeID)
 	}
@@ -195,9 +203,13 @@ func CheckTenantUserEmailExists(db *gorm.DB, tenantID uint, email string, exclud
 	return count > 0, err
 }
 
-// CheckTenantUserPhoneExists checks if phone exists in tenant (excluding optional user ID).
-func CheckTenantUserPhoneExists(db *gorm.DB, tenantID uint, phone string, excludeID uint) (bool, error) {
-	q := db.Model(&TenantUser{}).Where("tenant_id = ? AND phone = ? AND is_deleted = ?", tenantID, phone, SoftDeleteStatusActive)
+// CheckTenantUserPhoneExists checks if phone is already used globally (excluding empty phone).
+func CheckTenantUserPhoneExists(db *gorm.DB, _ uint, phone string, excludeID uint) (bool, error) {
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return false, nil
+	}
+	q := ActiveTenantUsers(db).Where("phone = ?", phone)
 	if excludeID > 0 {
 		q = q.Where("id != ?", excludeID)
 	}
@@ -206,9 +218,13 @@ func CheckTenantUserPhoneExists(db *gorm.DB, tenantID uint, phone string, exclud
 	return count > 0, err
 }
 
-// CheckTenantUserUsernameExists checks if username exists in tenant (excluding optional user ID).
-func CheckTenantUserUsernameExists(db *gorm.DB, tenantID uint, username string, excludeID uint) (bool, error) {
-	q := db.Model(&TenantUser{}).Where("tenant_id = ? AND username = ? AND is_deleted = ?", tenantID, username, SoftDeleteStatusActive)
+// CheckTenantUserUsernameExists checks if username is already used globally (excluding blank).
+func CheckTenantUserUsernameExists(db *gorm.DB, _ uint, username string, excludeID uint) (bool, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return false, nil
+	}
+	q := ActiveTenantUsers(db).Where("username = ?", username)
 	if excludeID > 0 {
 		q = q.Where("id != ?", excludeID)
 	}

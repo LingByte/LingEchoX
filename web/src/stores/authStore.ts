@@ -96,15 +96,32 @@ export const useAuthStore = create<AuthState>()(
         set({ isAuthenticated: true, token })
         try {
           const res = await fetchMe()
-          if (res.code === 200 && res.data?.user) {
-            const user = {
-              ...res.data.user,
-              tenantSlug: res.data.tenant?.slug,
-              tenantName: res.data.tenant?.name,
+          if (res.code === 200 && res.data) {
+            const data = res.data
+            if (data.principal === 'platform' && data.platformAdmin) {
+              const a = data.platformAdmin
+              const user = {
+                id: a.id,
+                email: a.email,
+                displayName: a.displayName,
+                isPlatformAdmin: true,
+                principal: 'platform' as const,
+              }
+              localStorage.setItem('auth_user', JSON.stringify(user))
+              set({ user, isAuthenticated: true, token })
+              return
             }
-            localStorage.setItem('auth_user', JSON.stringify(user))
-            set({ user, isAuthenticated: true, token })
-            return
+            if (data.principal === 'tenant' && data.user) {
+              const user = {
+                ...data.user,
+                tenantSlug: data.tenant?.slug,
+                tenantName: data.tenant?.name,
+                principal: 'tenant' as const,
+              }
+              localStorage.setItem('auth_user', JSON.stringify(user))
+              set({ user, isAuthenticated: true, token })
+              return
+            }
           }
         } catch {
           // fallthrough to local cache

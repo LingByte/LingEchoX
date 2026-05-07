@@ -622,3 +622,14 @@
 .animation-delay-4000 {
   animation-delay: 4s;
 }
+
+/* Collapsed sidebar: menu items icon-only + centered */
+.ling-sidebar-menu--collapsed-icons .arco-menu-inner .arco-menu-item {
+  display: flex;
+  justify-content: center;
+}
+.ling-sidebar-menu--collapsed-icons .arco-menu-inner .arco-menu-item-inner {
+  justify-content: center;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}

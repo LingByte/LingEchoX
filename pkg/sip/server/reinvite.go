@@ -132,6 +132,7 @@ func (s *SIPServer) handleReInvite(msg *stack.Message, addr *net.UDPAddr, cs *si
 
 	if p := s.callPersistStore(); p != nil {
 		p.OnInvite(context.Background(), InvitePersistParams{
+			TenantID:    0,
 			CallID:      callID,
 			From:        msg.GetHeader("From"),
 			To:          msg.GetHeader("To"),

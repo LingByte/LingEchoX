@@ -34,6 +34,13 @@ func GetTenantBySlug(db *gorm.DB, slug string) (Tenant, error) {
 	return row, err
 }
 
+// GetActiveTenantByID returns an active tenant by primary key.
+func GetActiveTenantByID(db *gorm.DB, id uint) (Tenant, error) {
+	var row Tenant
+	err := db.Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).First(&row).Error
+	return row, err
+}
+
 // TenantSlugTaken reports whether slug is already used by an active tenant.
 func TenantSlugTaken(db *gorm.DB, slug string) (bool, error) {
 	var n int64

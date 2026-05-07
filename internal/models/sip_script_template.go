@@ -17,6 +17,8 @@ import (
 type SIPScriptTemplate struct {
 	BaseModel
 
+	TenantID uint `json:"tenantId" gorm:"index;not null;default:0"`
+
 	Name        string `json:"name" gorm:"size:128;not null;index"`
 	ScriptID    string `json:"scriptId" gorm:"size:128;not null;index"`
 	Version     string `json:"version" gorm:"size:64;index"`
@@ -36,8 +38,8 @@ func ActiveSIPScriptTemplates(db *gorm.DB) *gorm.DB {
 }
 
 // ListSIPScriptTemplatesPage lists active templates with optional filters.
-func ListSIPScriptTemplatesPage(db *gorm.DB, page, size int, scriptID, nameContains string) ([]SIPScriptTemplate, int64, error) {
-	q := ActiveSIPScriptTemplates(db)
+func ListSIPScriptTemplatesPage(db *gorm.DB, tenantID uint, page, size int, scriptID, nameContains string) ([]SIPScriptTemplate, int64, error) {
+	q := ActiveSIPScriptTemplates(db).Where("tenant_id = ?", tenantID)
 	if s := strings.TrimSpace(scriptID); s != "" {
 		q = q.Where("script_id = ?", s)
 	}
@@ -61,6 +63,23 @@ func GetActiveSIPScriptTemplateByID(db *gorm.DB, id uint) (SIPScriptTemplate, er
 	var row SIPScriptTemplate
 	err := ActiveSIPScriptTemplates(db).Where("id = ?", id).First(&row).Error
 	return row, err
+}
+
+// GetActiveSIPScriptTemplateForTenant returns one script template for tenant scope.
+func GetActiveSIPScriptTemplateForTenant(db *gorm.DB, id uint, tenantID uint) (SIPScriptTemplate, error) {
+	var row SIPScriptTemplate
+	err := ActiveSIPScriptTemplates(db).Where("id = ? AND tenant_id = ?", id, tenantID).First(&row).Error
+	return row, err
+}
+
+// SoftDeleteSIPScriptTemplateByIDForTenant soft-deletes for tenant scope.
+func SoftDeleteSIPScriptTemplateByIDForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
+	updates := map[string]interface{}{"is_deleted": SoftDeleteStatusDeleted}
+	if updateBy != "" {
+		updates["update_by"] = updateBy
+	}
+	res := db.Model(&SIPScriptTemplate{}).Where("id = ? AND tenant_id = ? AND is_deleted = ?", id, tenantID, SoftDeleteStatusActive).Updates(updates)
+	return res.RowsAffected, res.Error
 }
 
 // ParseScriptTemplateSpec validates JSON and returns bytes for GORM JSON column.

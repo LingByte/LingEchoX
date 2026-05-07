@@ -3,8 +3,8 @@ import {
   Button,
   Card,
   Checkbox,
+  Drawer,
   Input,
-  Modal,
   Select,
   Space,
   Typography,
@@ -296,14 +296,20 @@ const SIPTrunkNumbers = () => {
           )}
         </Card>
 
-        <Modal
+        <Drawer
           title={editingId == null ? '新增中继号码' : '编辑中继号码'}
           visible={modalOpen}
-          style={{ width: 640 }}
+          placement="right"
+          width={640}
           onCancel={closeModal}
-          onOk={() => void save()}
-          okText={saving ? '保存中...' : '保存'}
-          confirmLoading={saving}
+          footer={
+            <Space>
+              <Button onClick={closeModal} disabled={saving}>取消</Button>
+              <Button type="primary" loading={saving} onClick={() => void save()}>
+                {saving ? '保存中...' : '保存'}
+              </Button>
+            </Space>
+          }
         >
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <div>
@@ -363,18 +369,27 @@ const SIPTrunkNumbers = () => {
               <Input type="number" value={form.providerId} onChange={(v) => setForm((f) => ({ ...f, providerId: v }))} />
             </div>
           </Space>
-        </Modal>
+        </Drawer>
 
-        <Modal
+        <Drawer
           title="确认删除中继号码"
           visible={delOpen}
-          onOk={() => void confirmDelete()}
+          placement="right"
+          width={420}
           onCancel={() => { if (!delLoading) { setDelOpen(false); setDelId(null) } }}
-          okText="确认删除"
-          okButtonProps={{ status: 'danger', loading: delLoading }}
+          footer={
+            <Space>
+              <Button onClick={() => { if (!delLoading) { setDelOpen(false); setDelId(null) } }} disabled={delLoading}>
+                取消
+              </Button>
+              <Button status="danger" loading={delLoading} onClick={() => void confirmDelete()}>
+                确认删除
+              </Button>
+            </Space>
+          }
         >
           <Typography.Text>删除后不可恢复（软删除），确认继续吗？</Typography.Text>
-        </Modal>
+        </Drawer>
       </Space>
     </BaseLayout>
   )

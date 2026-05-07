@@ -15,16 +15,36 @@ export interface TenantAuthUser {
   status?: string
 }
 
-export interface TenantAuthPayload {
-  token: string
-  expiresIn: number
-  tenant: TenantAuthTenant
-  user: TenantAuthUser
+export interface PlatformAdminAuth {
+  id: number
+  email: string
+  displayName?: string
+  status?: string
 }
+
+export type LoginPrincipal = 'tenant' | 'platform'
+
+/** Same endpoint `/login`; shape depends on principal. */
+export type TenantAuthPayload =
+  | {
+      principal: 'tenant'
+      token: string
+      expiresIn: number
+      tenant: TenantAuthTenant
+      user: TenantAuthUser
+      platformAdmin?: undefined
+    }
+  | {
+      principal: 'platform'
+      token: string
+      expiresIn: number
+      platformAdmin: PlatformAdminAuth
+      tenant?: undefined
+      user?: undefined
+    }
 
 export interface TenantRegisterBody {
   companyName: string
-  slug?: string
   adminEmail: string
   adminPassword: string
   adminDisplayName?: string
@@ -32,7 +52,6 @@ export interface TenantRegisterBody {
 }
 
 export interface TenantLoginBody {
-  tenantSlug: string
   email: string
   password: string
 }

@@ -28,6 +28,11 @@ const (
 	TENANT_ROLE_TABLE_NAME           = "tenant_roles"
 	TENANT_ROLE_PERMISSION_TABLE_NAME = "tenant_role_permissions"
 	TENANT_USER_ROLE_TABLE_NAME      = "tenant_user_roles"
+
+	CREDENTIAL_TABLE_NAME = "credential"
+
+	// Platform admins (global, isolated from tenants).
+	PLATFORM_ADMIN_TABLE_NAME = "platform_admins"
 )
 
 // Default Value: 1024

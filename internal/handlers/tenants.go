@@ -4,7 +4,10 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +18,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/LingByte/SoulNexus/pkg/utils/access"
 	"github.com/gin-gonic/gin"
+	pinyinLib "github.com/mozillazg/go-pinyin"
 	"gorm.io/gorm"
 )
 
@@ -26,11 +30,68 @@ const (
 
 type tenantRegisterReq struct {
 	CompanyName       string `json:"companyName" binding:"required,min=2,max=128"`
-	Slug              string `json:"slug"` // optional; derived from company name when empty
 	AdminEmail        string `json:"adminEmail" binding:"required,email"`
 	AdminPassword     string `json:"adminPassword" binding:"required,min=8,max=128"`
 	AdminDisplayName  string `json:"adminDisplayName"`
 	TenantDescription string `json:"tenantDescription"`
+}
+
+func baseSlugFromCompanyName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "tenant"
+	}
+	args := pinyinLib.NewArgs()
+	segs := pinyinLib.LazyPinyin(name, args)
+	raw := strings.Join(segs, "-")
+	slug := normalizeTenantSlug(raw)
+	if slug == "" {
+		slug = normalizeTenantSlug(name)
+	}
+	if len(slug) < 2 {
+		slug = "tenant"
+	}
+	if len(slug) > 62 {
+		slug = strings.TrimRight(strings.TrimSpace(slug[:62]), "-")
+	}
+	return slug
+}
+
+func allocateUniqueTenantSlug(db *gorm.DB, base string) (string, error) {
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "tenant"
+	}
+	for attempts := 0; attempts < 80; attempts++ {
+		nBig, err := rand.Int(rand.Reader, big.NewInt(100))
+		if err != nil {
+			return "", err
+		}
+		suffix := fmt.Sprintf("%02d", nBig.Int64())
+		candidate := base + suffix
+		if len(candidate) > 64 {
+			trunc := base[:64-len(suffix)]
+			trunc = strings.TrimRight(strings.TrimSpace(trunc), "-")
+			if len(trunc) < 2 {
+				trunc = "te"
+			}
+			candidate = trunc + suffix
+		}
+		if len(candidate) < 2 || len(candidate) > 64 {
+			continue
+		}
+		if !validTenantSlug(candidate) {
+			continue
+		}
+		ok, err := models.TenantSlugTaken(db, candidate)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("could not allocate unique tenant slug")
 }
 
 func normalizeTenantSlug(s string) string {
@@ -39,6 +100,9 @@ func normalizeTenantSlug(s string) string {
 	prevDash := false
 	for _, r := range s {
 		switch {
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r - 'A' + 'a')
+			prevDash = false
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
 			b.WriteRune(r)
 			prevDash = false
@@ -131,24 +195,7 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 
-	slug := normalizeTenantSlug(req.Slug)
-	if slug == "" {
-		slug = normalizeTenantSlug(req.CompanyName)
-	}
-	if !validTenantSlug(slug) {
-		response.Fail(c, "组织标识 slug 须为 2–64 位小写字母、数字或连字符，且不可首尾为连字符", nil)
-		return
-	}
-
-	taken, err := models.TenantSlugTaken(h.db, slug)
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	if taken {
-		response.Fail(c, "该组织标识已被占用", nil)
-		return
-	}
+	slugBase := baseSlugFromCompanyName(req.CompanyName)
 
 	if bootstrap.GlobalKeyManager == nil {
 		response.Fail(c, "服务未就绪：JWT 密钥未初始化", nil)
@@ -162,6 +209,17 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 	}
 
 	email := strings.TrimSpace(strings.ToLower(req.AdminEmail))
+
+	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, 0, email, 0)
+	if mailErr != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, mailErr)
+		return
+	}
+	if takenMail {
+		response.Fail(c, "该邮箱已被注册", nil)
+		return
+	}
+
 	display := strings.TrimSpace(req.AdminDisplayName)
 	if display == "" {
 		display = strings.Split(email, "@")[0]
@@ -172,6 +230,10 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 	var role models.TenantRole
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
+		slug, err := allocateUniqueTenantSlug(tx, slugBase)
+		if err != nil {
+			return err
+		}
 		t := &models.Tenant{
 			Name:        strings.TrimSpace(req.CompanyName),
 			Slug:        slug,
@@ -224,6 +286,7 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 	}
 
 	response.Success(c, "success", gin.H{
+		"principal":   "tenant",
 		"token":       token,
 		"expiresIn":   int(tenantAccessTokenTTL.Seconds()),
 		"tenant":      tenantPublic(tenant),

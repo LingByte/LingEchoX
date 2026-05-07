@@ -33,6 +33,15 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children
 }
 
+function RequirePlatform({ children }: { children: JSX.Element }) {
+  const user = useAuthStore((s) => s.user)
+  const isPlatform = Boolean(user?.isPlatformAdmin || user?.principal === 'platform')
+  if (!isPlatform) {
+    return <Navigate to="/overview" replace />
+  }
+  return children
+}
+
 function App() {
   return (
     <ErrorBoundary>
@@ -62,8 +71,8 @@ function App() {
                     <Route path="/script-manager/new" element={<RequireAuth><ScriptManagerNew /></RequireAuth>} />
                     <Route path="/script-manager" element={<RequireAuth><ScriptManager /></RequireAuth>} />
                     <Route path="/web-agents" element={<RequireAuth><WebAgents /></RequireAuth>} />
-                    <Route path="/sip-trunks" element={<RequireAuth><SIPTrunks /></RequireAuth>} />
-                    <Route path="/sip-trunk-numbers" element={<RequireAuth><SIPTrunkNumbers /></RequireAuth>} />
+                    <Route path="/sip-trunks" element={<RequireAuth><RequirePlatform><SIPTrunks /></RequirePlatform></RequireAuth>} />
+                    <Route path="/sip-trunk-numbers" element={<RequireAuth><RequirePlatform><SIPTrunkNumbers /></RequirePlatform></RequireAuth>} />
                     <Route path="/" element={<Navigate to="/overview" replace />} />
                     <Route path="*" element={<Navigate to="/overview" replace />} />
                   </Routes>

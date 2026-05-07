@@ -46,6 +46,7 @@ func (s *CallStore) OnInvite(ctx context.Context, p sipServer.InvitePersistParam
 		row = NewSIPCallRinging(
 			p.CallID, p.From, p.To, p.CSeqInvite, p.RemoteSig, dir,
 			p.RemoteRTP, p.LocalRTP, p.PayloadType, p.Codec, p.ClockRate, now,
+			p.TenantID,
 		)
 		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 			s.lg.Warn("sippersist invite create", zap.String("call_id", p.CallID), zap.Error(err))

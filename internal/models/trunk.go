@@ -13,6 +13,7 @@ import (
 
 type Trunk struct {
 	ID          uint           `json:"id" gorm:"primarykey"`
+	TenantID    uint           `json:"tenantId" gorm:"index;not null;default:0"` // SaaS isolation
 	CreatedAt   time.Time      `json:"createdAt" label:"创建时间"`
 	UpdatedAt   time.Time      `json:"updatedAt" label:"更新时间"`
 	DeletedAt   gorm.DeletedAt `json:"deletedAt" gorm:"index"`
@@ -56,8 +57,11 @@ func (TrunkNumber) TableName() string {
 }
 
 // ListTrunksPage lists non-deleted trunks with optional name filter.
-func ListTrunksPage(db *gorm.DB, page, size int, nameContains string) ([]Trunk, int64, error) {
+func ListTrunksPage(db *gorm.DB, tenantID uint, page, size int, nameContains string) ([]Trunk, int64, error) {
 	q := db.Model(&Trunk{})
+	if tenantID > 0 {
+		q = q.Where("tenant_id = ?", tenantID)
+	}
 	if name := strings.TrimSpace(nameContains); name != "" {
 		q = q.Where("name LIKE ?", "%"+name+"%")
 	}
@@ -95,6 +99,22 @@ func GetTrunkByIDBare(db *gorm.DB, id uint) (Trunk, error) {
 	return row, err
 }
 
+// GetTrunkByIDBareForTenant loads trunk row belonging to tenant.
+func GetTrunkByIDBareForTenant(db *gorm.DB, id uint, tenantID uint) (Trunk, error) {
+	var row Trunk
+	err := db.Where("id = ? AND tenant_id = ?", id, tenantID).First(&row).Error
+	return row, err
+}
+
+// GetTrunkByIDForTenant loads trunk + numbers scoped to tenant.
+func GetTrunkByIDForTenant(db *gorm.DB, id uint, tenantID uint) (Trunk, error) {
+	var row Trunk
+	err := db.Preload("Numbers", func(tx *gorm.DB) *gorm.DB {
+		return tx.Order("id ASC")
+	}).Where("id = ? AND tenant_id = ?", id, tenantID).First(&row).Error
+	return row, err
+}
+
 // SoftDeleteTrunkCascade soft-deletes a trunk and its numbers.
 func SoftDeleteTrunkCascade(db *gorm.DB, id uint) error {
 	return db.Transaction(func(tx *gorm.DB) error {
@@ -105,11 +125,18 @@ func SoftDeleteTrunkCascade(db *gorm.DB, id uint) error {
 	})
 }
 
-// ListTrunkNumbersPage lists numbers; trunkID 0 means all trunks.
-func ListTrunkNumbersPage(db *gorm.DB, trunkID uint, page, size int, numberContains string) ([]TrunkNumber, int64, error) {
-	q := db.Model(&TrunkNumber{})
+// ListTrunkNumbersPage lists numbers; trunkID 0 means all trunks for tenantID.
+func ListTrunkNumbersPage(db *gorm.DB, tenantID uint, trunkID uint, page, size int, numberContains string) ([]TrunkNumber, int64, error) {
+	tn := TrunkNumber{}.TableName()
+	tr := Trunk{}.TableName()
+	q := db.Model(&TrunkNumber{}).
+		Joins("INNER JOIN "+tr+" AS tr ON tr.id = "+tn+".trunk_id AND tr.deleted_at IS NULL").
+		Where("1 = 1")
+	if tenantID > 0 {
+		q = q.Where("tr.tenant_id = ?", tenantID)
+	}
 	if trunkID > 0 {
-		q = q.Where("trunk_id = ?", trunkID)
+		q = q.Where(tn+".trunk_id = ?", trunkID)
 	}
 	if num := strings.TrimSpace(numberContains); num != "" {
 		q = q.Where("`number` LIKE ?", "%"+num+"%")
@@ -136,6 +163,19 @@ func ListTrunkNumbersPage(db *gorm.DB, trunkID uint, page, size int, numberConta
 func GetTrunkNumberByID(db *gorm.DB, id uint) (TrunkNumber, error) {
 	var row TrunkNumber
 	err := db.First(&row, id).Error
+	return row, err
+}
+
+// GetTrunkNumberByIDForTenant loads a trunk number row only if its trunk belongs to tenantID.
+func GetTrunkNumberByIDForTenant(db *gorm.DB, id uint, tenantID uint) (TrunkNumber, error) {
+	var row TrunkNumber
+	tn := TrunkNumber{}.TableName()
+	tr := Trunk{}.TableName()
+	err := db.Model(&TrunkNumber{}).
+		Joins("INNER JOIN "+tr+" AS tr ON tr.id = "+tn+".trunk_id AND tr.deleted_at IS NULL").
+		Where(tn+".id = ? AND tr.tenant_id = ?", id, tenantID).
+		Select(tn + ".*").
+		First(&row).Error
 	return row, err
 }
 

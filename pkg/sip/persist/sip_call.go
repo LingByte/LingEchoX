@@ -65,6 +65,8 @@ type SIPCall struct {
 	CreateBy  string    `json:"createBy,omitempty" gorm:"size:128;index;comment:Creator"`
 	UpdateBy  string    `json:"updateBy,omitempty" gorm:"size:128;index;comment:Updater"`
 
+	TenantID uint `json:"tenantId" gorm:"index;not null;default:0"` // 0=legacy / unknown scope
+
 	CallID            string         `json:"callId" gorm:"size:128;uniqueIndex;not null"`
 	FromHeader        string         `json:"fromHeader" gorm:"type:text"`
 	ToHeader          string         `json:"toHeader" gorm:"type:text"`
@@ -332,12 +334,13 @@ func EnrichSIPCallResponse(c *SIPCall) {
 	}
 }
 
-func NewSIPCallRinging(callID, from, to, cseqInvite, remoteAddr, direction, remoteRTP, localRTP string, payloadType uint8, codec string, clockRate int, inviteAt time.Time) SIPCall {
+func NewSIPCallRinging(callID, from, to, cseqInvite, remoteAddr, direction, remoteRTP, localRTP string, payloadType uint8, codec string, clockRate int, inviteAt time.Time, tenantID uint) SIPCall {
 	dir := strings.TrimSpace(direction)
 	if dir == "" {
 		dir = DirectionInbound
 	}
 	return SIPCall{
+		TenantID:      tenantID,
 		CallID:        callID,
 		FromHeader:    from,
 		ToHeader:      to,
@@ -487,8 +490,8 @@ func ActiveSIPCalls(db *gorm.DB) *gorm.DB {
 	return db.Model(&SIPCall{}).Where("is_deleted = ?", SoftDeleteStatusActive)
 }
 
-func ListSIPCallsPage(db *gorm.DB, page, size int, callID, state string) ([]SIPCall, int64, error) {
-	q := ActiveSIPCalls(db)
+func ListSIPCallsPage(db *gorm.DB, tenantID uint, page, size int, callID, state string) ([]SIPCall, int64, error) {
+	q := ActiveSIPCalls(db).Where("tenant_id = ?", tenantID)
 	if cid := strings.TrimSpace(callID); cid != "" {
 		q = q.Where("call_id = ?", cid)
 	}
@@ -510,6 +513,13 @@ func ListSIPCallsPage(db *gorm.DB, page, size int, callID, state string) ([]SIPC
 func GetActiveSIPCallByID(db *gorm.DB, id uint) (SIPCall, error) {
 	var row SIPCall
 	err := ActiveSIPCalls(db).Where("id = ?", id).First(&row).Error
+	return row, err
+}
+
+// GetActiveSIPCallForTenant returns a call row scoped to tenantID.
+func GetActiveSIPCallForTenant(db *gorm.DB, id uint, tenantID uint) (SIPCall, error) {
+	var row SIPCall
+	err := ActiveSIPCalls(db).Where("id = ? AND tenant_id = ?", id, tenantID).First(&row).Error
 	return row, err
 }
 
