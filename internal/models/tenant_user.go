@@ -91,6 +91,13 @@ func GetTenantUserByEmail(db *gorm.DB, tenantID uint, email string) (TenantUser,
 	return row, err
 }
 
+// GetActiveTenantUserByEmail returns a non-deleted tenant user by email within a tenant.
+func GetActiveTenantUserByEmail(db *gorm.DB, tenantID uint, email string) (TenantUser, error) {
+	var row TenantUser
+	err := ActiveTenantUsers(db).Where("tenant_id = ? AND email = ?", tenantID, strings.TrimSpace(email)).First(&row).Error
+	return row, err
+}
+
 // GetTenantUserByPhone returns a tenant user by phone within a tenant.
 func GetTenantUserByPhone(db *gorm.DB, tenantID uint, phone string) (TenantUser, error) {
 	var row TenantUser

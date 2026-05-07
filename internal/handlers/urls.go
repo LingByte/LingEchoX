@@ -4,6 +4,7 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"github.com/LingByte/SoulNexus/cmd/bootstrap"
 	"github.com/LingByte/SoulNexus/internal/sipserver"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
@@ -34,15 +35,18 @@ func (h *Handlers) SetCampaignService(svc *sipserver.CampaignService) {
 }
 
 func (h *Handlers) Register(engine *gin.Engine) {
-
+	engine.GET("/.well-known/jwks.json", h.JWKSHandler)
 	r := engine.Group(config.GlobalConfig.Server.APIPrefix)
-
 	// Register Global Singleton DB
 	r.Use(middleware.InjectDB(h.db))
-	h.registerSIPContactCenterRoutes(r)
-	h.registerLingechoWebSeatRoutes(r)
-	h.registerVoiceDialogRoutes(r)
-	h.registerTenantUserRoutes(r)
+	h.registerTenantPublicRoutes(r)
+
+	protected := r.Group("")
+	protected.Use(middleware.RequireTenantAuth())
+	h.registerSIPContactCenterRoutes(protected)
+	h.registerLingechoWebSeatRoutes(protected)
+	h.registerVoiceDialogRoutes(protected)
+	h.registerTenantUserRoutes(protected)
 }
 
 func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
@@ -51,23 +55,19 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		g.GET("/users", h.listSIPUsers)
 		g.GET("/users/:id", h.getSIPUser)
 		g.DELETE("/users/:id", h.deleteSIPUser)
-
 		g.GET("/calls", h.listSIPCalls)
 		g.GET("/calls/:id", h.getSIPCall)
-
 		g.GET("/acd-pool", h.listACDPoolTargets)
 		g.POST("/acd-pool/web-seat/heartbeat", h.webSeatACDHeartbeat)
 		g.GET("/acd-pool/:id", h.getACDPoolTarget)
 		g.POST("/acd-pool", h.createACDPoolTarget)
 		g.PUT("/acd-pool/:id", h.updateACDPoolTarget)
 		g.DELETE("/acd-pool/:id", h.deleteACDPoolTarget)
-
 		g.GET("/scripts", h.listSIPScriptTemplates)
 		g.GET("/scripts/:id", h.getSIPScriptTemplate)
 		g.POST("/scripts", h.createSIPScriptTemplate)
 		g.PUT("/scripts/:id", h.updateSIPScriptTemplate)
 		g.DELETE("/scripts/:id", h.deleteSIPScriptTemplate)
-
 		g.POST("/campaigns", h.createSIPCampaign)
 		g.GET("/campaigns", h.listSIPCampaigns)
 		g.POST("/campaigns/:id/contacts", h.addSIPCampaignContacts)
@@ -110,6 +110,13 @@ func (h *Handlers) registerVoiceDialogRoutes(r *gin.RouterGroup) {
 	g.GET("/ws", voiceDialogWebSocket)
 }
 
+func (h *Handlers) registerTenantPublicRoutes(r *gin.RouterGroup) {
+	r.POST("/tenants/register", h.registerTenant)
+	r.POST("/auth/tenant-login", h.tenantLogin)
+	r.POST("/register", h.registerTenant)
+	r.POST("/login", h.tenantLogin)
+}
+
 func (h *Handlers) registerTenantUserRoutes(r *gin.RouterGroup) {
 	g := r.Group("tenant-users")
 	{
@@ -122,4 +129,24 @@ func (h *Handlers) registerTenantUserRoutes(r *gin.RouterGroup) {
 		g.POST("/:id/restore", h.restoreTenantUser)
 		g.GET("/stats", h.getTenantUserStats)
 	}
+	r.GET("/me", h.getMe)
+	r.PUT("/me", h.updateMe)
+	r.PUT("/me/password", h.updateMyPassword)
+	r.POST("/auth/logout", h.logout)
+}
+
+// JWKSHandler returns the JSON Web Key Set (JWKS) endpoint
+func (h *Handlers) JWKSHandler(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+	c.Header("Cache-Control", "public, max-age=3600")
+	if bootstrap.GlobalKeyManager == nil {
+		c.JSON(500, gin.H{"error": "key manager not initialized"})
+		return
+	}
+	jwksJSON, err := bootstrap.GlobalKeyManager.GetJWKSJSON()
+	if err != nil {
+		c.JSON(500, gin.H{"error": "failed to generate JWKS"})
+		return
+	}
+	c.String(200, jwksJSON)
 }

@@ -61,7 +61,7 @@ func main() {
 	if *mode != "" {
 		os.Setenv("MODE", *mode)
 	}
-	
+
 	// 3. Load Global Configuration
 	if err := config.Load(); err != nil {
 		panic("config load failed: " + err.Error())
@@ -89,6 +89,11 @@ func main() {
 
 	if err != nil {
 		logger.Error("database setup failed", zap.Error(err))
+		return
+	}
+
+	if err := bootstrap.InitializeKeyManager(); err != nil {
+		logger.Error("key manager initialization failed", zap.Error(err))
 		return
 	}
 

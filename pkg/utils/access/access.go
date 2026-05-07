@@ -25,15 +25,19 @@ const (
 
 // AccessPayload is the application data carried in an access token.
 type AccessPayload struct {
-	UserID uint   `json:"uid"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID     uint   `json:"uid"`
+	TenantID   uint   `json:"tid,omitempty"`
+	TenantSlug string `json:"tslug,omitempty"`
+	Email      string `json:"email"`
+	Role       string `json:"role"`
 }
 
 type accessClaims struct {
-	UserID uint   `json:"uid"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID     uint   `json:"uid"`
+	TenantID   uint   `json:"tid,omitempty"`
+	TenantSlug string `json:"tslug,omitempty"`
+	Email      string `json:"email"`
+	Role       string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -46,13 +50,16 @@ func SignAccessToken(p AccessPayload, secret string, ttl time.Duration) (string,
 		return "", errors.New("jwt: ttl must be positive")
 	}
 	now := time.Now()
+	sub := subjectForAccessPayload(p)
 	claims := accessClaims{
-		UserID: p.UserID,
-		Email:  p.Email,
-		Role:   p.Role,
+		UserID:     p.UserID,
+		TenantID:   p.TenantID,
+		TenantSlug: p.TenantSlug,
+		Email:      p.Email,
+		Role:       p.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    AccessIssuer,
-			Subject:   fmt.Sprintf("user:%d", p.UserID),
+			Subject:   sub,
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now.Add(-30 * time.Second)),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -77,13 +84,16 @@ func SignAccessTokenWithKey(p AccessPayload, keyManager *KeyManager, ttl time.Du
 	}
 
 	now := time.Now()
+	sub := subjectForAccessPayload(p)
 	claims := accessClaims{
-		UserID: p.UserID,
-		Email:  p.Email,
-		Role:   p.Role,
+		UserID:     p.UserID,
+		TenantID:   p.TenantID,
+		TenantSlug: p.TenantSlug,
+		Email:      p.Email,
+		Role:       p.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    AccessIssuer,
-			Subject:   fmt.Sprintf("user:%d", p.UserID),
+			Subject:   sub,
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now.Add(-30 * time.Second)),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -127,9 +137,11 @@ func ParseAccessToken(tokenString, secret string) (*AccessPayload, error) {
 		return nil, ErrInvalidToken
 	}
 	return &AccessPayload{
-		UserID: ac.UserID,
-		Email:  ac.Email,
-		Role:   ac.Role,
+		UserID:     ac.UserID,
+		TenantID:   ac.TenantID,
+		TenantSlug: ac.TenantSlug,
+		Email:      ac.Email,
+		Role:       ac.Role,
 	}, nil
 }
 
@@ -190,8 +202,17 @@ func ParseAccessTokenWithKey(tokenString string, keyManager *KeyManager) (*Acces
 	}
 
 	return &AccessPayload{
-		UserID: ac.UserID,
-		Email:  ac.Email,
-		Role:   ac.Role,
+		UserID:     ac.UserID,
+		TenantID:   ac.TenantID,
+		TenantSlug: ac.TenantSlug,
+		Email:      ac.Email,
+		Role:       ac.Role,
 	}, nil
+}
+
+func subjectForAccessPayload(p AccessPayload) string {
+	if p.TenantID > 0 {
+		return fmt.Sprintf("tenant_user:%d", p.UserID)
+	}
+	return fmt.Sprintf("user:%d", p.UserID)
 }

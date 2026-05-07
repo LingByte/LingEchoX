@@ -19,6 +19,20 @@ func TestSignParseRoundTrip(t *testing.T) {
 	require.Equal(t, uint(42), out.UserID)
 	require.Equal(t, "a@b.co", out.Email)
 	require.Equal(t, "user", out.Role)
+	require.Equal(t, uint(0), out.TenantID)
+}
+
+func TestSignParseRoundTripTenantClaims(t *testing.T) {
+	secret := "test-secret-key-at-least-8"
+	p := AccessPayload{UserID: 9, TenantID: 3, TenantSlug: "acme", Email: "a@b.co", Role: "tenant_admin"}
+	tok, err := SignAccessToken(p, secret, time.Hour)
+	require.NoError(t, err)
+	out, err := ParseAccessToken(tok, secret)
+	require.NoError(t, err)
+	require.Equal(t, uint(9), out.UserID)
+	require.Equal(t, uint(3), out.TenantID)
+	require.Equal(t, "acme", out.TenantSlug)
+	require.Equal(t, "tenant_admin", out.Role)
 }
 
 // Snowflake-style IDs exceed JS Number.MAX_SAFE_INTEGER; JWT JSON must round-trip in Go.

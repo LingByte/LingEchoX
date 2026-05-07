@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { fetchMe, logoutApi } from '@/api/me'
 
 // 用户类型定义（可以根据实际需求修改）
 export interface User {
@@ -60,13 +61,12 @@ export const useAuthStore = create<AuthState>()(
 
       logout: async () => {
         try {
-          // 可以在这里调用登出API
-          // const response = await logoutUser()
+          await logoutApi()
         } catch (error) {
           console.error('Logout API error:', error)
         } finally {
-          // 清除本地存储
           localStorage.removeItem('auth_token')
+          localStorage.removeItem('auth_user')
           set({ user: null, isAuthenticated: false, token: null })
         }
       },
@@ -85,25 +85,36 @@ export const useAuthStore = create<AuthState>()(
       // 清除用户信息方法
       clearUser: () => {
         localStorage.removeItem('auth_token')
+        localStorage.removeItem('auth_user')
         set({ user: null, isAuthenticated: false, token: null })
       },
 
-      // 从本地恢复用户信息（SIP 控制台可不依赖独立账号接口）
+      // 从 token 恢复，并尽量使用 /me 刷新当前用户信息
       refreshUserInfo: async () => {
         const token = localStorage.getItem('auth_token')
         if (!token) return
+        set({ isAuthenticated: true, token })
+        try {
+          const res = await fetchMe()
+          if (res.code === 200 && res.data?.user) {
+            const user = {
+              ...res.data.user,
+              tenantSlug: res.data.tenant?.slug,
+              tenantName: res.data.tenant?.name,
+            }
+            localStorage.setItem('auth_user', JSON.stringify(user))
+            set({ user, isAuthenticated: true, token })
+            return
+          }
+        } catch {
+          // fallthrough to local cache
+        }
         const storedUser = localStorage.getItem('auth_user')
         if (storedUser) {
           try {
-            set({
-              user: JSON.parse(storedUser),
-              isAuthenticated: true,
-              token,
-            })
+            set({ user: JSON.parse(storedUser), isAuthenticated: true, token })
             return
-          } catch {
-            /* fallthrough */
-          }
+          } catch {}
         }
         set({ user: null, isAuthenticated: false, token: null })
         localStorage.removeItem('auth_token')

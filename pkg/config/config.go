@@ -26,6 +26,15 @@ type Config struct {
 	Features   FeaturesConfig   `mapstructure:"features"`
 	Middleware MiddlewareConfig `mapstructure:"middleware"`
 	SIP        SIPConfig        `mapstructure:"sip"`
+	JWT        JWTConfig        `mapstructure:"jwt"`
+}
+
+// JWTConfig JWT related configuration
+type JWTConfig struct {
+	Algorithm    string `env:"JWT_ALGORITHM"`
+	KeyFile      string `env:"JWT_KEY_FILE"`
+	RotationDays int    `env:"JWT_ROTATION_DAYS"`
+	KeepOldKeys  int    `env:"JWT_KEEP_OLD_KEYS"`
 }
 
 type SIPConfig struct {
@@ -203,6 +212,12 @@ func Load() error {
 			SIPVADBargeIn:      getBoolOrDefault("SIPVADBargeIn", true),
 			SIPVADThreshold:    getFloatOrDefault("SIP_VAD_THRESHOLD", 3200.0),
 			SIPVADConsecFrames: getIntOrDefault("SIP_VAD_CONSEC_FRAMES", 4),
+		},
+		JWT: JWTConfig{
+			Algorithm:    getStringOrDefault("JWT_ALGORITHM", "RS256"),
+			KeyFile:      getStringOrDefault("JWT_KEY_FILE", "./keys/jwks.json"),
+			RotationDays: getIntOrDefault("JWT_ROTATION_DAYS", 30),
+			KeepOldKeys:  getIntOrDefault("JWT_KEEP_OLD_KEYS", 2),
 		},
 	}
 	if s := strings.TrimSpace(GlobalConfig.Services.Storage.PublicBase); s != "" {

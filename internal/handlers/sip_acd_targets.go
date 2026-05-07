@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/gin-gonic/gin"
@@ -32,10 +33,13 @@ type acdPoolTargetWriteReq struct {
 }
 
 func acdOperator(c *gin.Context) string {
-	if s := strings.TrimSpace("19511899044@163.com"); s != "" {
+	if s := strings.TrimSpace(middleware.AuthEmail(c)); s != "" {
 		return s
 	}
-	return strconv.FormatUint(00001, 10)
+	if uid := middleware.AuthUserID(c); uid > 0 {
+		return strconv.FormatUint(uint64(uid), 10)
+	}
+	return "system"
 }
 
 // acdPoolTargetListItem adds live SIP registration hint for admin list (not stored in acd_pool_targets).

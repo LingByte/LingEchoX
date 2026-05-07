@@ -9,12 +9,12 @@ import (
 	"strings"
 
 	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
 type tenantUserCreateReq struct {
-	TenantID     uint   `json:"tenantId" binding:"required"`
 	Email        string `json:"email" binding:"required,email"`
 	Phone        string `json:"phone"`
 	Username     string `json:"username"`
@@ -36,7 +36,11 @@ type tenantUserStatusReq struct {
 }
 
 func (h *Handlers) listTenantUsers(c *gin.Context) {
-	tenantID, _ := strconv.ParseUint(c.Query("tenantId"), 10, 32)
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
@@ -49,7 +53,7 @@ func (h *Handlers) listTenantUsers(c *gin.Context) {
 		size = 100
 	}
 
-	list, total, err := models.ListTenantUsersPage(h.db, uint(tenantID), page, size, c.Query("status"), c.Query("search"))
+	list, total, err := models.ListTenantUsersPage(h.db, tenantID, page, size, c.Query("status"), c.Query("search"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -58,6 +62,11 @@ func (h *Handlers) listTenantUsers(c *gin.Context) {
 }
 
 func (h *Handlers) getTenantUser(c *gin.Context) {
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -68,10 +77,19 @@ func (h *Handlers) getTenantUser(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
+	if row.TenantID != tenantID {
+		response.Fail(c, "not found", nil)
+		return
+	}
 	response.Success(c, "success", row)
 }
 
 func (h *Handlers) createTenantUser(c *gin.Context) {
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 	var req tenantUserCreateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -85,20 +103,20 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 	}
 
 	// Check for duplicates
-	exists, _ := models.CheckTenantUserEmailExists(h.db, req.TenantID, email, 0)
+	exists, _ := models.CheckTenantUserEmailExists(h.db, tenantID, email, 0)
 	if exists {
 		response.Fail(c, "email already exists", nil)
 		return
 	}
 	if req.Phone != "" {
-		exists, _ = models.CheckTenantUserPhoneExists(h.db, req.TenantID, strings.TrimSpace(req.Phone), 0)
+		exists, _ = models.CheckTenantUserPhoneExists(h.db, tenantID, strings.TrimSpace(req.Phone), 0)
 		if exists {
 			response.Fail(c, "phone already exists", nil)
 			return
 		}
 	}
 	if req.Username != "" {
-		exists, _ = models.CheckTenantUserUsernameExists(h.db, req.TenantID, strings.TrimSpace(req.Username), 0)
+		exists, _ = models.CheckTenantUserUsernameExists(h.db, tenantID, strings.TrimSpace(req.Username), 0)
 		if exists {
 			response.Fail(c, "username already exists", nil)
 			return
@@ -111,7 +129,7 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 	}
 
 	user := &models.TenantUser{
-		TenantID:     req.TenantID,
+		TenantID:     tenantID,
 		Email:        email,
 		Phone:        strings.TrimSpace(req.Phone),
 		Username:     strings.TrimSpace(req.Username),
@@ -131,6 +149,11 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 }
 
 func (h *Handlers) updateTenantUser(c *gin.Context) {
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -146,6 +169,10 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 	// Get existing user to check tenant
 	existing, err := models.GetActiveTenantUserByID(h.db, uint(id))
 	if err != nil {
+		response.Fail(c, "user not found", nil)
+		return
+	}
+	if existing.TenantID != tenantID {
 		response.Fail(c, "user not found", nil)
 		return
 	}
@@ -203,9 +230,20 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 }
 
 func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
+		return
+	}
+
+	existing, err := models.GetActiveTenantUserByID(h.db, uint(id))
+	if err != nil || existing.TenantID != tenantID {
+		response.Fail(c, "user not found", nil)
 		return
 	}
 
@@ -234,9 +272,20 @@ func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
 }
 
 func (h *Handlers) deleteTenantUser(c *gin.Context) {
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
+		return
+	}
+
+	existing, getErr := models.GetActiveTenantUserByID(h.db, uint(id))
+	if getErr != nil || existing.TenantID != tenantID {
+		response.Fail(c, "not found", nil)
 		return
 	}
 
@@ -253,9 +302,20 @@ func (h *Handlers) deleteTenantUser(c *gin.Context) {
 }
 
 func (h *Handlers) restoreTenantUser(c *gin.Context) {
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
+		return
+	}
+
+	existing, getErr := models.GetTenantUserByID(h.db, uint(id))
+	if getErr != nil || existing.TenantID != tenantID {
+		response.Fail(c, "not found", nil)
 		return
 	}
 
@@ -272,12 +332,16 @@ func (h *Handlers) restoreTenantUser(c *gin.Context) {
 }
 
 func (h *Handlers) getTenantUserStats(c *gin.Context) {
-	tenantID, _ := strconv.ParseUint(c.Query("tenantId"), 10, 32)
+	tenantID := middleware.AuthTenantID(c)
+	if tenantID == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return
+	}
 
-	total, _ := models.CountTenantUsers(h.db, uint(tenantID))
-	active, _ := models.CountTenantUsersByStatus(h.db, uint(tenantID), models.TenantUserStatusActive)
-	disabled, _ := models.CountTenantUsersByStatus(h.db, uint(tenantID), models.TenantUserStatusDisabled)
-	pending, _ := models.CountTenantUsersByStatus(h.db, uint(tenantID), models.TenantUserStatusPending)
+	total, _ := models.CountTenantUsers(h.db, tenantID)
+	active, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusActive)
+	disabled, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusDisabled)
+	pending, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusPending)
 
 	response.Success(c, "success", gin.H{
 		"total":    total,

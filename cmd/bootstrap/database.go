@@ -66,7 +66,7 @@ func SetupDatabase(logWriter io.Writer, opts *Options) (*gorm.DB, error) {
 	}
 
 	// 4) Non-production: default configuration
-	if opts.SeedNonProd && utils.GetEnv("MODE") != "production" && utils.GetEnv("MODE") != "development" {
+	if opts.SeedNonProd {
 		service := SeedService{
 			db: db,
 		}

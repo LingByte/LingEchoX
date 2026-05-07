@@ -6,6 +6,7 @@ import {
 } from '@arco-design/web-react/icon'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
+  LayoutDashboard,
   Users,
   Phone,
   Hash,
@@ -19,12 +20,14 @@ import {
 import { useSidebar } from '@/contexts/SidebarContext'
 import { useSiteConfig } from '@/contexts/SiteConfigContext'
 import { useWebSeat } from '@/components/WebSeat/WebSeatContext'
+import { useAuthStore } from '@/stores/authStore'
 
 const Sider = Layout.Sider
 
 type NavDef = { name: string; href: string; icon: typeof Users }
 
 const navigation: NavDef[] = [
+  { name: '概览', href: '/overview', icon: LayoutDashboard },
   { name: 'SIP 用户', href: '/sip-users', icon: Users },
   { name: '通话记录', href: '/call-records', icon: Phone },
   { name: '号码池', href: '/number-pool', icon: Hash },
@@ -52,6 +55,7 @@ function NavMenuBody({
   const navigate = useNavigate()
   const { config } = useSiteConfig()
   const { configured, wsState, wsStatusText, goOnline } = useWebSeat()
+  const user = useAuthStore((s) => s.user)
   const siteName = config?.SITE_NAME || '灵语'
   const logoUrl = '/icon-lingyu.png'
   const selected = selectedMenuKey(location.pathname)
@@ -69,7 +73,7 @@ function NavMenuBody({
         }}
       >
         <Link
-          to="/sip-users"
+          to="/overview"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -135,6 +139,20 @@ function NavMenuBody({
           </div>
         </div>
       )}
+      <div style={{ padding: collapsed ? '8px' : '10px 12px', borderTop: '1px solid var(--color-border)' }}>
+        <Button
+          type="text"
+          long={!collapsed}
+          size="small"
+          onClick={() => {
+            navigate('/profile')
+            onNavigate?.()
+          }}
+          style={{ justifyContent: collapsed ? 'center' : 'flex-start' }}
+        >
+          {collapsed ? '我' : `个人中心 · ${String(user?.displayName || user?.email || '我')}`}
+        </Button>
+      </div>
     </>
   )
 }

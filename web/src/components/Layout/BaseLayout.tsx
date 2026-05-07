@@ -1,9 +1,10 @@
 import { ReactNode, useEffect, useState } from 'react'
-import { Button } from '@arco-design/web-react'
+import { Button, Select } from '@arco-design/web-react'
 import { IconMoon, IconSun } from '@arco-design/web-react/icon'
 import Sidebar from './Sidebar.tsx'
 import { useThemeStore } from '@/stores/themeStore'
 import { useSidebar } from '@/contexts/SidebarContext'
+import { useLocaleStore } from '@/stores/localeStore'
 
 interface AdminLayoutProps {
   children: ReactNode
@@ -14,6 +15,8 @@ interface AdminLayoutProps {
 
 const BaseLayout = ({ children, title, description, actions }: AdminLayoutProps) => {
   const { toggleMode, isDark } = useThemeStore()
+  const locale = useLocaleStore((s) => s.locale)
+  const setLocale = useLocaleStore((s) => s.setLocale)
   const { isCollapsed } = useSidebar()
   const [isLg, setIsLg] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : false
@@ -64,6 +67,16 @@ const BaseLayout = ({ children, title, description, actions }: AdminLayoutProps)
               )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Select
+                size="small"
+                value={locale}
+                style={{ width: 98 }}
+                options={[
+                  { value: 'zh-CN', label: '中文' },
+                  { value: 'en-US', label: 'English' },
+                ]}
+                onChange={(v) => setLocale(v as 'zh-CN' | 'en-US')}
+              />
               <Button
                 type="secondary"
                 size="small"

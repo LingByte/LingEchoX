@@ -18,6 +18,8 @@ export interface ACDPoolTargetRow {
   sipCallerDisplayName?: string
   liveLineOnline?: boolean
   webSeatLastSeenAt?: string
+  /** JSON: [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}]; weekdays 0=Sun..6=Sat; empty = 24/7 */
+  shiftSchedule?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -51,6 +53,7 @@ export async function createACDPoolTarget(body: {
   sipCallerDisplayName?: string
   weight?: number
   workState?: string
+  shiftSchedule?: string
 }): Promise<ApiResponse<ACDPoolTargetRow>> {
   return post('/sip-center/acd-pool', body)
 }
@@ -67,6 +70,7 @@ export async function updateACDPoolTarget(id: number, body: {
   sipCallerDisplayName?: string
   weight?: number
   workState?: string
+  shiftSchedule?: string
 }): Promise<ApiResponse<ACDPoolTargetRow>> {
   return put(`/sip-center/acd-pool/${id}`, body)
 }

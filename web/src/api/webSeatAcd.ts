@@ -66,7 +66,15 @@ export async function ensureWebSeatAcdPoolRowOnline(opts: { displayLabel: string
     if (cur.code === 200 && cur.data?.routeType === 'web') {
       const r = cur.data
       const wt = r.weight != null && r.weight > 0 ? r.weight : 10
-      const u = await updateACDPoolTarget(targetId, { name: label, routeType: 'web', sipSource: '', targetValue: '', weight: wt, workState: 'available' })
+      const u = await updateACDPoolTarget(targetId, {
+        name: label,
+        routeType: 'web',
+        sipSource: '',
+        targetValue: '',
+        weight: wt,
+        workState: 'available',
+        shiftSchedule: r.shiftSchedule ?? '',
+      })
       if (u.code !== 200) throw new Error(u.msg || 'update web seat acd failed')
       writeAnchoredWebSeatAcdPoolId(targetId)
       return targetId
@@ -88,6 +96,14 @@ export async function setWebSeatAcdPoolRowOffline(): Promise<void> {
     return
   }
   const r = cur.data
-  const u = await updateACDPoolTarget(anchor, { name: r.name || '', routeType: 'web', sipSource: '', targetValue: '', weight: r.weight ?? 10, workState: 'offline' })
+  const u = await updateACDPoolTarget(anchor, {
+    name: r.name || '',
+    routeType: 'web',
+    sipSource: '',
+    targetValue: '',
+    weight: r.weight ?? 10,
+    workState: 'offline',
+    shiftSchedule: r.shiftSchedule ?? '',
+  })
   if (u.code !== 200) throw new Error(u.msg || 'set web seat acd offline failed')
 }

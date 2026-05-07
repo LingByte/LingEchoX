@@ -21,8 +21,7 @@ axiosInstance.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     } else {
-      // 测试模式：使用测试token
-      config.headers.Authorization = `Bearer test-token-123`
+      delete config.headers.Authorization
     }
     
     // 如果是FormData，让浏览器自动设置Content-Type（包含boundary）
