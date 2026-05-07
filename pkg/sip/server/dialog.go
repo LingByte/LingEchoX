@@ -210,6 +210,7 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 	if s == nil || callID == "" {
 		return
 	}
+	s.releaseInboundCapacity(callID)
 	defer s.endVoiceDialogBridge(callID)
 	if conversation.HangupWebSeatBridgeFull(callID) {
 		return

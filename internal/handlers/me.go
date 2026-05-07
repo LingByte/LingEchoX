@@ -60,10 +60,12 @@ func (h *Handlers) getMe(c *gin.Context) {
 		response.Fail(c, "tenant not found", nil)
 		return
 	}
+	codes, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, u.ID)
 	response.Success(c, "success", gin.H{
-		"principal": "tenant",
-		"user":      tenantUserPublic(u),
-		"tenant":    tenantPublic(tenant),
+		"principal":        "tenant",
+		"user":             h.tenantUserPublic(u),
+		"tenant":           tenantPublic(tenant),
+		"permissionCodes":  codes,
 	})
 }
 
@@ -142,7 +144,7 @@ func (h *Handlers) updateMe(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", tenantUserPublic(next))
+	response.Success(c, "success", h.tenantUserPublic(next))
 }
 
 func (h *Handlers) updateMyPassword(c *gin.Context) {

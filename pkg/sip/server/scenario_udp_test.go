@@ -31,6 +31,7 @@ func TestSIPServer_UDP_RegisterInviteAckRTPBye(t *testing.T) {
 		Port:    0,
 		LocalIP: "127.0.0.1",
 	})
+	srv.SetInboundAllowUnknownDID(true)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

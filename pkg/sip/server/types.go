@@ -17,10 +17,17 @@ type SIPRegisterStore interface {
 	LookupRegister(ctx context.Context, user, domain string) (*net.UDPAddr, bool, error)
 }
 
+// InboundDIDBinding ties an inbound INVITE's called-party (DID) to tenant + trunk_number row.
+type InboundDIDBinding struct {
+	TenantID      uint
+	TrunkNumberID uint // sip_trunk_numbers.id; 0 if unresolved
+}
+
 // InvitePersistParams describes one inbound/outbound INVITE persistence snapshot.
 type InvitePersistParams struct {
-	TenantID    uint
-	CallID      string
+	TenantID             uint
+	InboundTrunkNumberID uint // sip_trunk_numbers.id when matched via DID resolver; 0 otherwise
+	CallID               string
 	From        string
 	To          string
 	RemoteSig   string

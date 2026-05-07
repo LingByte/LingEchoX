@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Form, Input, Button, Message } from '@arco-design/web-react'
 import { IconLock, IconUser } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
@@ -11,11 +12,12 @@ export default function TenantLogin() {
   const [form] = Form.useForm()
   const navigate = useNavigate()
   const login = useAuthStore((s) => s.login)
+  const [needsTotp, setNeedsTotp] = useState(false)
 
   return (
     <AuthShell
       title="租户登录"
-      subtitle="邮箱在系统内全局唯一，使用邮箱与密码登录即可。"
+      subtitle="企业成员与平台运维共用此入口：平台管理员登录后将进入 SIP 用户等运维菜单。"
       footer={
         <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--color-text-3)' }}>
           还没有组织？
@@ -29,13 +31,25 @@ export default function TenantLogin() {
         form={form}
         layout="vertical"
         requiredSymbol={false}
+        onValuesChange={(patch) => {
+          if (patch.email !== undefined || patch.password !== undefined) {
+            setNeedsTotp(false)
+          }
+        }}
         onSubmit={async (v) => {
           try {
             const res = await tenantLogin({
               email: String(v.email || '').trim(),
               password: String(v.password || ''),
+              totpCode: needsTotp ? String(v.totpCode || '').trim() : undefined,
             })
             if (res.code !== 200 || !res.data?.token) {
+              const extra = res.data as { needsTotp?: boolean } | undefined
+              if (extra?.needsTotp) {
+                setNeedsTotp(true)
+                Message.warning('请输入验证器中的 6 位动态码')
+                return
+              }
               Message.error(res.msg || '登录失败')
               return
             }
@@ -56,13 +70,14 @@ export default function TenantLogin() {
                 tenantSlug: tenant.slug,
                 tenantName: tenant.name,
                 principal: 'tenant' as const,
+                permissionCodes: d.permissionCodes ?? [],
               })
             } else {
               Message.error('登录响应无效')
               return
             }
             Message.success('登录成功')
-            navigate('/overview', { replace: true })
+            navigate(d.principal === 'platform' ? '/sip-users' : '/overview', { replace: true })
           } catch (e: unknown) {
             const msg = typeof e === 'object' && e && 'msg' in e ? String((e as { msg?: string }).msg) : '登录失败'
             Message.error(msg)
@@ -75,9 +90,18 @@ export default function TenantLogin() {
         <FormItem label="密码" field="password" rules={[{ required: true, message: '请输入密码' }]}>
           <Input.Password placeholder="登录密码" autoComplete="current-password" />
         </FormItem>
+        {needsTotp && (
+          <FormItem
+            label="两步验证码"
+            field="totpCode"
+            rules={[{ required: true, message: '请输入 6 位动态码' }]}
+          >
+            <Input placeholder="打开验证器 App，输入 6 位数字" autoComplete="one-time-code" maxLength={12} />
+          </FormItem>
+        )}
         <FormItem style={{ marginBottom: 0 }}>
           <Button type="primary" htmlType="submit" long style={{ height: 40, marginTop: 4 }}>
-            登录
+            {needsTotp ? '验证并登录' : '登录'}
           </Button>
         </FormItem>
       </Form>

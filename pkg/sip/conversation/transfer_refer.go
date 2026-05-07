@@ -24,11 +24,6 @@ func TriggerTransferFromReferTo(ctx context.Context, inboundCallID string, refer
 		}
 		return
 	}
-	if envTgt, ok := outbound.TransferDialTargetFromEnv(); ok && strings.TrimSpace(envTgt.CallerUser) != "" {
-		tgt.CallerUser = envTgt.CallerUser
-		tgt.CallerDisplayName = envTgt.CallerDisplayName
-	}
-
 	transferMu.Lock()
 	d := transferDialer
 	transferMu.Unlock()

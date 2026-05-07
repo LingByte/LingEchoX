@@ -22,6 +22,7 @@ import {
   updateACDPoolTarget,
   type ACDPoolTargetRow,
 } from '@/api/acdPool'
+import { listTrunkNumbers } from '@/api/trunks'
 
 /** Matches backend acd_shift_schedule: weekdays 0=Sun..6=Sat; empty weekdays = all days */
 type ShiftSegment = { weekdays: number[]; start: string; end: string }
@@ -90,6 +91,7 @@ function serializeShiftSchedule(segments: ShiftSegment[]): string {
 }
 
 type FormState = {
+  trunkNumberId: number
   name: string
   routeType: string
   targetValue: string
@@ -98,6 +100,7 @@ type FormState = {
   shiftSegments: ShiftSegment[]
 }
 const defaultForm = (): FormState => ({
+  trunkNumberId: 0,
   name: '',
   routeType: 'sip',
   targetValue: '',
@@ -117,6 +120,8 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [routeTypeFilter, setRouteTypeFilter] = useState('')
+  const [trunkNumFilter, setTrunkNumFilter] = useState<number | undefined>(undefined)
+  const [trunkNumOpts, setTrunkNumOpts] = useState<{ label: string; value: number }[]>([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -131,7 +136,10 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
     if (!active) return
     setLoading(true)
     try {
-      const res = await listACDPoolTargets(page, pageSize, { routeType: routeTypeFilter.trim() || undefined })
+      const res = await listACDPoolTargets(page, pageSize, {
+        routeType: routeTypeFilter.trim() || undefined,
+        trunkNumberId: trunkNumFilter,
+      })
       if (res.code === 200 && res.data) {
         setRows(res.data.list || [])
         setTotal(res.data.total || 0)
@@ -141,20 +149,51 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
     } finally {
       setLoading(false)
     }
-  }, [active, page, routeTypeFilter])
+  }, [active, page, routeTypeFilter, trunkNumFilter])
 
   useEffect(() => {
     void load()
   }, [load, refreshNonce])
 
+  const reloadTrunkNums = useCallback(async () => {
+    try {
+      const res = await listTrunkNumbers(1, 500)
+      if (res.code === 200 && res.data?.list?.length) {
+        setTrunkNumOpts(
+          res.data.list.map((n) => ({
+            label: `${n.number} (#${n.id})`,
+            value: n.id,
+          })),
+        )
+      } else {
+        setTrunkNumOpts([])
+      }
+    } catch {
+      setTrunkNumOpts([])
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!active) return
+    void reloadTrunkNums()
+  }, [active, reloadTrunkNums])
+
+  const trunkNumLabel = (id?: number) => {
+    if (!id) return '—'
+    const hit = trunkNumOpts.find((o) => o.value === id)
+    return hit?.label || `#${id}`
+  }
+
   const openCreate = () => {
     setEditingId(null)
-    setForm(defaultForm())
+    const first = trunkNumOpts[0]?.value ?? 0
+    setForm({ ...defaultForm(), trunkNumberId: first })
     setModalOpen(true)
   }
   const openEdit = (r: ACDPoolTargetRow) => {
     setEditingId(r.id)
     setForm({
+      trunkNumberId: r.trunkNumberId ?? 0,
       name: r.name || '',
       routeType: r.routeType || 'sip',
       targetValue: r.targetValue || '',
@@ -172,6 +211,10 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   const save = async () => {
     setSaving(true)
     try {
+      if (!form.trunkNumberId || form.trunkNumberId <= 0) {
+        showAlert('请选择中继号码后再绑定坐席', 'error')
+        return
+      }
       const routeType = editingId == null ? 'sip' : form.routeType
       const tv = routeType === 'sip' ? form.targetValue.trim() : ''
       if (routeType === 'sip' && !tv) {
@@ -189,6 +232,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
       const shiftTrim = serializeShiftSchedule(segs)
       const body = {
         name: form.name.trim(),
+        trunkNumberId: form.trunkNumberId,
         routeType,
         sipSource: '',
         targetValue: tv,
@@ -250,9 +294,20 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   return (
     <div className="mt-4 space-y-3">
       <Typography.Paragraph style={{ margin: 0, fontSize: 12 }} className="rounded-lg border px-3 py-2.5">
-        号码池用于来电分配和转接选线，SIP 注册与 ACD 选线独立。
+        每条坐席目标必须绑定本平台已分配给当前租户的中继号码（被叫号码）；来电命中该号码时优先路由到对应坐席。
       </Typography.Paragraph>
       <Space wrap align="end">
+        <Space direction="vertical" size={4}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>中继号码</Typography.Text>
+          <Select
+            style={{ width: 220 }}
+            placeholder="全部号码"
+            allowClear
+            value={trunkNumFilter}
+            onChange={(v) => setTrunkNumFilter((v as number | undefined) ?? undefined)}
+            options={trunkNumOpts}
+          />
+        </Space>
         <Space direction="vertical" size={4}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>路由类型</Typography.Text>
           <Select
@@ -272,10 +327,11 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         <div className="p-4 text-sm text-muted-foreground">加载中...</div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <table className="min-w-[760px] w-full text-sm">
+          <table className="min-w-[860px] w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
                 <th className="text-left p-3 whitespace-nowrap">ID</th>
+                <th className="text-left p-3 whitespace-nowrap">中继号码</th>
                 <th className="text-left p-3 whitespace-nowrap">名称</th>
                 <th className="text-left p-3 min-w-[180px]">呼叫号码</th>
                 <th className="text-left p-3 whitespace-nowrap">权重</th>
@@ -287,10 +343,11 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">暂无数据</td></tr>
+                <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">暂无数据</td></tr>
               ) : rows.map((r) => (
                 <tr key={r.id} className="border-t border-border align-top">
                   <td className="p-3 whitespace-nowrap">{r.id}</td>
+                  <td className="p-3 text-xs text-muted-foreground max-w-[200px]">{trunkNumLabel(r.trunkNumberId)}</td>
                   <td className="p-3 max-w-[200px] truncate">{r.name || '—'}</td>
                   <td className="p-3 font-mono text-xs max-w-[260px] break-all text-muted-foreground">{r.routeType === 'sip' ? r.targetValue || '—' : '—'}</td>
                   <td className="p-3 whitespace-nowrap">{r.weight}</td>
@@ -333,6 +390,18 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         }
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <div>
+            <Typography.Text style={{ fontSize: 12 }}>中继号码 *</Typography.Text>
+            <Select
+              placeholder={trunkNumOpts.length ? '请选择已分配给本租户的号码' : '暂无可用号码，请联系平台分配'}
+              value={form.trunkNumberId || undefined}
+              onChange={(v) => setForm((f) => ({ ...f, trunkNumberId: (v as number) ?? 0 }))}
+              options={trunkNumOpts}
+            />
+            <Typography.Paragraph type="secondary" style={{ margin: '6px 0 0', fontSize: 11 }}>
+              必须先选择号码再配置 SIP/Web 坐席；列表来自「中继号码」中 tenantId 指向当前租户的记录。
+            </Typography.Paragraph>
+          </div>
           <div>
             <Typography.Text style={{ fontSize: 12 }}>名称</Typography.Text>
             <Input value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} />

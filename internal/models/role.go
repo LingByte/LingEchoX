@@ -1,6 +1,8 @@
 package models
 
 import (
+	"time"
+
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"gorm.io/gorm"
 )
@@ -65,4 +67,97 @@ func TenantUserHasRoleName(db *gorm.DB, tenantUserID uint, roleName string) (boo
 		Where("id IN ? AND name = ? AND is_deleted = ?", roleIDs, roleName, SoftDeleteStatusActive).
 		Count(&n).Error
 	return n > 0, err
+}
+
+// ListTenantRolesByTenant lists named roles for one tenant.
+func ListTenantRolesByTenant(db *gorm.DB, tenantID uint) ([]TenantRole, error) {
+	var rows []TenantRole
+	err := db.Where("tenant_id = ? AND is_deleted = ?", tenantID, SoftDeleteStatusActive).
+		Order("name ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+// GetTenantRoleScoped returns a role owned by the tenant.
+func GetTenantRoleScoped(db *gorm.DB, tenantID, roleID uint) (TenantRole, error) {
+	var r TenantRole
+	err := db.Where("id = ? AND tenant_id = ? AND is_deleted = ?", roleID, tenantID, SoftDeleteStatusActive).
+		First(&r).Error
+	return r, err
+}
+
+// ListTenantRolesForUser returns roles assigned to a tenant user.
+func ListTenantRolesForUser(db *gorm.DB, tenantUserID uint) ([]TenantRole, error) {
+	var roleIDs []uint
+	if err := db.Model(&TenantUserRole{}).
+		Where("tenant_user_id = ? AND is_deleted = ?", tenantUserID, SoftDeleteStatusActive).
+		Pluck("role_id", &roleIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(roleIDs) == 0 {
+		return nil, nil
+	}
+	var rows []TenantRole
+	err := db.Where("id IN ? AND is_deleted = ?", roleIDs, SoftDeleteStatusActive).
+		Order("name ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+// ListEffectivePermissionCodesForTenantUser returns distinct permission codes granted via roles.
+func ListEffectivePermissionCodesForTenantUser(db *gorm.DB, tenantUserID uint) ([]string, error) {
+	perm := constants.PERMISSION_TABLE_NAME
+	trp := constants.TENANT_ROLE_PERMISSION_TABLE_NAME
+	tr := constants.TENANT_ROLE_TABLE_NAME
+	tur := constants.TENANT_USER_ROLE_TABLE_NAME
+	var codes []string
+	err := db.Table(perm).
+		Select("DISTINCT "+perm+".code").
+		Joins("INNER JOIN "+trp+" ON "+trp+".permission_id = "+perm+".id AND "+trp+".is_deleted = ?", SoftDeleteStatusActive).
+		Joins("INNER JOIN "+tr+" ON "+tr+".id = "+trp+".role_id AND "+tr+".is_deleted = ?", SoftDeleteStatusActive).
+		Joins("INNER JOIN "+tur+" ON "+tur+".role_id = "+tr+".id AND "+tur+".is_deleted = ?", SoftDeleteStatusActive).
+		Where(tur+".tenant_user_id = ? AND "+perm+".is_deleted = ?", tenantUserID, SoftDeleteStatusActive).
+		Order(perm+".code ASC").
+		Pluck(perm+".code", &codes).Error
+	return codes, err
+}
+
+// ReplaceTenantUserRoles replaces role assignments for a tenant user.
+func ReplaceTenantUserRoles(db *gorm.DB, tenantID, tenantUserID uint, roleIDs []uint, operator string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		roleIDs = dedupeUint(roleIDs)
+		if len(roleIDs) > 0 {
+			var n int64
+			if err := tx.Model(&TenantRole{}).
+				Where("tenant_id = ? AND id IN ? AND is_deleted = ?", tenantID, roleIDs, SoftDeleteStatusActive).
+				Count(&n).Error; err != nil {
+				return err
+			}
+			if int(n) != len(roleIDs) {
+				return ErrInvalidOrgReference
+			}
+		}
+		if err := tx.Unscoped().Where("tenant_user_id = ?", tenantUserID).Delete(&TenantUserRole{}).Error; err != nil {
+			return err
+		}
+		for _, rid := range roleIDs {
+			tur := &TenantUserRole{TenantUserID: tenantUserID, RoleID: rid}
+			tur.SetCreateInfo(operator)
+			if err := tx.Create(tur).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// SoftDeleteTenantRole soft-deletes a custom tenant role (system roles are protected in the handler).
+func SoftDeleteTenantRole(db *gorm.DB, tenantID, roleID uint, updateBy string) error {
+	return db.Model(&TenantRole{}).
+		Where("id = ? AND tenant_id = ? AND is_deleted = ? AND is_system = ?", roleID, tenantID, SoftDeleteStatusActive, false).
+		Updates(map[string]any{
+			"is_deleted": SoftDeleteStatusDeleted,
+			"update_by":  updateBy,
+			"updated_at": time.Now(),
+		}).Error
 }

@@ -277,6 +277,24 @@ func prependProxyVia(msg *stack.Message, sipHost string, sipPort int) {
 	}
 }
 
+// InboundCalledPartyUser returns the SIP user part used as DID / routing key from INVITE (Request-URI preferred, then To).
+func InboundCalledPartyUser(msg *stack.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if ru := strings.TrimSpace(msg.RequestURI); ru != "" {
+		if u, _, ok := parseURIUserHost(ru); ok && u != "" {
+			return u
+		}
+	}
+	if to := msg.GetHeader("To"); to != "" {
+		if u, _, ok := parseURIUserHost(to); ok && u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
 func (s *SIPServer) proxyInviteToRegistrar(msg *stack.Message, dst *net.UDPAddr) error {
 	if s == nil || s.ep == nil || msg == nil || dst == nil {
 		return fmt.Errorf("sip: proxy invite: nil")

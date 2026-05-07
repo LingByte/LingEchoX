@@ -17,7 +17,11 @@ import (
 )
 
 type acdPoolTargetWriteReq struct {
-	Name                  string `json:"name"`
+	Name string `json:"name"`
+	// TrunkNumberID 把这条坐席绑定到「某个具体的中继号码」（即被叫号码）。
+	// 0 = 任意号码（全租户兜底）；>0 = 仅对该 TrunkNumber 生效。
+	// 租户写入时后端会校验：该 TrunkNumber 必须 tenant_id = 当前租户。
+	TrunkNumberID         uint   `json:"trunkNumberId"`
 	RouteType             string `json:"routeType"`
 	SipSource             string `json:"sipSource"` // internal | trunk (SIP only)
 	TargetValue           string `json:"targetValue"`
@@ -30,6 +34,20 @@ type acdPoolTargetWriteReq struct {
 	WorkState             string `json:"workState"`
 	// ShiftSchedule JSON: e.g. [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}] (weekdays 0=Sun .. 6=Sat). Empty = 24/7.
 	ShiftSchedule string `json:"shiftSchedule"`
+}
+
+// validateTrunkNumberOwnedByTenant: 0 表示「不绑定具体号码」，跳过校验；
+// >0 必须存在且 tenant_id = tid。
+func (h *Handlers) validateTrunkNumberOwnedByTenant(c *gin.Context, trunkNumberID, tid uint) bool {
+	if trunkNumberID == 0 {
+		return true
+	}
+	num, err := models.GetTrunkNumberByIDForTenant(h.db, trunkNumberID, tid)
+	if err != nil || num.ID == 0 {
+		response.Fail(c, "trunkNumberId 不属于当前租户", nil)
+		return false
+	}
+	return true
 }
 
 func acdOperator(c *gin.Context) string {
@@ -64,7 +82,13 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 	if size > 100 {
 		size = 100
 	}
-	list, total, err := models.ListACDPoolTargetsPage(h.db, tid, page, size, c.Query("routeType"))
+	var trunkNumID uint
+	if s := strings.TrimSpace(c.Query("trunkNumberId")); s != "" {
+		if v, perr := strconv.ParseUint(s, 10, 32); perr == nil {
+			trunkNumID = uint(v)
+		}
+	}
+	list, total, err := models.ListACDPoolTargetsPage(h.db, tid, page, size, c.Query("routeType"), trunkNumID)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -123,6 +147,13 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		response.Fail(c, "routeType must be sip or web", nil)
 		return
 	}
+	if req.TrunkNumberID == 0 {
+		response.Fail(c, "请选择中继号码后再绑定坐席", nil)
+		return
+	}
+	if !h.validateTrunkNumberOwnedByTenant(c, req.TrunkNumberID, tid) {
+		return
+	}
 	ws := models.NormalizeACDWorkState(req.WorkState)
 	now := time.Now()
 	sipSrc := ""
@@ -140,6 +171,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		req.SipCallerID, req.SipCallerDisplayName,
 		req.Weight, ws, now, webSeen,
 		req.ShiftSchedule,
+		req.TrunkNumberID,
 	)
 	row.TenantID = tid
 	op := acdOperator(c)
@@ -163,6 +195,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 				"", "",
 				req.Weight, ws, now, op,
 				req.ShiftSchedule,
+				req.TrunkNumberID,
 			)
 			if err := h.db.WithContext(ctx).Model(&models.ACDPoolTarget{}).Where("id = ?", keep.ID).Updates(updates).Error; err != nil {
 				response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -210,6 +243,13 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		response.Fail(c, "routeType must be sip or web", nil)
 		return
 	}
+	if req.TrunkNumberID == 0 {
+		response.Fail(c, "请选择中继号码后再绑定坐席", nil)
+		return
+	}
+	if !h.validateTrunkNumberOwnedByTenant(c, req.TrunkNumberID, tid) {
+		return
+	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, uint(id))
 	if err != nil || !tenantOwns(row.TenantID, tid) {
 		response.Fail(c, "not found", nil)
@@ -229,6 +269,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		req.SipCallerID, req.SipCallerDisplayName,
 		req.Weight, ws, now, op,
 		req.ShiftSchedule,
+		req.TrunkNumberID,
 	)
 	if err := h.db.Model(&row).Updates(updates).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

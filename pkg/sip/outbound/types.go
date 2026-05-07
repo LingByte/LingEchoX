@@ -21,8 +21,8 @@ const (
 
 // DialTarget is a minimal description of where to send INVITE.
 type DialTarget struct {
-	// WebSeat is true when SIP_TRANSFER_NUMBER=web (or resolver): transfer goes to a browser
-	// WebRTC agent, not a SIP INVITE to user "web".
+	// WebSeat is true when routing selects a WebSeat pool target (browser agent),
+	// not a SIP INVITE to user "web".
 	WebSeat bool
 	// RequestURI is the SIP request URI, e.g. sip:+8613800138000@carrier.example;user=phone
 	RequestURI string
@@ -54,6 +54,9 @@ type DialRequest struct {
 	// CallerUser / CallerDisplayName override Target.* and Manager defaults when CallerUser non-empty.
 	CallerUser        string
 	CallerDisplayName string
+
+	// DialTenantID scopes per-tenant trunk-number outbound concurrency (campaign worker sets this).
+	DialTenantID uint `json:"-"`
 }
 
 // MediaProfile selects post-connect behavior on the established CallSession.

@@ -5,8 +5,8 @@ import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import { createTrunk, deleteTrunk, listTrunks, updateTrunk, type TrunkRow } from '@/api/trunks'
 import { showAlert } from '@/utils/notification'
 
-type FormState = { name: string; description: string; prefix: string; local_addr: string; providerId: string }
-const defaultForm = (): FormState => ({ name: '', description: '', prefix: '', local_addr: '', providerId: '0' })
+type FormState = { name: string; description: string; prefix: string; local_addr: string }
+const defaultForm = (): FormState => ({ name: '', description: '', prefix: '', local_addr: '' })
 
 const SIPTrunks = () => {
   const [rows, setRows] = useState<TrunkRow[]>([])
@@ -54,7 +54,6 @@ const SIPTrunks = () => {
       description: r.description || '',
       prefix: r.prefix || '',
       local_addr: r.local_addr || '',
-      providerId: String(r.providerId ?? 0),
     })
     setModalOpen(true)
   }
@@ -69,13 +68,11 @@ const SIPTrunks = () => {
       showAlert('线路名称不能为空', 'error')
       return
     }
-    const pid = parseInt(form.providerId, 10)
     const body = {
       name,
       description: form.description.trim(),
       prefix: form.prefix.trim(),
       local_addr: form.local_addr.trim(),
-      providerId: Number.isFinite(pid) ? pid : 0,
     }
     setSaving(true)
     try {
@@ -139,8 +136,8 @@ const SIPTrunks = () => {
                       <th style={{ textAlign: 'left', padding: 12 }}>ID</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>名称</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>前缀</th>
-                      <th style={{ textAlign: 'left', padding: 12 }}>本端地址</th>
-                      <th style={{ textAlign: 'left', padding: 12 }}>供应商 ID</th>
+                      <th style={{ textAlign: 'left', padding: 12 }}>网关地址</th>
+                      <th style={{ textAlign: 'left', padding: 12 }}>供应商编码</th>
                       <th style={{ textAlign: 'right', padding: 12 }}>操作</th>
                     </tr>
                   </thead>
@@ -156,7 +153,7 @@ const SIPTrunks = () => {
                         </td>
                         <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12 }}>{r.prefix || '—'}</td>
                         <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', maxWidth: 220 }}>{r.local_addr || '—'}</td>
-                        <td style={{ padding: 12 }}>{r.providerId ?? '—'}</td>
+                        <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', maxWidth: 240 }}>{r.providerCode || '—'}</td>
                         <td style={{ padding: 12, textAlign: 'right' }}>
                           <Space>
                             <Button type="outline" size="small" onClick={() => openEdit(r)}>编辑</Button>
@@ -208,13 +205,20 @@ const SIPTrunks = () => {
               <Input value={form.prefix} onChange={(v) => setForm((f) => ({ ...f, prefix: v }))} />
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>本端地址</Typography.Text>
-              <Input value={form.local_addr} onChange={(v) => setForm((f) => ({ ...f, local_addr: v }))} />
+              <Typography.Text style={{ fontSize: 12 }}>网关地址 (host:port)</Typography.Text>
+              <Input
+                placeholder="例如 183.213.19.195:50400"
+                value={form.local_addr}
+                onChange={(v) => setForm((f) => ({ ...f, local_addr: v }))}
+              />
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                外呼 / 转呼 INVITE 的下一跳 SIP 网关地址；取代原 SIP_TRANSFER_HOST + SIP_TRANSFER_PORT 环境变量。
+                主叫号码与主叫显示名在「中继号码」页面按每条号码配置（取代 SIP_CALLER_ID / SIP_CALLER_DISPLAY_NAME）。
+              </Typography.Paragraph>
             </div>
-            <div>
-              <Typography.Text style={{ fontSize: 12 }}>供应商 ID</Typography.Text>
-              <Input type="number" value={form.providerId} onChange={(v) => setForm((f) => ({ ...f, providerId: v }))} />
-            </div>
+            <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
+              供应商编码由系统自动分配，全局唯一，创建后请在列表中查看。
+            </Typography.Paragraph>
           </Space>
         </Drawer>
 

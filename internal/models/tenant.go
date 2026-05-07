@@ -1,6 +1,9 @@
 package models
 
 import (
+	"strings"
+	"time"
+
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"gorm.io/gorm"
 )
@@ -46,4 +49,69 @@ func TenantSlugTaken(db *gorm.DB, slug string) (bool, error) {
 	var n int64
 	err := db.Model(&Tenant{}).Where("slug = ? AND is_deleted = ?", slug, SoftDeleteStatusActive).Count(&n).Error
 	return n > 0, err
+}
+
+// ListTenantsPage lists active tenants (platform admin).
+func ListTenantsPage(db *gorm.DB, page, size int, search string) ([]Tenant, int64, error) {
+	q := db.Model(&Tenant{}).Where("is_deleted = ?", SoftDeleteStatusActive)
+	if s := strings.TrimSpace(search); s != "" {
+		like := "%" + s + "%"
+		q = q.Where("name LIKE ? OR slug LIKE ?", like, like)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 500 {
+		size = 500
+	}
+	offset := (page - 1) * size
+	var list []Tenant
+	if err := q.Order("id DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
+// UpdateActiveTenant patches name / description / status for an active tenant.
+func UpdateActiveTenant(db *gorm.DB, id uint, name, description, status, updateBy string) error {
+	updates := map[string]any{
+		"updated_at": time.Now(),
+	}
+	if updateBy != "" {
+		updates["update_by"] = updateBy
+	}
+	if strings.TrimSpace(name) != "" {
+		updates["name"] = strings.TrimSpace(name)
+	}
+	if description != "" {
+		updates["description"] = strings.TrimSpace(description)
+	}
+	st := strings.TrimSpace(status)
+	if st != "" {
+		updates["status"] = st
+	}
+	if len(updates) <= 2 { // only UpdatedAt / update_by
+		return nil
+	}
+	return db.Model(&Tenant{}).
+		Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).
+		Updates(updates).Error
+}
+
+// SoftDeleteTenant soft-deletes one tenant row (platform ops).
+func SoftDeleteTenant(db *gorm.DB, id uint, updateBy string) error {
+	return db.Model(&Tenant{}).
+		Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).
+		Updates(map[string]any{
+			"is_deleted": SoftDeleteStatusDeleted,
+			"update_by":  updateBy,
+			"updated_at": time.Now(),
+		}).Error
 }

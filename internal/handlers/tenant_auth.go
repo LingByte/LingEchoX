@@ -20,6 +20,7 @@ const jwtRolePlatformSuper = "platform_super"
 type tenantLoginReq struct {
 	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required"`
+	TotpCode string `json:"totpCode"`
 }
 
 // tenantLogin authenticates a tenant user or a platform admin using the same email + password endpoint.
@@ -38,7 +39,7 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	user, err := models.GetActiveTenantUserByEmailGlobal(h.db, email)
 	if err == nil {
-		h.finishTenantLogin(c, req.Password, user)
+		h.finishTenantLogin(c, req.Password, req.TotpCode, user)
 		return
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -78,7 +79,7 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 	})
 }
 
-func (h *Handlers) finishTenantLogin(c *gin.Context, password string, user models.TenantUser) {
+func (h *Handlers) finishTenantLogin(c *gin.Context, password, totpCode string, user models.TenantUser) {
 	tenant, err := models.GetActiveTenantByID(h.db, user.TenantID)
 	if err != nil {
 		response.Fail(c, "组织不存在或已被停用", nil)
@@ -97,7 +98,18 @@ func (h *Handlers) finishTenantLogin(c *gin.Context, password string, user model
 		return
 	}
 
-	_ = models.UpdateTenantUserLastLogin(h.db, user.ID)
+	if user.TOTPEnabled && strings.TrimSpace(user.TOTPSecret) != "" {
+		if !access.ValidateTOTP(totpCode, user.TOTPSecret) {
+			if strings.TrimSpace(totpCode) == "" {
+				response.Fail(c, "需要两步验证码", gin.H{"needsTotp": true})
+			} else {
+				response.Fail(c, "两步验证码错误", gin.H{"needsTotp": true})
+			}
+			return
+		}
+	}
+
+	_ = models.RecordTenantUserLogin(h.db, user.ID, c.ClientIP())
 
 	token, err := issueTenantAccessToken(h.db, user, tenant)
 	if err != nil {
@@ -105,12 +117,14 @@ func (h *Handlers) finishTenantLogin(c *gin.Context, password string, user model
 		return
 	}
 
+	codes, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, user.ID)
 	response.Success(c, "success", gin.H{
-		"principal": "tenant",
-		"token":     token,
-		"expiresIn": int(tenantAccessTokenTTL.Seconds()),
-		"tenant":    tenantPublic(tenant),
-		"user":      tenantUserPublic(user),
+		"principal":       "tenant",
+		"token":           token,
+		"expiresIn":       int(tenantAccessTokenTTL.Seconds()),
+		"tenant":          tenantPublic(tenant),
+		"user":            h.tenantUserPublic(user),
+		"permissionCodes": codes,
 	})
 }
 

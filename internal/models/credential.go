@@ -4,7 +4,9 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
@@ -26,10 +28,51 @@ type Credential struct {
 	SecretKey string `json:"-" gorm:"size:256;not null"`
 	Status    string `json:"status" gorm:"size:24;index;not null;default:active"` // active | disabled
 	AllowIP   string `json:"allowIp,omitempty" gorm:"type:text;comment:白名单IP，多个逗号分隔"`
+	// PermissionCodes JSON array of catalog codes (e.g. ["api.sip.calls.read"]); ["*"] = all; empty legacy = treat as *.
+	PermissionCodes string `json:"permissionCodes,omitempty" gorm:"column:permission_codes;type:text"`
 }
 
 func (Credential) TableName() string {
 	return constants.CREDENTIAL_TABLE_NAME
+}
+
+// CredentialMatchesPermissionCodes checks AK/SK permission JSON against required route codes (requireAll = AND).
+func CredentialMatchesPermissionCodes(db *gorm.DB, credID uint, required []string, requireAll bool) (bool, error) {
+	var row Credential
+	if err := db.Where("id = ? AND is_deleted = ?", credID, SoftDeleteStatusActive).First(&row).Error; err != nil {
+		return false, err
+	}
+	raw := strings.TrimSpace(row.PermissionCodes)
+	var codes []string
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &codes); err != nil {
+			return false, err
+		}
+	} else {
+		codes = []string{"*"}
+	}
+	for _, c := range codes {
+		if strings.TrimSpace(c) == "*" {
+			return true, nil
+		}
+	}
+	if len(required) == 0 {
+		return true, nil
+	}
+	if requireAll {
+		for _, req := range required {
+			if !slices.Contains(codes, req) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	for _, req := range required {
+		if slices.Contains(codes, req) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func GetActiveCredentialByAccessKey(db *gorm.DB, ak string) (Credential, error) {

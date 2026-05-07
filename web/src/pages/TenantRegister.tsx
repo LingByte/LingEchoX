@@ -51,6 +51,7 @@ export default function TenantRegister() {
               tenantSlug: tenant.slug,
               tenantName: tenant.name,
               principal: 'tenant' as const,
+              permissionCodes: d.permissionCodes ?? [],
             })
             Message.success('注册成功')
             navigate('/overview', { replace: true })

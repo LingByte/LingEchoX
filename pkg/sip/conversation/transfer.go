@@ -28,11 +28,11 @@ type TransferDialer interface {
 var (
 	transferMu       sync.Mutex
 	transferDialer   TransferDialer
-	// Optional: DB-backed dial target (e.g. sip_users) tried before TransferDialTargetFromEnv.
+	// Optional: DB-backed dial target (acd_pool_targets); env fallback only when this resolver is nil.
 	// inboundCallID is the PSTN inbound Call-ID (used to bind Web ACD rows to this call).
 	// excludeIDs lists acd_pool_targets ids already attempted for this inbound leg (SIP busy / no-answer chain).
 	transferDialTarget func(context.Context, string, []uint) (outbound.DialTarget, bool)
-	// WebSeatTransfer starts inbound ↔ browser WebRTC bridging when DialTarget.WebSeat (SIP_TRANSFER_NUMBER=web).
+	// WebSeatTransfer starts inbound ↔ browser WebRTC bridging when DialTarget.WebSeat (pool route_type web).
 	// If nil and WebSeat is requested, transfer logs a warning and releases the dedupe slot.
 	webSeatTransfer func(inboundCallID string, lg *zap.Logger)
 	transferStarted sync.Map // inbound Call-ID -> bool (dedupe)
@@ -47,15 +47,15 @@ func SetTransferDialer(d TransferDialer) {
 	transferDialer = d
 }
 
-// SetTransferDialTargetResolver sets an optional resolver (e.g. DB lookup by SIP_TRANSFER_NUMBER).
-// When it returns ok=false, outbound.TransferDialTargetFromEnv is used.
+// SetTransferDialTargetResolver sets an optional resolver (e.g. acd_pool_targets).
+// When it returns ok=false and the resolver is nil, outbound.TransferDialTargetFromEnv is used (standalone binaries).
 func SetTransferDialTargetResolver(fn func(context.Context, string, []uint) (outbound.DialTarget, bool)) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
 	transferDialTarget = fn
 }
 
-// SetWebSeatTransfer registers the handler for SIP_TRANSFER_NUMBER=web (browser agent). Optional until WebRTC gateway ships.
+// SetWebSeatTransfer registers the handler for WebSeat pool targets (browser agent). Optional until WebRTC gateway ships.
 func SetWebSeatTransfer(fn func(inboundCallID string, lg *zap.Logger)) {
 	transferMu.Lock()
 	defer transferMu.Unlock()
@@ -104,9 +104,9 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	}
 	if !ok {
 		if resolveTgt != nil {
-			lg.Warn("sip transfer: no eligible acd_pool_targets row (need weight>0, work_state=available, route sip|web; trunk must have dial target + gateway env; web seat needs fresh heartbeat)")
+			lg.Warn("sip transfer: no eligible acd_pool_targets row (need weight>0, work_state=available, route sip|web; configure SIP fields on pool rows + trunks; web seat needs fresh heartbeat)")
 		} else {
-			lg.Warn("sip transfer: configure database for cmd/sip (ACD pool), or set SIP_TRANSFER_NUMBER + SIP_TRANSFER_HOST (+ SIP_TRANSFER_PORT / SIP_TRANSFER_SIGNALING_ADDR), or SIP_TRANSFER_NUMBER=web for browser agent")
+			lg.Warn("sip transfer: configure SIP_TRANSFER_* env for standalone mode, or wire SetTransferDialTargetResolver (ACD pool) in cmd/sip")
 		}
 		notifyTransferPhase(inboundCallID, "no_agent", map[string]any{"reason": "no_dial_target"})
 		go playNoSeatGoodbyeAndHangup(ctx, inboundCallID, lg)
@@ -128,7 +128,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 
 	if tgt.WebSeat {
 		if webFn == nil {
-			lg.Warn("sip transfer: WebSeat (SIP_TRANSFER_NUMBER=web) but SetWebSeatTransfer not configured")
+			lg.Warn("sip transfer: WebSeat target but SetWebSeatTransfer not configured")
 			notifyTransferPhase(inboundCallID, "failed", map[string]any{"reason": "webseat_not_configured"})
 			webseat.ReleaseInboundWebACDOffer(inboundCallID)
 			transferStarted.Delete(inboundCallID)

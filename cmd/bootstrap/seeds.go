@@ -4,10 +4,20 @@ package bootstrap
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LingByte/SoulNexus/pkg/utils/access"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
+)
+
+const (
+	defaultPlatformAdminEmail       = "admin@lingecho.com"
+	defaultPlatformAdminPassword    = "admin123"
+	defaultPlatformAdminDisplayName = "Platform Admin"
 )
 
 type SeedService struct {
@@ -18,7 +28,20 @@ func (s *SeedService) SeedAll() error {
 	if err := s.seedConfigs(); err != nil {
 		return err
 	}
+	if err := s.seedPermissions(); err != nil {
+		return err
+	}
+	if err := s.seedPlatformAdmin(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *SeedService) seedPermissions() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return models.SyncPermissionCatalog(s.db)
 }
 
 func (s *SeedService) seedConfigs() error {
@@ -77,5 +100,39 @@ func (s *SeedService) seedConfigs() error {
 			}
 		}
 	}
+	return nil
+}
+
+// seedPlatformAdmin 在 platform_admins 表为空时插入一个默认平台管理员账号。
+// 与 seedConfigs 一样是幂等的：表里已经有任何一条记录时直接跳过，不会覆盖运营改过的密码。
+func (s *SeedService) seedPlatformAdmin() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	n, err := models.CountPlatformAdmins(s.db)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	hash, err := access.HashPassword(defaultPlatformAdminPassword)
+	if err != nil {
+		return err
+	}
+	row := &models.PlatformAdmin{
+		Email:        defaultPlatformAdminEmail,
+		PasswordHash: hash,
+		DisplayName:  defaultPlatformAdminDisplayName,
+		Status:       models.PlatformAdminStatusActive,
+	}
+	row.SetCreateInfo("seed")
+	if err := s.db.Create(row).Error; err != nil {
+		return err
+	}
+	logger.Info("seeded default platform admin (change password after first login)",
+		zap.String("email", row.Email),
+		zap.Uint("id", row.ID),
+	)
 	return nil
 }

@@ -177,6 +177,7 @@ func (s *SIPServer) stopCallSessionLocked(callID string) {
 	if cs != nil {
 		cs.Stop()
 	}
+	s.releaseInboundCapacity(callID)
 }
 
 func (s *SIPServer) runInviteAsync(

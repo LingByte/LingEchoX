@@ -15,6 +15,9 @@ const (
 	TenantUserStatusActive   = "active"
 	TenantUserStatusDisabled = "disabled"
 	TenantUserStatusPending  = "pending"
+
+	TenantUserSourceRegister = "register"
+	TenantUserSourceManual   = "manual"
 )
 
 // TenantUser is a login identity scoped to exactly one tenant (SaaS member).
@@ -25,10 +28,16 @@ type TenantUser struct {
 	Email        string `json:"email" gorm:"size:256;uniqueIndex:idx_global_tenant_user_email;not null"`
 	Phone        string `json:"phone" gorm:"size:32"`
 	Username     string `json:"username" gorm:"size:128"`
-	PasswordHash string     `json:"-" gorm:"size:256"`
-	DisplayName  string     `json:"displayName" gorm:"size:128"`
-	Status       string     `json:"status" gorm:"size:24;index;not null;default:active"` // active | disabled | pending
-	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty"`
+	PasswordHash string `json:"-" gorm:"size:256"`
+	DisplayName  string `json:"displayName" gorm:"size:128"`
+	AvatarURL    string `json:"avatarUrl" gorm:"size:512"`
+	Status       string `json:"status" gorm:"size:32;index;not null;default:active"` // active | disabled | pending
+	LastLogin    *time.Time `json:"lastLogin,omitempty" gorm:"column:last_login_at"`
+	LastLoginIP  string     `json:"-" gorm:"size:128;column:last_login_ip"`
+	Source       string     `json:"source" gorm:"size:64;index;default:register"`
+	LoginCount   int        `json:"loginCount" gorm:"default:0"`
+	TOTPSecret   string     `json:"-" gorm:"size:128;column:totp_secret"`
+	TOTPEnabled  bool       `json:"totpEnabled" gorm:"column:totp_enabled;not null;default:0"`
 }
 
 func (TenantUser) TableName() string {
@@ -143,10 +152,18 @@ func UpdateTenantUserStatus(db *gorm.DB, id uint, status, updateBy string) (int6
 	return res.RowsAffected, res.Error
 }
 
-// UpdateTenantUserLastLogin updates the last login time.
-func UpdateTenantUserLastLogin(db *gorm.DB, id uint) error {
+// RecordTenantUserLogin sets last login time and IP and increments login_count.
+func RecordTenantUserLogin(db *gorm.DB, id uint, ip string) error {
 	now := time.Now()
-	return db.Model(&TenantUser{}).Where("id = ?", id).Update("last_login_at", &now).Error
+	ip = strings.TrimSpace(ip)
+	if len(ip) > 128 {
+		ip = ip[:128]
+	}
+	return db.Model(&TenantUser{}).Where("id = ?", id).Updates(map[string]any{
+		"last_login_at": &now,
+		"last_login_ip": ip,
+		"login_count":   gorm.Expr("login_count + ?", 1),
+	}).Error
 }
 
 // SoftDeleteTenantUserByID soft-deletes a tenant user by ID.

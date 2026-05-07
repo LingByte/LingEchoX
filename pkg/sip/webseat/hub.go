@@ -1,4 +1,4 @@
-// Package webseat bridges an inbound SIP call to a browser over WebRTC after the caller presses transfer (SIP_TRANSFER_NUMBER=web).
+// Package webseat bridges an inbound SIP call to a browser over WebRTC when routing selects a WebSeat pool target.
 package webseat
 
 import (

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
@@ -48,6 +49,21 @@ type SIPServer struct {
 
 	callPersistMu sync.RWMutex
 	callPersist   SIPCallPersistStore // optional: SIPCall / recording / dialog persistence
+
+	inboundTenantMu sync.RWMutex
+	// Optional: resolve DID → tenant + sip_trunk_numbers row for inbound INVITEs.
+	inboundDIDBindingLookup func(msg *stack.Message) InboundDIDBinding
+
+	inboundCapMu sync.RWMutex
+	// Optional: per-DID inbound capacity for this process (see TrunkCapacityTracker). Return ok=false to reject INVITE.
+	inboundCapacityGate func(callID, calledUser string) (ok bool, sipStatus int, reason string)
+	inboundCapacityRelease func(callID string)
+
+	// Default false: reject INVITE when inbound DID binding yields tenant_id=0 (unknown DID). Set true for demo / legacy single-tenant passthrough.
+	inboundAllowUnknownDID atomic.Bool
+
+	voiceWSLookupMu sync.RWMutex
+	voiceWSLookup   func(callID string) string
 
 	dlgMu  sync.RWMutex
 	uasDlg map[string]*uasDialogState // inbound Call-ID -> dialog (for server-initiated BYE)
@@ -333,6 +349,105 @@ func (s *SIPServer) callPersistStore() SIPCallPersistStore {
 	return s.callPersist
 }
 
+func (s *SIPServer) resolveInboundTenant(msg *stack.Message) uint {
+	return s.resolveInboundDIDBinding(msg).TenantID
+}
+
+func (s *SIPServer) resolveInboundDIDBinding(msg *stack.Message) InboundDIDBinding {
+	if s == nil || msg == nil {
+		return InboundDIDBinding{}
+	}
+	s.inboundTenantMu.RLock()
+	fn := s.inboundDIDBindingLookup
+	s.inboundTenantMu.RUnlock()
+	if fn == nil {
+		return InboundDIDBinding{}
+	}
+	b := fn(msg)
+	return b
+}
+
+// SetInboundDIDBindingResolver wires tenant + trunk_number resolution from the called-party (DID).
+func (s *SIPServer) SetInboundDIDBindingResolver(fn func(msg *stack.Message) InboundDIDBinding) {
+	if s == nil {
+		return
+	}
+	s.inboundTenantMu.Lock()
+	defer s.inboundTenantMu.Unlock()
+	s.inboundDIDBindingLookup = fn
+}
+
+// SetInboundCapacityGate wires trunk-number inbound concurrency enforcement (process-local; pair with SetInboundCapacityRelease).
+func (s *SIPServer) SetInboundCapacityGate(fn func(callID, calledUser string) (ok bool, sipStatus int, reason string)) {
+	if s == nil {
+		return
+	}
+	s.inboundCapMu.Lock()
+	defer s.inboundCapMu.Unlock()
+	s.inboundCapacityGate = fn
+}
+
+// SetInboundCapacityRelease releases a capacity slot acquired by the gate (idempotent per Call-ID).
+func (s *SIPServer) SetInboundCapacityRelease(fn func(callID string)) {
+	if s == nil {
+		return
+	}
+	s.inboundCapMu.Lock()
+	defer s.inboundCapMu.Unlock()
+	s.inboundCapacityRelease = fn
+}
+
+func (s *SIPServer) releaseInboundCapacity(callID string) {
+	if s == nil || strings.TrimSpace(callID) == "" {
+		return
+	}
+	s.inboundCapMu.RLock()
+	fn := s.inboundCapacityRelease
+	s.inboundCapMu.RUnlock()
+	if fn != nil {
+		fn(strings.TrimSpace(callID))
+	}
+}
+
+// SetInboundAllowUnknownDID controls INVITE handling when tenant/DID resolution yields 0.
+// false (default): respond 404; true: accept and persist tenant_id=0 (legacy demo behavior).
+func (s *SIPServer) SetInboundAllowUnknownDID(v bool) {
+	if s == nil {
+		return
+	}
+	s.inboundAllowUnknownDID.Store(v)
+}
+
+func (s *SIPServer) inboundAllowsUnknownDID() bool {
+	if s == nil {
+		return false
+	}
+	return s.inboundAllowUnknownDID.Load()
+}
+
+// SetVoiceDialogWSLookup returns optional per-call wss/ws base URL for voicedialog client dial (merged with token & call_id query).
+func (s *SIPServer) SetVoiceDialogWSLookup(fn func(callID string) string) {
+	if s == nil {
+		return
+	}
+	s.voiceWSLookupMu.Lock()
+	defer s.voiceWSLookupMu.Unlock()
+	s.voiceWSLookup = fn
+}
+
+func (s *SIPServer) lookupVoiceDialogWS(callID string) string {
+	if s == nil {
+		return ""
+	}
+	s.voiceWSLookupMu.RLock()
+	fn := s.voiceWSLookup
+	s.voiceWSLookupMu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return strings.TrimSpace(fn(callID))
+}
+
 func addrString(a *net.UDPAddr) string {
 	if a == nil {
 		return ""
@@ -565,6 +680,48 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		}
 	}
 
+	tidInbound := s.resolveInboundTenant(msg)
+	if !s.inboundAllowsUnknownDID() && tidInbound == 0 {
+		logger.Warn("sip invite rejected (tenant/DID unresolved)",
+			zap.String("call_id", callID),
+			zap.String("request_uri", msg.RequestURI),
+		)
+		return s.makeResponse(msg, 404, "Not Found", "", "")
+	}
+
+	rawCalled := InboundCalledPartyUser(msg)
+	capacityAcquired := false
+	if rawCalled != "" {
+		s.inboundCapMu.RLock()
+		gate := s.inboundCapacityGate
+		s.inboundCapMu.RUnlock()
+		if gate != nil {
+			ok, code, reason := gate(callID, rawCalled)
+			if !ok {
+				if code <= 0 {
+					code = 486
+				}
+				r := strings.TrimSpace(reason)
+				if r == "" {
+					r = "Busy Here"
+				}
+				logger.Warn("sip invite rejected (inbound capacity)",
+					zap.String("call_id", callID),
+					zap.String("called_user", rawCalled),
+					zap.Int("sip_status", code),
+				)
+				return s.makeResponse(msg, code, r, "", "")
+			}
+			capacityAcquired = true
+		}
+	}
+	capacityEstablishOK := false
+	defer func() {
+		if capacityAcquired && !capacityEstablishOK {
+			s.releaseInboundCapacity(callID)
+		}
+	}()
+
 	toTagEarly := ensureToTag(msg.GetHeader("To"))
 	s.registerPendingInvite(msg, addr, toTagEarly)
 
@@ -697,19 +854,21 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 
 	if p := s.callPersistStore(); p != nil {
 		neg := cs.NegotiatedCodec()
+		bind := s.resolveInboundDIDBinding(msg)
 		p.OnInvite(context.Background(), InvitePersistParams{
-			TenantID:    0,
-			CallID:      callID,
-			From:        msg.GetHeader("From"),
-			To:          msg.GetHeader("To"),
-			RemoteSig:   addr.String(),
-			RemoteRTP:   remoteAddr.String(),
-			LocalRTP:    fmt.Sprintf("%s:%d", s.localIP, localPort),
-			Codec:       neg.Name,
-			PayloadType: neg.PayloadType,
-			ClockRate:   neg.ClockRate,
-			CSeqInvite:  msg.GetHeader("CSeq"),
-			Direction:   "inbound",
+			TenantID:             bind.TenantID,
+			InboundTrunkNumberID: bind.TrunkNumberID,
+			CallID:               callID,
+			From:                 msg.GetHeader("From"),
+			To:                   msg.GetHeader("To"),
+			RemoteSig:            addr.String(),
+			RemoteRTP:            remoteAddr.String(),
+			LocalRTP:             fmt.Sprintf("%s:%d", s.localIP, localPort),
+			Codec:                neg.Name,
+			PayloadType:          neg.PayloadType,
+			ClockRate:            neg.ClockRate,
+			CSeqInvite:           msg.GetHeader("CSeq"),
+			Direction:            "inbound",
 		})
 	}
 
@@ -770,6 +929,7 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 			flight.awaitRSeq = 0
 		}
 		s.inviteByCall.Store(callID, flight)
+		capacityEstablishOK = true
 		go s.runInviteAsync(msg, addr, flight, respMsg, reliable, sdp183, callID)
 		return nil
 	}
@@ -788,6 +948,7 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		s.inviteFlightKeyByCall.Store(callID, fk)
 	}
 
+	capacityEstablishOK = true
 	return respMsg
 }
 
@@ -822,7 +983,8 @@ func (s *SIPServer) handleAck(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 			return nil
 		}
 		fromH, toH, remSig := s.peekInviteBrief(callID)
-		if err := voicedialog.AttachInboundVoiceDialog(context.Background(), cs, fromH, toH, remSig); err != nil {
+		voiceURL := s.lookupVoiceDialogWS(callID)
+		if err := voicedialog.AttachInboundVoiceDialog(context.Background(), cs, fromH, toH, remSig, voiceURL); err != nil {
 			logger.Warn("sip inbound voicedialog attach failed (no embedded fallback; configure ASR/TTS + HTTP WS client)",
 				zap.String("call_id", callID),
 				zap.Error(err),
@@ -858,6 +1020,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 
 	if tb := conversation.HangupTransferBridgeIfAny(callID); tb != nil {
 		s.forgetUASDialog(callID)
+		s.releaseInboundCapacity(tb.InboundCallID)
 		if p := s.callPersistStore(); p != nil {
 			go p.OnBye(context.Background(), ByePersistParams{
 				CallID:             tb.InboundCallID,
@@ -872,6 +1035,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	}
 	if conversation.HangupWebSeatBridgeIfAny(callID) {
 		s.forgetUASDialog(callID)
+		s.releaseInboundCapacity(callID)
 		return s.makeResponse(msg, 200, "OK", "", "")
 	}
 
@@ -905,6 +1069,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 		})
 	}
 	s.forgetUASDialog(callID)
+	s.releaseInboundCapacity(callID)
 	return s.makeResponse(msg, 200, "OK", "", "")
 }
 

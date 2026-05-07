@@ -143,6 +143,8 @@ type InboundMeta struct {
 	RemoteSig     string
 	CodecName     string
 	PCMSampleRate int
+	// CustomVoiceWSURL optional ws:// or wss:// URL; gateway merges ?token=&call_id= like loopback.
+	CustomVoiceWSURL string
 }
 
 // Hub coordinates pending subscribers and per-call media bridges.

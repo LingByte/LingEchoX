@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useAuthStore } from '@/stores/authStore'
+import { listTrunkNumbers, type TrunkNumberRow } from '@/api/trunks'
 import { clearWebSeatAcdPoolAnchor, ensureWebSeatAcdPoolRowOnline, postWebSeatAcdHeartbeat, setWebSeatAcdPoolRowOffline } from '@/api/webSeatAcd'
 import { showAlert } from '@/utils/notification'
-import { WebSeatContext, type WebSeatContextValue, type WebSeatWsState } from './WebSeatContext'
+import { WebSeatContext, type WebSeatContextValue, type WebSeatTrunkPick, type WebSeatWsState } from './WebSeatContext'
 import { getUserMediaAudioOnly } from './getUserMediaCompat'
 import { buildWebSeatWebSocketURL, webSeatHttpBase, webSeatV1URL, webSeatWsToken } from './webseatEnv'
 import { WebSeatIncomingCallCard } from './WebSeatIncomingCallCard'
@@ -10,6 +11,32 @@ import { WebSeatIncomingCallCard } from './WebSeatIncomingCallCard'
 const WEBSEAT_ACD_HEARTBEAT_MS = 30_000
 const MAX_SIGNAL_LINES = 400
 const MAX_RX_LINES = 250
+const WEBSEAT_TRUNK_LS = 'soulnexus.webseat.trunkPick'
+
+function readTrunkPickLS(): WebSeatTrunkPick | null {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const s = localStorage.getItem(WEBSEAT_TRUNK_LS)
+    if (!s) return null
+    const o = JSON.parse(s) as { id?: number; label?: string }
+    const id = Number(o.id)
+    if (!Number.isFinite(id) || id <= 0) return null
+    return { id, label: String(o.label || '').trim() || `中继号码 #${id}` }
+  } catch {
+    return null
+  }
+}
+
+function writeTrunkPickLS(p: WebSeatTrunkPick | null) {
+  if (typeof localStorage === 'undefined') return
+  if (!p) localStorage.removeItem(WEBSEAT_TRUNK_LS)
+  else localStorage.setItem(WEBSEAT_TRUNK_LS, JSON.stringify(p))
+}
+
+function trunkRowLabel(row: TrunkNumberRow): string {
+  const n = String(row.number || '').trim()
+  return n || `号码 id=${row.id}`
+}
 
 function appendLog(prev: string, line: string, maxLines: number): string {
   const next = prev + line + '\n'
@@ -53,6 +80,50 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null)
+
+  const [trunkPick, setTrunkPick] = useState<WebSeatTrunkPick | null>(() => readTrunkPickLS())
+  const trunkPickRef = useRef<WebSeatTrunkPick | null>(trunkPick)
+  useEffect(() => {
+    trunkPickRef.current = trunkPick
+  }, [trunkPick])
+
+  const [trunkCandidates, setTrunkCandidates] = useState<TrunkNumberRow[]>([])
+  const [trunkListLoading, setTrunkListLoading] = useState(false)
+  const [selectedTrunkNumberId, setSelectedTrunkNumberIdState] = useState<number | undefined>(undefined)
+
+  const setSelectedTrunkNumberId = useCallback((id: number) => {
+    setSelectedTrunkNumberIdState(id)
+    const row = trunkCandidates.find((r) => r.id === id)
+    if (row) writeTrunkPickLS({ id: row.id, label: trunkRowLabel(row) })
+  }, [trunkCandidates])
+
+  useEffect(() => {
+    if (!configured) return
+    let cancelled = false
+    setTrunkListLoading(true)
+    void listTrunkNumbers(1, 500).then((res) => {
+      if (cancelled) return
+      setTrunkListLoading(false)
+      if (res.code !== 200 || !res.data?.list?.length) {
+        setTrunkCandidates([])
+        setSelectedTrunkNumberIdState(undefined)
+        return
+      }
+      const list = res.data.list
+      setTrunkCandidates(list)
+      const saved = readTrunkPickLS()
+      const nextId =
+        saved && list.some((x) => x.id === saved.id)
+          ? saved.id
+          : list[0]!.id
+      setSelectedTrunkNumberIdState(nextId)
+      const row = list.find((r) => r.id === nextId)
+      if (row) writeTrunkPickLS({ id: row.id, label: trunkRowLabel(row) })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [configured])
 
   const logSignal = useCallback((...args: unknown[]) => {
     const line = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')
@@ -138,12 +209,33 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     if (!configured) return
     stopAcdHeartbeat()
     try {
+      const row = trunkCandidates.find((r) => r.id === selectedTrunkNumberId)
+      if (!row) {
+        if (trunkListLoading) {
+          showAlert('中继号码列表加载中，请稍后再试', 'warning')
+          return
+        }
+        showAlert(
+          trunkCandidates.length === 0
+            ? '暂无可用的中继号码，请管理员在「中继号码」中分配给本租户后再上线'
+            : '请先在上方下拉框选择本次承接来电的中继号码，再点击「上线」',
+          'error',
+        )
+        return
+      }
+      const pick: WebSeatTrunkPick = { id: row.id, label: trunkRowLabel(row) }
+      setTrunkPick(pick)
+      writeTrunkPickLS(pick)
       connectWebSocket()
       await waitForWebSocketOpen(wsRef, 15_000)
       const operatorKey = (user?.email && String(user.email).trim()) || (user?.id != null ? String(user.id) : '')
       const displayLabel = `${(user?.username || user?.email || '坐席')}-Web`
-      const tid = await ensureWebSeatAcdPoolRowOnline({ displayLabel, operatorKey })
-      logSignal('ACD online row ready', { tid, operatorKey, displayLabel })
+      const tid = await ensureWebSeatAcdPoolRowOnline({
+        displayLabel,
+        operatorKey,
+        trunkNumberId: pick.id,
+      })
+      logSignal('ACD online row ready', { tid, operatorKey, displayLabel, trunkNumberId: pick.id })
       void postWebSeatAcdHeartbeat(tid).catch(() => {})
       // @ts-ignore
       acdHeartbeatTimerRef.current = window.setInterval(() => {
@@ -158,12 +250,24 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       logSignal('goOnline failed', e instanceof Error ? e.message : String(e))
       closeWsConnection()
     }
-  }, [closeWsConnection, configured, connectWebSocket, logSignal, stopAcdHeartbeat, user?.email, user?.id, user?.username])
+  }, [
+    closeWsConnection,
+    configured,
+    connectWebSocket,
+    logSignal,
+    selectedTrunkNumberId,
+    stopAcdHeartbeat,
+    trunkCandidates,
+    trunkListLoading,
+    user?.email,
+    user?.id,
+    user?.username,
+  ])
 
   const goOffline = useCallback(async () => {
     stopAcdHeartbeat()
     try {
-      await setWebSeatAcdPoolRowOffline()
+      await setWebSeatAcdPoolRowOffline(trunkPickRef.current?.id ?? 0)
       window.dispatchEvent(new CustomEvent('soulnexus-acd-refresh'))
       logSignal('ACD set offline success')
     } catch {}
@@ -359,28 +463,66 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       }
       stopAcdHeartbeat()
       closeWsConnection()
-      void setWebSeatAcdPoolRowOffline().catch(() => {})
+      void setWebSeatAcdPoolRowOffline(trunkPickRef.current?.id ?? 0).catch(() => {})
       clearWebSeatAcdPoolAnchor()
       logSignal('provider cleanup done')
     }
   }, [closeWsConnection, configured, logSignal, stopAcdHeartbeat])
 
-  const ctxValue: WebSeatContextValue = useMemo(() => ({
-    configured,
-    wsState,
-    wsStatusText,
-    presenceWsClients,
-    presenceOnline,
-    signalLog,
-    rxLog,
-    inCall,
-    hangupDisabled,
-    pendingIncomingCallId,
-    hangup,
-    reconnectWebSocket,
-    goOnline,
-    goOffline,
-  }), [configured, goOffline, goOnline, hangup, hangupDisabled, inCall, pendingIncomingCallId, presenceOnline, presenceWsClients, reconnectWebSocket, rxLog, signalLog, wsState, wsStatusText])
+  const trunkPickSummary = useMemo(() => {
+    const row = trunkCandidates.find((r) => r.id === selectedTrunkNumberId)
+    if (row) return `${trunkRowLabel(row)} (#${row.id})`
+    if (trunkListLoading) return '加载归属中继号码…'
+    if (trunkCandidates.length === 0) return '暂无分配给本租户的中继号码'
+    return '请选择中继号码'
+  }, [trunkCandidates, selectedTrunkNumberId, trunkListLoading])
+
+  const ctxValue: WebSeatContextValue = useMemo(
+    () => ({
+      configured,
+      wsState,
+      wsStatusText,
+      presenceWsClients,
+      presenceOnline,
+      signalLog,
+      rxLog,
+      inCall,
+      hangupDisabled,
+      pendingIncomingCallId,
+      trunkPick,
+      trunkPickSummary,
+      trunkCandidates,
+      trunkListLoading,
+      selectedTrunkNumberId,
+      setSelectedTrunkNumberId,
+      hangup,
+      reconnectWebSocket,
+      goOnline,
+      goOffline,
+    }),
+    [
+      configured,
+      goOffline,
+      goOnline,
+      hangup,
+      hangupDisabled,
+      inCall,
+      pendingIncomingCallId,
+      presenceOnline,
+      presenceWsClients,
+      reconnectWebSocket,
+      rxLog,
+      selectedTrunkNumberId,
+      setSelectedTrunkNumberId,
+      signalLog,
+      trunkCandidates,
+      trunkListLoading,
+      trunkPick,
+      trunkPickSummary,
+      wsState,
+      wsStatusText,
+    ],
+  )
 
   return (
     <WebSeatContext.Provider value={ctxValue}>

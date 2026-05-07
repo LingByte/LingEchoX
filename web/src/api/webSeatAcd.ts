@@ -8,10 +8,14 @@ import {
 
 const WEBSEAT_ACD_POOL_ROW_SESSION_KEY = 'soulnexus.webseat.acdPoolTargetId'
 
-function readAnchoredWebSeatAcdPoolId(): number | null {
+function anchorSessionKey(trunkNumberId: number): string {
+  return `${WEBSEAT_ACD_POOL_ROW_SESSION_KEY}:${trunkNumberId}`
+}
+
+function readAnchoredWebSeatAcdPoolId(trunkNumberId: number): number | null {
   if (typeof sessionStorage === 'undefined') return null
   try {
-    const s = sessionStorage.getItem(WEBSEAT_ACD_POOL_ROW_SESSION_KEY)
+    const s = sessionStorage.getItem(anchorSessionKey(trunkNumberId))
     if (!s) return null
     const id = parseInt(s, 10)
     return Number.isFinite(id) && id > 0 ? id : null
@@ -20,24 +24,38 @@ function readAnchoredWebSeatAcdPoolId(): number | null {
   }
 }
 
-function writeAnchoredWebSeatAcdPoolId(id: number): void {
+function writeAnchoredWebSeatAcdPoolId(trunkNumberId: number, id: number): void {
   if (typeof sessionStorage === 'undefined') return
-  sessionStorage.setItem(WEBSEAT_ACD_POOL_ROW_SESSION_KEY, String(id))
+  sessionStorage.setItem(anchorSessionKey(trunkNumberId), String(id))
 }
 
-export function clearWebSeatAcdPoolAnchor(): void {
+/** Clears stored ACD row anchor for one trunk (or every trunk prefix if called with clearAllAnchors). */
+export function clearWebSeatAcdPoolAnchor(trunkNumberId?: number): void {
   if (typeof sessionStorage === 'undefined') return
-  sessionStorage.removeItem(WEBSEAT_ACD_POOL_ROW_SESSION_KEY)
+  if (trunkNumberId != null && trunkNumberId > 0) {
+    sessionStorage.removeItem(anchorSessionKey(trunkNumberId))
+    return
+  }
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)
+      if (k && k.startsWith(WEBSEAT_ACD_POOL_ROW_SESSION_KEY)) keys.push(k)
+    }
+    keys.forEach((k) => sessionStorage.removeItem(k))
+  } catch {
+    sessionStorage.removeItem(WEBSEAT_ACD_POOL_ROW_SESSION_KEY)
+  }
 }
 
 function normOpKey(s: string): string {
   return s.trim().toLowerCase()
 }
 
-async function findWebAcdRowIdForOperator(operatorKey: string): Promise<number | null> {
+async function findWebAcdRowIdForOperator(operatorKey: string, trunkNumberId: number): Promise<number | null> {
   const k = normOpKey(operatorKey)
-  if (!k) return null
-  const res = await listACDPoolTargets(1, 100, { routeType: 'web' })
+  if (!k || !trunkNumberId) return null
+  const res = await listACDPoolTargets(1, 100, { routeType: 'web', trunkNumberId })
   if (res.code !== 200 || !res.data?.list?.length) return null
   const mine = res.data.list.filter((r) => normOpKey(r.createBy || '') === k)
   if (!mine.length) return null
@@ -50,15 +68,29 @@ export async function postWebSeatAcdHeartbeat(targetId: number): Promise<void> {
   if (r.code !== 200) throw new Error(r.msg || 'web seat heartbeat failed')
 }
 
-export async function ensureWebSeatAcdPoolRowOnline(opts: { displayLabel: string; operatorKey: string }): Promise<number> {
+export async function ensureWebSeatAcdPoolRowOnline(opts: {
+  displayLabel: string
+  operatorKey: string
+  trunkNumberId: number
+}): Promise<number> {
+  const tnId = opts.trunkNumberId
+  if (!tnId || tnId <= 0) {
+    throw new Error('请先选择中继号码后再上线')
+  }
   const label = opts.displayLabel.trim() || 'Web'
-  const existing = await findWebAcdRowIdForOperator(opts.operatorKey)
+  const existing = await findWebAcdRowIdForOperator(opts.operatorKey, tnId)
   let targetId: number | null = existing
   if (targetId == null) {
-    const anchor = readAnchoredWebSeatAcdPoolId()
+    const anchor = readAnchoredWebSeatAcdPoolId(tnId)
     if (anchor != null) {
       const cur = await getACDPoolTarget(anchor)
-      if (cur.code === 200 && cur.data?.routeType === 'web') targetId = anchor
+      if (
+        cur.code === 200 &&
+        cur.data?.routeType === 'web' &&
+        Number(cur.data.trunkNumberId) === tnId
+      ) {
+        targetId = anchor
+      }
     }
   }
   if (targetId != null) {
@@ -68,6 +100,7 @@ export async function ensureWebSeatAcdPoolRowOnline(opts: { displayLabel: string
       const wt = r.weight != null && r.weight > 0 ? r.weight : 10
       const u = await updateACDPoolTarget(targetId, {
         name: label,
+        trunkNumberId: tnId,
         routeType: 'web',
         sipSource: '',
         targetValue: '',
@@ -76,28 +109,38 @@ export async function ensureWebSeatAcdPoolRowOnline(opts: { displayLabel: string
         shiftSchedule: r.shiftSchedule ?? '',
       })
       if (u.code !== 200) throw new Error(u.msg || 'update web seat acd failed')
-      writeAnchoredWebSeatAcdPoolId(targetId)
+      writeAnchoredWebSeatAcdPoolId(tnId, targetId)
       return targetId
     }
-    clearWebSeatAcdPoolAnchor()
+    clearWebSeatAcdPoolAnchor(tnId)
   }
-  const c = await createACDPoolTarget({ name: label, routeType: 'web', sipSource: '', targetValue: '', weight: 10, workState: 'available' })
+  const c = await createACDPoolTarget({
+    name: label,
+    trunkNumberId: tnId,
+    routeType: 'web',
+    sipSource: '',
+    targetValue: '',
+    weight: 10,
+    workState: 'available',
+  })
   if (c.code !== 200 || !c.data?.id) throw new Error(c.msg || 'create web seat acd failed')
-  writeAnchoredWebSeatAcdPoolId(c.data.id)
+  writeAnchoredWebSeatAcdPoolId(tnId, c.data.id)
   return c.data.id
 }
 
-export async function setWebSeatAcdPoolRowOffline(): Promise<void> {
-  const anchor = readAnchoredWebSeatAcdPoolId()
+export async function setWebSeatAcdPoolRowOffline(trunkNumberId: number): Promise<void> {
+  if (!trunkNumberId || trunkNumberId <= 0) return
+  const anchor = readAnchoredWebSeatAcdPoolId(trunkNumberId)
   if (anchor == null) return
   const cur = await getACDPoolTarget(anchor)
   if (cur.code !== 200 || !cur.data || cur.data.routeType !== 'web') {
-    clearWebSeatAcdPoolAnchor()
+    clearWebSeatAcdPoolAnchor(trunkNumberId)
     return
   }
   const r = cur.data
   const u = await updateACDPoolTarget(anchor, {
     name: r.name || '',
+    trunkNumberId: trunkNumberId,
     routeType: 'web',
     sipSource: '',
     targetValue: '',

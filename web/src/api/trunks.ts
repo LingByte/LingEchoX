@@ -1,13 +1,14 @@
 import { get, post, put, del, type ApiResponse } from '@/utils/request'
 import type { Paginated } from '@/api/types'
 
+// providerCode 由后端在创建时分配，前端只读，不参与请求体。
 export interface TrunkRow {
   id: number
   name: string
   description?: string
   prefix?: string
   local_addr?: string
-  providerId?: number
+  providerCode?: string
   numbers?: TrunkNumberRow[]
   createdAt?: string
   updatedAt?: string
@@ -16,7 +17,9 @@ export interface TrunkRow {
 export interface TrunkNumberRow {
   id: number
   trunkId: number
+  tenantId?: number
   number: string
+  callerDisplayName?: string
   prefix?: string
   description?: string
   direction?: string
@@ -26,7 +29,8 @@ export interface TrunkNumberRow {
   isTransferRelay?: boolean
   effectiveTime?: string | null
   expirationTime?: string | null
-  providerId?: number
+  providerCode?: string
+  voiceDialogWsUrl?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -46,7 +50,6 @@ export async function createTrunk(body: {
   description?: string
   prefix?: string
   local_addr?: string
-  providerId?: number
 }): Promise<ApiResponse<TrunkRow>> {
   return post('/sip-center/trunks', body)
 }
@@ -56,7 +59,6 @@ export async function updateTrunk(id: number, body: {
   description?: string
   prefix?: string
   local_addr?: string
-  providerId?: number
 }): Promise<ApiResponse<TrunkRow>> {
   return put(`/sip-center/trunks/${id}`, body)
 }
@@ -65,10 +67,15 @@ export async function deleteTrunk(id: number): Promise<ApiResponse<{ id: number 
   return del(`/sip-center/trunks/${id}`)
 }
 
-export async function listTrunkNumbers(page = 1, size = 20, opts?: { trunkId?: number; number?: string }): Promise<ApiResponse<Paginated<TrunkNumberRow>>> {
+export async function listTrunkNumbers(
+  page = 1,
+  size = 20,
+  opts?: { trunkId?: number; number?: string; tenantId?: number },
+): Promise<ApiResponse<Paginated<TrunkNumberRow>>> {
   const q = new URLSearchParams({ page: String(page), size: String(size) })
   if (opts?.trunkId != null && opts.trunkId > 0) q.set('trunkId', String(opts.trunkId))
   if (opts?.number) q.set('number', opts.number)
+  if (opts?.tenantId != null && opts.tenantId > 0) q.set('tenantId', String(opts.tenantId))
   return get(`/sip-center/trunk-numbers?${q.toString()}`)
 }
 
@@ -78,7 +85,9 @@ export async function getTrunkNumber(id: number): Promise<ApiResponse<TrunkNumbe
 
 export async function createTrunkNumber(body: {
   trunkId: number
+  tenantId?: number
   number: string
+  callerDisplayName?: string
   prefix?: string
   description?: string
   direction?: string
@@ -88,14 +97,16 @@ export async function createTrunkNumber(body: {
   isTransferRelay?: boolean
   effectiveTime?: string | null
   expirationTime?: string | null
-  providerId?: number
+  voiceDialogWsUrl?: string
 }): Promise<ApiResponse<TrunkNumberRow>> {
   return post('/sip-center/trunk-numbers', body)
 }
 
 export async function updateTrunkNumber(id: number, body: {
   trunkId: number
+  tenantId?: number
   number: string
+  callerDisplayName?: string
   prefix?: string
   description?: string
   direction?: string
@@ -105,7 +116,7 @@ export async function updateTrunkNumber(id: number, body: {
   isTransferRelay?: boolean
   effectiveTime?: string | null
   expirationTime?: string | null
-  providerId?: number
+  voiceDialogWsUrl?: string
 }): Promise<ApiResponse<TrunkNumberRow>> {
   return put(`/sip-center/trunk-numbers/${id}`, body)
 }

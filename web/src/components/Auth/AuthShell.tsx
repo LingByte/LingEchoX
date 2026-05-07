@@ -24,11 +24,37 @@ export default function AuthShell({ title, subtitle, children, footer }: AuthShe
         alignItems: 'center',
         justifyContent: 'center',
         padding: '32px 16px',
-        background: 'var(--color-bg-1)',
         boxSizing: 'border-box',
+        position: 'relative',
+        overflow: 'hidden',
+        background: isDark
+          ? 'linear-gradient(145deg, #0b1220 0%, #111827 38%, #1e1b4b 72%, #312e81 100%)'
+          : 'linear-gradient(145deg, #f0f4ff 0%, #e8f0fe 35%, #fdf4ff 70%, #fef3c7 100%)',
       }}
     >
-      <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 2 }}>
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          background: isDark
+            ? 'radial-gradient(ellipse 80% 55% at 15% 20%, rgba(99,102,241,0.22), transparent 55%), radial-gradient(ellipse 70% 50% at 85% 75%, rgba(56,189,248,0.14), transparent 50%)'
+            : 'radial-gradient(ellipse 75% 50% at 12% 18%, rgba(99,102,241,0.18), transparent 52%), radial-gradient(ellipse 65% 45% at 88% 78%, rgba(244,114,182,0.12), transparent 48%)',
+        }}
+      />
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          opacity: isDark ? 0.07 : 0.045,
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%2394a3b8' stroke-width='0.6'%3E%3Cpath d='M0 24h48M24 0v48'/%3E%3C/g%3E%3C/svg%3E")`,
+          backgroundSize: '48px 48px',
+        }}
+      />
+      <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 3 }}>
         <Select
           size="small"
           value={locale}
@@ -52,10 +78,14 @@ export default function AuthShell({ title, subtitle, children, footer }: AuthShe
           maxWidth: 420,
           borderRadius: 12,
           border: '1px solid var(--color-border)',
-          background: 'var(--color-bg-2)',
-          boxShadow: '0 12px 40px rgba(15, 23, 42, 0.06)',
+          background: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.82)',
+          backdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: 'blur(14px)',
+          boxShadow: isDark ? '0 24px 64px rgba(0,0,0,0.35)' : '0 12px 48px rgba(15, 23, 42, 0.08)',
           padding: '40px 36px 36px',
           boxSizing: 'border-box',
+          position: 'relative',
+          zIndex: 2,
         }}
       >
         <div style={{ marginBottom: 28 }}>

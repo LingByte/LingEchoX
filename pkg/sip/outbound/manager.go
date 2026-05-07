@@ -165,6 +165,12 @@ type Manager struct {
 	cfg  ManagerConfig
 	send func(*stack.Message, *net.UDPAddr) error
 
+	dialGateMu sync.RWMutex
+	dialGate   func(context.Context, DialRequest, string) error
+
+	outboundCapReleaseMu sync.RWMutex
+	outboundCapRelease   func(callID string)
+
 	mu       sync.Mutex
 	legs     map[string]*outLeg // keyed by local outbound Call-ID
 	legsByTx map[string]*outLeg // keyed by INVITE transaction (Via branch + CSeq)
@@ -189,6 +195,38 @@ func (m *Manager) BindSender(s SignalingSender) {
 	}
 	m.send = func(msg *stack.Message, addr *net.UDPAddr) error {
 		return s.SendSIP(msg, addr)
+	}
+}
+
+// SetDialGate runs after Call-ID allocation and before RTP allocation on Dial; non-nil error aborts the outbound INVITE.
+func (m *Manager) SetDialGate(fn func(context.Context, DialRequest, string) error) {
+	if m == nil {
+		return
+	}
+	m.dialGateMu.Lock()
+	defer m.dialGateMu.Unlock()
+	m.dialGate = fn
+}
+
+// SetOutboundCapacityRelease is invoked from cleanupLeg (idempotent per Call-ID); optional.
+func (m *Manager) SetOutboundCapacityRelease(fn func(callID string)) {
+	if m == nil {
+		return
+	}
+	m.outboundCapReleaseMu.Lock()
+	defer m.outboundCapReleaseMu.Unlock()
+	m.outboundCapRelease = fn
+}
+
+func (m *Manager) releaseOutboundCapacity(callID string) {
+	if m == nil || strings.TrimSpace(callID) == "" {
+		return
+	}
+	m.outboundCapReleaseMu.RLock()
+	fn := m.outboundCapRelease
+	m.outboundCapReleaseMu.RUnlock()
+	if fn != nil {
+		fn(strings.TrimSpace(callID))
 	}
 }
 
@@ -237,6 +275,27 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		return "", fmt.Errorf("sip/outbound: empty signaling address")
 	}
 
+	localSDP := m.cfg.LocalIP
+	if localSDP == "" {
+		localSDP = "127.0.0.1"
+	}
+	callID = newCallID(localSDP)
+	dialCommitted := false
+	defer func() {
+		if !dialCommitted {
+			m.releaseOutboundCapacity(callID)
+		}
+	}()
+
+	m.dialGateMu.RLock()
+	dg := m.dialGate
+	m.dialGateMu.RUnlock()
+	if dg != nil {
+		if err := dg(ctx, req, callID); err != nil {
+			return "", err
+		}
+	}
+
 	addr, err := net.ResolveUDPAddr("udp", req.Target.SignalingAddr)
 	if err != nil {
 		return "", fmt.Errorf("sip/outbound: resolve signaling: %w", err)
@@ -254,11 +313,6 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 				zap.String("local_listener", fmt.Sprintf("%s:%d", lh, localPort)),
 				zap.String("request_uri", strings.TrimSpace(req.Target.RequestURI)))
 		}
-	}
-
-	localSDP := m.cfg.LocalIP
-	if localSDP == "" {
-		localSDP = "127.0.0.1"
 	}
 
 	rtpSess, err := newOutboundRTPSession()
@@ -309,7 +363,6 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 	}
 	sdpBody := sdp.GenerateWithProtoExtras(localSDP, localPort, mediaProto, codecs, sdpExtras)
 
-	callID = newCallID(localSDP)
 	ip := m.cfg.SIPHost
 	if ip == "" {
 		ip = "127.0.0.1"
@@ -394,6 +447,7 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 			RemoteAddr:    addr.String(),
 		})
 	}
+	dialCommitted = true
 	return callID, nil
 }
 
@@ -765,6 +819,7 @@ func (leg *outLeg) cleanupLeg() {
 	if leg.rtpSess != nil {
 		_ = leg.rtpSess.Close()
 	}
+	m.releaseOutboundCapacity(callID)
 }
 
 func randomHex(nBytes int) string {

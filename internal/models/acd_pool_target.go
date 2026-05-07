@@ -42,8 +42,13 @@ const (
 // Web rows: TargetValue usually empty; WebSeat handoff when this row wins over SIP rows by Weight.
 type ACDPoolTarget struct {
 	BaseModel
-	TenantID              uint       `json:"tenantId" gorm:"index;not null;default:0"`           // SaaS isolation
-	Name                  string     `json:"name" gorm:"size:128"`                               // optional admin label
+	TenantID uint `json:"tenantId" gorm:"index;not null;default:0"` // SaaS isolation
+	// TrunkNumberID 把这条 ACD 目标绑定到「某个具体的中继号码」（即被叫号码）。
+	// 0 表示「兜底/任意号码」——历史行为保留。
+	// 当一通来电的被叫号码命中某个 TrunkNumber 时，调度优先选择 trunk_number_id = 该号码 的行；
+	// 没有则回退到 trunk_number_id = 0 的全局兜底行。
+	TrunkNumberID         uint       `json:"trunkNumberId" gorm:"column:trunk_number_id;not null;default:0;index"` // per-number routing
+	Name                  string     `json:"name" gorm:"size:128"`                                                 // optional admin label
 	RouteType             string     `json:"routeType" gorm:"size:16;not null;index"`            // RouteType is ACDPoolRouteTypeSIP or ACDPoolRouteTypeWeb.
 	TargetValue           string     `json:"targetValue" gorm:"size:256"`                        // TargetValue: sip internal → sip_users.username; sip trunk → dial digits / URI; web → usually empty.
 	SipSource             string     `json:"sipSource" gorm:"size:16;not null;default:'';index"` // SipSource: internal | trunk when RouteType is SIP; empty when web.
@@ -158,12 +163,16 @@ func ActiveACDPoolTargets(db *gorm.DB) *gorm.DB {
 }
 
 // ListACDPoolTargetsPage lists active targets; routeType empty skips filter.
-func ListACDPoolTargetsPage(db *gorm.DB, tenantID uint, page, size int, routeType string) ([]ACDPoolTarget, int64, error) {
+// trunkNumberID = 0 lists all numbers; >0 returns rows bound to that specific TrunkNumber.
+func ListACDPoolTargetsPage(db *gorm.DB, tenantID uint, page, size int, routeType string, trunkNumberID uint) ([]ACDPoolTarget, int64, error) {
 	q := ActiveACDPoolTargets(db).Where("tenant_id = ?", tenantID)
 	if rt := strings.TrimSpace(routeType); rt != "" {
 		if t, ok := ParseACDRouteType(rt); ok {
 			q = q.Where("route_type = ?", t)
 		}
+	}
+	if trunkNumberID > 0 {
+		q = q.Where("trunk_number_id = ?", trunkNumberID)
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -228,10 +237,12 @@ func NewACDPoolTargetForCreate(
 	now time.Time,
 	webSeatLastSeen *time.Time,
 	shiftScheduleJSON string,
+	trunkNumberID uint,
 ) ACDPoolTarget {
 	th, tp, ts := ACDTrunkStorageFields(routeType, sipSource, trunkHost, trunkPort, trunkSig)
 	cid, cdn := ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName)
 	return ACDPoolTarget{
+		TrunkNumberID:         trunkNumberID,
 		Name:                  strings.TrimSpace(name),
 		RouteType:             routeType,
 		SipSource:             sipSource,
@@ -259,10 +270,12 @@ func BuildACDPoolTargetUpdateMap(
 	now time.Time,
 	updateBy string,
 	shiftScheduleJSON string,
+	trunkNumberID uint,
 ) map[string]any {
 	th, tp, ts := ACDTrunkStorageFields(routeType, sipSource, trunkHost, trunkPort, trunkSig)
 	cid, cdn := ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName)
 	u := map[string]any{
+		"trunk_number_id":          trunkNumberID,
 		"name":                     strings.TrimSpace(name),
 		"route_type":               routeType,
 		"sip_source":               sipSource,
@@ -333,22 +346,34 @@ func WebSeatActorMayTouchRow(row ACDPoolTarget, operator string) bool {
 	return cb == operator
 }
 
-// ListEligibleACDPoolTargetsForTransfer returns pool rows eligible for transfer, honoring exclude IDs and shift_schedule_json.
-func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, limit int, tenantID uint) ([]ACDPoolTarget, error) {
+func filterACDPoolTargetsByShift(rows []ACDPoolTarget) []ACDPoolTarget {
+	loc := ACDShiftTimeLocation()
+	now := time.Now()
+	out := make([]ACDPoolTarget, 0, len(rows))
+	for _, row := range rows {
+		if ACDFitsShiftSchedule(row.ShiftScheduleJSON, now, loc) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// listEligibleACDPoolTargetsForTransferScoped returns eligible rows for one trunk_number_id scope (specific DID row id, or 0 = tenant-wide fallback).
+func listEligibleACDPoolTargetsForTransferScoped(ctx context.Context, db *gorm.DB, excludeIDs []uint, limit int, tenantID uint, trunkNumberScope uint, freshWebSince time.Time) ([]ACDPoolTarget, error) {
 	if db == nil {
 		return nil, gorm.ErrInvalidDB
 	}
 	if limit <= 0 {
 		limit = 64
 	}
-	freshWebSince := time.Now().Add(-WebSeatStaleAfter)
 	q := ActiveACDPoolTargets(db.WithContext(ctx))
 	if tenantID > 0 {
 		q = q.Where("tenant_id = ?", tenantID)
 	}
-	q = q.Where("weight > ? AND work_state = ? AND route_type IN ?",
-		0, ACDWorkStateAvailable,
-		[]string{ACDPoolRouteTypeSIP, ACDPoolRouteTypeWeb}).
+	q = q.Where("trunk_number_id = ?", trunkNumberScope).
+		Where("weight > ? AND work_state = ? AND route_type IN ?",
+			0, ACDWorkStateAvailable,
+			[]string{ACDPoolRouteTypeSIP, ACDPoolRouteTypeWeb}).
 		Where("(route_type != ? OR (web_seat_last_seen_at IS NOT NULL AND web_seat_last_seen_at > ?))",
 			ACDPoolRouteTypeWeb, freshWebSince).
 		Order("weight DESC").Order("id ASC").
@@ -360,21 +385,34 @@ func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, exc
 	if err := q.Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	loc := ACDShiftTimeLocation()
-	now := time.Now()
-	out := make([]ACDPoolTarget, 0, len(rows))
-	for _, row := range rows {
-		if ACDFitsShiftSchedule(row.ShiftScheduleJSON, now, loc) {
-			out = append(out, row)
+	return filterACDPoolTargetsByShift(rows), nil
+}
+
+// ListEligibleACDPoolTargetsForTransfer returns pool rows eligible for transfer, honoring exclude IDs and shift_schedule_json.
+// inboundTrunkNumberID is sip_trunk_numbers.id resolved from the inbound call's called party (To / Request-URI user).
+// When >0, only rows with trunk_number_id = inboundTrunkNumberID are considered first; if none match, falls back to trunk_number_id = 0 (tenant-wide pool).
+// When 0 (unknown DID), only trunk_number_id = 0 rows are used so per-number Web seats never steal unrelated DIDs.
+func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, limit int, tenantID uint, inboundTrunkNumberID uint) ([]ACDPoolTarget, error) {
+	if db == nil {
+		return nil, gorm.ErrInvalidDB
+	}
+	freshWebSince := time.Now().Add(-WebSeatStaleAfter)
+	if inboundTrunkNumberID > 0 {
+		specific, err := listEligibleACDPoolTargetsForTransferScoped(ctx, db, excludeIDs, limit, tenantID, inboundTrunkNumberID, freshWebSince)
+		if err != nil {
+			return nil, err
+		}
+		if len(specific) > 0 {
+			return specific, nil
 		}
 	}
-	return out, nil
+	return listEligibleACDPoolTargetsForTransferScoped(ctx, db, excludeIDs, limit, tenantID, 0, freshWebSince)
 }
 
 // PickEligibleACDPoolTargetForTransfer loads highest-weight available target (same rule as sipserver.PickTransferDialTarget query).
 // tenantID>0 restricts to rows for that tenant; 0 preserves legacy behaviour (pool shared until inbound calls carry tenant scope).
-func PickEligibleACDPoolTargetForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, tenantID uint) (ACDPoolTarget, error) {
-	rows, err := ListEligibleACDPoolTargetsForTransfer(ctx, db, excludeIDs, 64, tenantID)
+func PickEligibleACDPoolTargetForTransfer(ctx context.Context, db *gorm.DB, excludeIDs []uint, tenantID uint, inboundTrunkNumberID uint) (ACDPoolTarget, error) {
+	rows, err := ListEligibleACDPoolTargetsForTransfer(ctx, db, excludeIDs, 64, tenantID, inboundTrunkNumberID)
 	if err != nil {
 		return ACDPoolTarget{}, err
 	}

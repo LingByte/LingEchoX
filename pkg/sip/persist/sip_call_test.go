@@ -2,6 +2,7 @@ package persist
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,30 @@ func TestSIPCallDurationSince(t *testing.T) {
 	}
 }
 
+func TestRedactSIPCallForAPI(t *testing.T) {
+	c := &SIPCall{
+		FromHeader:     `"Alice" <sip:1001@10.0.0.5>;tag=abc`,
+		ToHeader:       `<sip:400@192.168.1.10>;tag=def`,
+		CSeqInvite:     "1 INVITE",
+		RemoteAddr:     "203.0.113.9:5060",
+		RemoteRTPAddr:  "203.0.113.9:12000",
+		LocalRTPAddr:   "10.0.0.1:8000",
+		FailureReason:  "timeout to 198.51.100.2:5060",
+		FromNumber:     "1001",
+		ToNumber:       "400",
+	}
+	RedactSIPCallForAPI(c)
+	if c.FromHeader != "" || c.ToHeader != "" || c.CSeqInvite != "" || c.RemoteAddr != "" || c.RemoteRTPAddr != "" || c.LocalRTPAddr != "" {
+		t.Fatalf("expected cleared topology/raw headers, got %#v", c)
+	}
+	if c.FromNumber != "1001" || c.ToNumber != "400" {
+		t.Fatal("numbers should remain")
+	}
+	if !strings.Contains(c.FailureReason, "[redacted]") || strings.Contains(c.FailureReason, "198.51.100.2") {
+		t.Fatalf("failure reason not redacted: %q", c.FailureReason)
+	}
+}
+
 func TestComputeCallDurationSec_Enrich(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(125 * time.Second)
@@ -144,7 +169,7 @@ func TestApplyRTPMediaToSIPCall(t *testing.T) {
 
 func TestNewSIPCallRinging_DefaultDirection(t *testing.T) {
 	now := time.Now()
-	c := NewSIPCallRinging("id", "", "", "", "", "", "", "", 0, "", 0, now, 0)
+	c := NewSIPCallRinging("id", "", "", "", "", "", "", "", 0, "", 0, now, 0, 0)
 	if c.Direction != DirectionInbound {
 		t.Fatal(c.Direction)
 	}

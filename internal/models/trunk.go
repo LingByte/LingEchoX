@@ -3,13 +3,22 @@ package models
 import (
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // Copyright (c) 2026 LingByte
 // SPDX-License-Identifier: MIT
+
+// ProviderCodePrefix* 是后端为 Trunk / TrunkNumber 自动分配的供应商编码前缀。
+// 编码规则：<prefix>_<UUIDv4 去掉短横线>，全局唯一，前端只读，禁止由前端写入。
+const (
+	ProviderCodePrefixTrunk       = "prv"
+	ProviderCodePrefixTrunkNumber = "prn"
+)
 
 type Trunk struct {
 	ID          uint           `json:"id" gorm:"primarykey"`
@@ -20,32 +29,59 @@ type Trunk struct {
 	Name        string         `json:"name" gorm:"size:200" label:"线路名称"`
 	Description string         `json:"description,omitempty" label:"备注"`
 	Prefix      string         `json:"prefix"`
-	LocalAddr   string         `json:"local_addr"`
-	Numbers     []TrunkNumber  `json:"numbers" gorm:"foreignKey:TrunkID" label:"号码"`
-	NumberNames []string       `json:"numberNames" gorm:"-" label:"号码名称"`
-	ProviderId  uint           `json:"providerId"`
-	Provider    string         `json:"-" label:"供应商"`
+	// LocalAddr 是这条中继对接的运营商网关地址 host:port（SIP INVITE 的下一跳）。
+	// 取代了过去的环境变量 SIP_TRANSFER_HOST + SIP_TRANSFER_PORT。
+	LocalAddr    string        `json:"local_addr" label:"网关地址"`
+	Numbers      []TrunkNumber `json:"numbers" gorm:"foreignKey:TrunkID" label:"号码"`
+	NumberNames  []string      `json:"numberNames" gorm:"-" label:"号码名称"`
+	ProviderCode string        `json:"providerCode" gorm:"column:provider_code;size:64;uniqueIndex:idx_trunk_provider_code" label:"供应商编码"`
+	Provider     string        `json:"-" label:"供应商"`
 }
 
 type TrunkNumber struct {
-	ID               uint           `json:"id" gorm:"primarykey" label:"编号"`
-	CreatedAt        time.Time      `json:"createdAt" label:"创建时间"`
-	UpdatedAt        time.Time      `json:"updatedAt" label:"更新时间"`
-	DeletedAt        gorm.DeletedAt `json:"deletedAt" gorm:"index"`
-	TrunkID          uint           `json:"trunkId" label:"所属线路"`
-	Trunk            Trunk          `json:"-" label:"所属线路"`
-	Number           string         `json:"number" gorm:"size:200" label:"号码"`
-	Prefix           string         `json:"prefix" gorm:"size:200" label:"前缀"`
-	Description      string         `json:"description,omitempty" label:"备注"`
-	Direction        string         `json:"direction" label:"呼叫用途"`
-	Status           string         `json:"status" gorm:"size:64;index" label:"状态"`
-	Concurrent       uint           `json:"concurrent" label:"呼出并发数"`
-	CallInConcurrent uint           `json:"callInConcurrent" gorm:"column:call_in_concurrent;default:0" label:"呼入并发数"`
-	IsTransferRelay  bool           `json:"isTransferRelay" gorm:"column:is_transfer_relay;default:0;comment:是否为转人工中继号码" label:"转人工中继号码"`
-	EffectiveTime    *time.Time     `json:"effectiveTime" gorm:"column:effective_time;comment:生效时间" label:"生效时间"`
-	ExpirationTime   *time.Time     `json:"expirationTime" gorm:"column:expiration_time;comment:失效时间" label:"失效时间"`
-	ProviderId       uint           `json:"providerId"`
-	Provider         string         `json:"-" label:"供应商"`
+	ID        uint           `json:"id" gorm:"primarykey" label:"编号"`
+	CreatedAt time.Time      `json:"createdAt" label:"创建时间"`
+	UpdatedAt time.Time      `json:"updatedAt" label:"更新时间"`
+	DeletedAt gorm.DeletedAt `json:"deletedAt" gorm:"index"`
+	TrunkID   uint           `json:"trunkId" label:"所属线路"`
+	Trunk     Trunk          `json:"-" label:"所属线路"`
+	// TenantID 表示「这条号码当前已分配给哪个租户」。
+	// 0 表示平台号池待分配；>0 表示该租户独占。租户用户只能看到 tenant_id = 自己的号码。
+	// 与 Trunk.TenantID 解耦：Trunk 通常是平台级（tenant_id=0）的运营商资源，号码却是按个分配。
+	TenantID  uint   `json:"tenantId" gorm:"column:tenant_id;index;not null;default:0" label:"分配租户"`
+	Number    string `json:"number" gorm:"size:200" label:"号码"`
+	// CallerDisplayName 写入外呼/转呼 INVITE From 的引号显示名（quoted display-name），如「七牛云客服专线」。
+	// 取代环境变量 SIP_CALLER_DISPLAY_NAME；主叫号码 user 部分用 Number（取代 SIP_CALLER_ID）。
+	CallerDisplayName string     `json:"callerDisplayName" gorm:"column:caller_display_name;size:200" label:"主叫显示名"`
+	Prefix            string     `json:"prefix" gorm:"size:200" label:"前缀"`
+	Description       string     `json:"description,omitempty" label:"备注"`
+	Direction         string     `json:"direction" label:"呼叫用途"`
+	Status            string     `json:"status" gorm:"size:64;index" label:"状态"`
+	Concurrent        uint       `json:"concurrent" label:"呼出并发数"`
+	CallInConcurrent  uint       `json:"callInConcurrent" gorm:"column:call_in_concurrent;default:0" label:"呼入并发数"`
+	IsTransferRelay   bool       `json:"isTransferRelay" gorm:"column:is_transfer_relay;default:0;comment:是否为转人工中继号码" label:"转人工中继号码"`
+	EffectiveTime     *time.Time `json:"effectiveTime" gorm:"column:effective_time;comment:生效时间" label:"生效时间"`
+	ExpirationTime    *time.Time `json:"expirationTime" gorm:"column:expiration_time;comment:失效时间" label:"失效时间"`
+	ProviderCode      string     `json:"providerCode" gorm:"column:provider_code;size:64;uniqueIndex:idx_trunk_number_provider_code" label:"供应商编码"`
+	Provider          string     `json:"-" label:"供应商"`
+	// VoiceDialogWSURL 入局呼叫匹配此号码时，语音对话 WebSocket 客户端拨号地址（ws/wss）；空则走平台默认 loopback。
+	VoiceDialogWSURL string `json:"voiceDialogWsUrl,omitempty" gorm:"column:voice_dialog_ws_url;size:512" label:"呼入语音对话WS"`
+}
+
+// newProviderCode 生成 <prefix>_<32位无短横线UUID>，约 36 字节，留充足余量。
+func newProviderCode(prefix string) string {
+	return prefix + "_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+}
+
+// BeforeCreate 后端自动分配供应商编码，前端无法覆盖（即便传入也会被丢弃）。
+func (t *Trunk) BeforeCreate(_ *gorm.DB) error {
+	t.ProviderCode = newProviderCode(ProviderCodePrefixTrunk)
+	return nil
+}
+
+func (n *TrunkNumber) BeforeCreate(_ *gorm.DB) error {
+	n.ProviderCode = newProviderCode(ProviderCodePrefixTrunkNumber)
+	return nil
 }
 
 func (Trunk) TableName() string {
@@ -125,15 +161,17 @@ func SoftDeleteTrunkCascade(db *gorm.DB, id uint) error {
 	})
 }
 
-// ListTrunkNumbersPage lists numbers; trunkID 0 means all trunks for tenantID.
+// ListTrunkNumbersPage lists numbers; trunkID 0 means all trunks; tenantID 0 lists across all tenants
+// (platform-admin view). Use ListTrunkNumbersForTenant for the tenant-scoped variant.
 func ListTrunkNumbersPage(db *gorm.DB, tenantID uint, trunkID uint, page, size int, numberContains string) ([]TrunkNumber, int64, error) {
 	tn := TrunkNumber{}.TableName()
 	tr := Trunk{}.TableName()
 	q := db.Model(&TrunkNumber{}).
-		Joins("INNER JOIN "+tr+" AS tr ON tr.id = "+tn+".trunk_id AND tr.deleted_at IS NULL").
+		Joins("INNER JOIN " + tr + " AS tr ON tr.id = " + tn + ".trunk_id AND tr.deleted_at IS NULL").
 		Where("1 = 1")
 	if tenantID > 0 {
-		q = q.Where("tr.tenant_id = ?", tenantID)
+		// 注意：这里筛选的是 TrunkNumber.tenant_id（号码已分配给的租户），不是 Trunk.tenant_id。
+		q = q.Where(tn+".tenant_id = ?", tenantID)
 	}
 	if trunkID > 0 {
 		q = q.Where(tn+".trunk_id = ?", trunkID)
@@ -153,10 +191,18 @@ func ListTrunkNumbersPage(db *gorm.DB, tenantID uint, trunkID uint, page, size i
 	}
 	offset := (page - 1) * size
 	var list []TrunkNumber
-	if err := q.Order("id DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+	if err := q.Order(tn + ".id DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
 	return list, total, nil
+}
+
+// ListTrunkNumbersForTenant lists every号码 already 分配给 tenantID（含搜索 / 分页参数）。
+func ListTrunkNumbersForTenant(db *gorm.DB, tenantID uint, page, size int, numberContains string) ([]TrunkNumber, int64, error) {
+	if tenantID == 0 {
+		return nil, 0, nil
+	}
+	return ListTrunkNumbersPage(db, tenantID, 0, page, size, numberContains)
 }
 
 // GetTrunkNumberByID loads one trunk number row.
@@ -166,20 +212,119 @@ func GetTrunkNumberByID(db *gorm.DB, id uint) (TrunkNumber, error) {
 	return row, err
 }
 
-// GetTrunkNumberByIDForTenant loads a trunk number row only if its trunk belongs to tenantID.
+// GetTrunkNumberByIDForTenant loads a trunk number row only if it is allocated to tenantID (sip_trunk_numbers.tenant_id).
 func GetTrunkNumberByIDForTenant(db *gorm.DB, id uint, tenantID uint) (TrunkNumber, error) {
 	var row TrunkNumber
-	tn := TrunkNumber{}.TableName()
-	tr := Trunk{}.TableName()
-	err := db.Model(&TrunkNumber{}).
-		Joins("INNER JOIN "+tr+" AS tr ON tr.id = "+tn+".trunk_id AND tr.deleted_at IS NULL").
-		Where(tn+".id = ? AND tr.tenant_id = ?", id, tenantID).
-		Select(tn + ".*").
-		First(&row).Error
+	err := db.Where("id = ? AND tenant_id = ?", id, tenantID).First(&row).Error
 	return row, err
 }
 
 // SoftDeleteTrunkNumberByID soft-deletes one number row.
 func SoftDeleteTrunkNumberByID(db *gorm.DB, id uint) error {
 	return db.Delete(&TrunkNumber{}, id).Error
+}
+
+// NormalizeDialDigits keeps decimal digits only for DID matching.
+func NormalizeDialDigits(s string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		if unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if strings.HasPrefix(out, "86") && len(out) >= 13 {
+		out = out[2:]
+	}
+	return out
+}
+
+// FindTrunkNumberByInboundDID finds an allocated tenant trunk number whose DID matches the SIP Request-URI / To user.
+// Used on inbound INVITE to attach TenantID to call records and downstream routing.
+func FindTrunkNumberByInboundDID(db *gorm.DB, calledRaw string) (TrunkNumber, bool) {
+	if db == nil {
+		return TrunkNumber{}, false
+	}
+	raw := strings.TrimSpace(calledRaw)
+	if raw == "" {
+		return TrunkNumber{}, false
+	}
+	norm := NormalizeDialDigits(raw)
+	var rows []TrunkNumber
+	if err := db.Where("tenant_id > 0").Order("id ASC").Find(&rows).Error; err != nil {
+		return TrunkNumber{}, false
+	}
+	for _, row := range rows {
+		num := strings.TrimSpace(row.Number)
+		if num == "" {
+			continue
+		}
+		if num == raw {
+			return row, true
+		}
+		rn := NormalizeDialDigits(num)
+		if rn == "" || norm == "" {
+			continue
+		}
+		if rn == norm || strings.HasSuffix(rn, norm) || strings.HasSuffix(norm, rn) {
+			return row, true
+		}
+	}
+	return TrunkNumber{}, false
+}
+
+// DialMatchKeys builds candidate sip_calls.from_number / to_number keys for capacity checks
+// (raw SIP user part vs trunk_number.number vs digit-normalized forms).
+func DialMatchKeys(raw string, rowStoredNumber string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	add(raw)
+	add(rowStoredNumber)
+	add(NormalizeDialDigits(raw))
+	add(NormalizeDialDigits(rowStoredNumber))
+	return out
+}
+
+// FindTrunkNumberForOutboundCaller resolves a tenant's trunk number row used as outbound CLI (Caller-ID user).
+func FindTrunkNumberForOutboundCaller(db *gorm.DB, tenantID uint, callerRaw string) (TrunkNumber, bool) {
+	if db == nil || tenantID == 0 {
+		return TrunkNumber{}, false
+	}
+	raw := strings.TrimSpace(callerRaw)
+	if raw == "" {
+		return TrunkNumber{}, false
+	}
+	norm := NormalizeDialDigits(raw)
+	var rows []TrunkNumber
+	if err := db.Where("tenant_id = ?", tenantID).Order("id ASC").Find(&rows).Error; err != nil {
+		return TrunkNumber{}, false
+	}
+	for _, row := range rows {
+		num := strings.TrimSpace(row.Number)
+		if num == "" {
+			continue
+		}
+		if num == raw {
+			return row, true
+		}
+		rn := NormalizeDialDigits(num)
+		if rn == "" || norm == "" {
+			continue
+		}
+		if rn == norm || strings.HasSuffix(rn, norm) || strings.HasSuffix(norm, rn) {
+			return row, true
+		}
+	}
+	return TrunkNumber{}, false
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,9 @@ import (
 )
 
 const DirectionInbound = "inbound"
+
+// DirectionOutbound is stored on SIPCall rows for carrier / campaign originated legs.
+const DirectionOutbound = "outbound"
 
 const (
 	SIPCallStateInit        = "init"
@@ -66,10 +70,16 @@ type SIPCall struct {
 	UpdateBy  string    `json:"updateBy,omitempty" gorm:"size:128;index;comment:Updater"`
 
 	TenantID uint `json:"tenantId" gorm:"index;not null;default:0"` // 0=legacy / unknown scope
+	// InboundTrunkNumberID is sip_trunk_numbers.id when the inbound DID matched that row (same resolver as tenant_id).
+	InboundTrunkNumberID uint `json:"inboundTrunkNumberId,omitempty" gorm:"column:inbound_trunk_number_id;index;default:0"`
 
 	CallID            string         `json:"callId" gorm:"size:128;uniqueIndex;not null"`
 	FromHeader        string         `json:"fromHeader" gorm:"type:text"`
 	ToHeader          string         `json:"toHeader" gorm:"type:text"`
+	// FromNumber / ToNumber 是从 FromHeader / ToHeader 中提取出来的纯数字号码，用于日志和列表展示。
+	// 例如 `"bob" <sip:13800138000@10.0.4.12>;tag=xyz` → "13800138000"。
+	FromNumber string `json:"fromNumber" gorm:"size:64;index"`
+	ToNumber   string `json:"toNumber" gorm:"size:64;index"`
 	CSeqInvite        string         `json:"cseqInvite" gorm:"size:64"`
 	RemoteAddr        string         `json:"remoteAddr" gorm:"size:128;index"`
 	Direction         string         `json:"direction" gorm:"size:16;index"`
@@ -126,9 +136,11 @@ func MergeSIPCall(dst, patch *SIPCall) {
 	}
 	if patch.FromHeader != "" {
 		dst.FromHeader = patch.FromHeader
+		dst.FromNumber = ExtractSIPUserPart(patch.FromHeader)
 	}
 	if patch.ToHeader != "" {
 		dst.ToHeader = patch.ToHeader
+		dst.ToNumber = ExtractSIPUserPart(patch.ToHeader)
 	}
 	if patch.CSeqInvite != "" {
 		dst.CSeqInvite = patch.CSeqInvite
@@ -201,6 +213,9 @@ func MergeSIPCall(dst, patch *SIPCall) {
 	}
 	if patch.DurationSec != 0 {
 		dst.DurationSec = patch.DurationSec
+	}
+	if patch.InboundTrunkNumberID != 0 {
+		dst.InboundTrunkNumberID = patch.InboundTrunkNumberID
 	}
 	dst.HadSIPTransfer = dst.HadSIPTransfer || patch.HadSIPTransfer
 	dst.HadWebSeat = dst.HadWebSeat || patch.HadWebSeat
@@ -334,16 +349,74 @@ func EnrichSIPCallResponse(c *SIPCall) {
 	}
 }
 
-func NewSIPCallRinging(callID, from, to, cseqInvite, remoteAddr, direction, remoteRTP, localRTP string, payloadType uint8, codec string, clockRate int, inviteAt time.Time, tenantID uint) SIPCall {
+var ipv4HostPortRE = regexp.MustCompile(`\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?::\d+)?\b`)
+
+// redactNetworkLeakage masks IPv4 (+optional :port) substrings in free-text fields returned to browsers.
+func redactNetworkLeakage(s string) string {
+	if s == "" {
+		return ""
+	}
+	return ipv4HostPortRE.ReplaceAllString(s, "[redacted]")
+}
+
+// RedactSIPCallForAPI clears topology / raw-signaling fields before HTTP JSON serialization.
+// Full rows remain in the database for operations; console APIs must not expose them (tenant-facing rule).
+func RedactSIPCallForAPI(c *SIPCall) {
+	if c == nil {
+		return
+	}
+	c.FromHeader = ""
+	c.ToHeader = ""
+	c.CSeqInvite = ""
+	c.RemoteAddr = ""
+	c.RemoteRTPAddr = ""
+	c.LocalRTPAddr = ""
+	c.FailureReason = redactNetworkLeakage(c.FailureReason)
+}
+
+var sipCallActiveStates = []string{SIPCallStateInit, SIPCallStateRinging, SIPCallStateEstablished}
+
+// CountActiveInboundCallsMatchingToNumbers counts non-terminal inbound rows whose to_number is one of keys.
+func CountActiveInboundCallsMatchingToNumbers(db *gorm.DB, tenantID uint, toNumbers []string) (int64, error) {
+	if db == nil || tenantID == 0 || len(toNumbers) == 0 {
+		return 0, nil
+	}
+	var n int64
+	err := ActiveSIPCalls(db).
+		Where("tenant_id = ? AND direction = ?", tenantID, DirectionInbound).
+		Where("state IN ?", sipCallActiveStates).
+		Where("to_number IN ?", toNumbers).
+		Count(&n).Error
+	return n, err
+}
+
+// CountActiveOutboundCallsMatchingFromNumbers counts non-terminal outbound rows whose from_number is one of keys.
+func CountActiveOutboundCallsMatchingFromNumbers(db *gorm.DB, tenantID uint, fromNumbers []string) (int64, error) {
+	if db == nil || tenantID == 0 || len(fromNumbers) == 0 {
+		return 0, nil
+	}
+	var n int64
+	err := ActiveSIPCalls(db).
+		Where("tenant_id = ? AND direction = ?", tenantID, DirectionOutbound).
+		Where("state IN ?", sipCallActiveStates).
+		Where("from_number IN ?", fromNumbers).
+		Count(&n).Error
+	return n, err
+}
+
+func NewSIPCallRinging(callID, from, to, cseqInvite, remoteAddr, direction, remoteRTP, localRTP string, payloadType uint8, codec string, clockRate int, inviteAt time.Time, tenantID uint, inboundTrunkNumberID uint) SIPCall {
 	dir := strings.TrimSpace(direction)
 	if dir == "" {
 		dir = DirectionInbound
 	}
 	return SIPCall{
-		TenantID:      tenantID,
-		CallID:        callID,
+		TenantID:             tenantID,
+		InboundTrunkNumberID: inboundTrunkNumberID,
+		CallID:               callID,
 		FromHeader:    from,
 		ToHeader:      to,
+		FromNumber:    ExtractSIPUserPart(from),
+		ToNumber:      ExtractSIPUserPart(to),
 		CSeqInvite:    cseqInvite,
 		RemoteAddr:    remoteAddr,
 		Direction:     dir,
@@ -357,10 +430,12 @@ func NewSIPCallRinging(callID, from, to, cseqInvite, remoteAddr, direction, remo
 	}
 }
 
-func SIPCallInviteRefreshUpdateMap(from, to, remoteAddr, remoteRTP, localRTP, codec string, payloadType uint8, clockRate int, now time.Time) map[string]interface{} {
-	return map[string]interface{}{
+func SIPCallInviteRefreshUpdateMap(from, to, remoteAddr, remoteRTP, localRTP, codec string, payloadType uint8, clockRate int, tenantID, inboundTrunkNumberID uint, now time.Time) map[string]interface{} {
+	m := map[string]interface{}{
 		"from_header":     from,
 		"to_header":       to,
+		"from_number":     ExtractSIPUserPart(from),
+		"to_number":       ExtractSIPUserPart(to),
 		"remote_addr":     remoteAddr,
 		"remote_rtp_addr": remoteRTP,
 		"local_rtp_addr":  localRTP,
@@ -370,6 +445,13 @@ func SIPCallInviteRefreshUpdateMap(from, to, remoteAddr, remoteRTP, localRTP, co
 		"state":           SIPCallStateRinging,
 		"updated_at":      now,
 	}
+	if tenantID != 0 {
+		m["tenant_id"] = tenantID
+	}
+	if inboundTrunkNumberID != 0 {
+		m["inbound_trunk_number_id"] = inboundTrunkNumberID
+	}
+	return m
 }
 
 func SIPCallEstablishedUpdateMap(now time.Time) map[string]interface{} {
@@ -445,10 +527,14 @@ func SIPCallFromInboundInvite(req *stack.Message, peer *net.UDPAddr) *SIPCall {
 	now := time.Now()
 	nowPtr := &now
 	callID := strings.TrimSpace(req.GetHeader("call-id"))
+	from := req.GetHeader("from")
+	to := req.GetHeader("to")
 	c := &SIPCall{
 		CallID:       callID,
-		FromHeader:   req.GetHeader("from"),
-		ToHeader:     req.GetHeader("to"),
+		FromHeader:   from,
+		ToHeader:     to,
+		FromNumber:   ExtractSIPUserPart(from),
+		ToNumber:     ExtractSIPUserPart(to),
 		CSeqInvite:   req.GetHeader("cseq"),
 		Direction:    DirectionInbound,
 		State:        SIPCallStateInit,
@@ -492,6 +578,31 @@ func ActiveSIPCalls(db *gorm.DB) *gorm.DB {
 
 func ListSIPCallsPage(db *gorm.DB, tenantID uint, page, size int, callID, state string) ([]SIPCall, int64, error) {
 	q := ActiveSIPCalls(db).Where("tenant_id = ?", tenantID)
+	if cid := strings.TrimSpace(callID); cid != "" {
+		q = q.Where("call_id = ?", cid)
+	}
+	if st := strings.TrimSpace(state); st != "" {
+		q = q.Where("state = ?", st)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * size
+	var list []SIPCall
+	if err := q.Order("id DESC").Offset(offset).Limit(size).Omit("turns").Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
+// ListAllSIPCallsPage 平台管理员视角：跨租户查看通话记录，包含 tenant_id=0 的测试通话。
+// 当 tenantIDFilter > 0 时按指定租户过滤；为 0 时返回全部。
+func ListAllSIPCallsPage(db *gorm.DB, tenantIDFilter uint, page, size int, callID, state string) ([]SIPCall, int64, error) {
+	q := ActiveSIPCalls(db)
+	if tenantIDFilter > 0 {
+		q = q.Where("tenant_id = ?", tenantIDFilter)
+	}
 	if cid := strings.TrimSpace(callID); cid != "" {
 		q = q.Where("call_id = ?", cid)
 	}

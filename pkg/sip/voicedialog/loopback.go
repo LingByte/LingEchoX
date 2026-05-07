@@ -19,7 +19,14 @@ import (
 )
 
 func (h *Hub) startInboundLoopbackWS(sess *dialogSession) {
-	if h == nil || sess == nil || !h.cfg.InboundLoopbackWS {
+	if h == nil || sess == nil {
+		return
+	}
+	if custom := strings.TrimSpace(sess.meta.CustomVoiceWSURL); custom != "" {
+		go h.runInboundAssistantWS(sess.meta.CallID, custom)
+		return
+	}
+	if !h.cfg.InboundLoopbackWS {
 		return
 	}
 	host := strings.TrimSpace(h.cfg.LoopbackHTTPHostPort)
@@ -28,6 +35,71 @@ func (h *Hub) startInboundLoopbackWS(sess *dialogSession) {
 		return
 	}
 	go h.runInboundLoopbackWS(sess.meta.CallID)
+}
+
+func (h *Hub) runInboundAssistantWS(callID string, target string) {
+	if h == nil {
+		return
+	}
+	u, err := url.Parse(strings.TrimSpace(target))
+	if err != nil {
+		logger.Warn("voicedialog inbound ws skipped (invalid custom URL)",
+			zap.String(KeyCallID, callID),
+			zap.String("target", target),
+			zap.Error(err),
+		)
+		return
+	}
+	if u == nil || (u.Scheme != "ws" && u.Scheme != "wss") {
+		logger.Warn("voicedialog inbound ws skipped (invalid custom URL)",
+			zap.String(KeyCallID, callID),
+			zap.String("target", target),
+		)
+		return
+	}
+	q := u.Query()
+	tok := wsTokenExpected()
+	if tok != "" {
+		q.Set("token", tok)
+	}
+	q.Set("call_id", callID)
+	u.RawQuery = q.Encode()
+	full := u.String()
+
+	d := websocket.Dialer{
+		HandshakeTimeout: 12 * time.Second,
+	}
+	if u.Scheme == "wss" {
+		d.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: h.cfg.LoopbackTLSInsecureSkipVerify,
+			MinVersion:         tls.VersionTLS12,
+		}
+	}
+
+	var conn *websocket.Conn
+	var dialErr error
+	const retries = 60
+	const delay = 100 * time.Millisecond
+	for i := 0; i < retries; i++ {
+		conn, _, dialErr = d.Dial(full, nil)
+		if dialErr == nil {
+			break
+		}
+		time.Sleep(delay)
+	}
+	if dialErr != nil {
+		logHostPath := u.Scheme + "://" + u.Host + u.Path
+		logger.Warn("voicedialog custom ws dial failed",
+			zap.String(KeyCallID, callID),
+			zap.String("dial_target", logHostPath),
+			zap.Error(dialErr),
+		)
+		return
+	}
+	logger.Info("voicedialog custom ws connected (tenant voice dialog URL)",
+		zap.String(KeyCallID, callID),
+	)
+	go runLoopbackAssistant(callID, conn)
 }
 
 func (h *Hub) runInboundLoopbackWS(callID string) {

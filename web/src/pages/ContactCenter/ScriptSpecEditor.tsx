@@ -4,9 +4,14 @@ import {
   ChevronDown,
   ChevronUp,
   Code2,
+  GitBranch,
   LayoutList,
+  Mic,
+  PhoneOff,
   Plus,
+  Sparkles,
   Trash2,
+  Volume2,
 } from 'lucide-react'
 import {
   defaultHybridScriptDraft,
@@ -19,6 +24,14 @@ import {
   parseHybridScriptDraft,
   serializeHybridScriptDraft,
 } from '@/pages/ContactCenter/scriptSpecTypes'
+
+const STEP_ADD_BUTTONS: { type: HybridStepType; Icon: typeof Volume2 }[] = [
+  { type: 'say', Icon: Volume2 },
+  { type: 'listen', Icon: Mic },
+  { type: 'condition', Icon: GitBranch },
+  { type: 'llm_reply', Icon: Sparkles },
+  { type: 'end', Icon: PhoneOff },
+]
 
 type Tab = 'visual' | 'json'
 
@@ -328,11 +341,20 @@ export default function ScriptSpecEditor({ value, onChange, lockedScriptIdentity
           <section className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className="text-sm font-medium">流程步骤</h4>
-              <div className="flex flex-wrap gap-1">
-                {(['say', 'listen', 'condition', 'llm_reply', 'end'] as const).map((t) => (
-                  <Button key={t} htmlType="button" type="outline" size="small" onClick={() => addStep(t)}>
-                    <Plus className="h-3.5 w-3.5 mr-1" />
-                    {HYBRID_STEP_TYPE_LABELS[t]}
+              <div className="flex flex-wrap gap-1.5 items-center">
+                {STEP_ADD_BUTTONS.map(({ type: t, Icon }) => (
+                  <Button
+                    key={t}
+                    htmlType="button"
+                    type="outline"
+                    size="small"
+                    className="arco-btn-step-add"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}
+                    onClick={() => addStep(t)}
+                  >
+                    <Plus className="h-3.5 w-3.5 shrink-0" strokeWidth={2.25} />
+                    <Icon className="h-3.5 w-3.5 shrink-0 opacity-90" strokeWidth={2} aria-hidden />
+                    <span className="whitespace-nowrap">{HYBRID_STEP_TYPE_LABELS[t]}</span>
                   </Button>
                 ))}
               </div>

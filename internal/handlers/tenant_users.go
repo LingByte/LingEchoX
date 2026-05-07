@@ -11,6 +11,7 @@ import (
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,9 +19,11 @@ type tenantUserCreateReq struct {
 	Email        string `json:"email" binding:"required,email"`
 	Phone        string `json:"phone"`
 	Username     string `json:"username"`
-	PasswordHash string `json:"passwordHash" binding:"required"`
+	Password     string `json:"password"` // plain text; hashed server-side when PasswordHash empty
+	PasswordHash string `json:"passwordHash"`
 	DisplayName  string `json:"displayName"`
 	Status       string `json:"status"` // active | disabled | pending
+	Source       string `json:"source"`
 }
 
 type tenantUserUpdateReq struct {
@@ -58,7 +61,11 @@ func (h *Handlers) listTenantUsers(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	pub := make([]gin.H, 0, len(list))
+	for _, row := range list {
+		pub = append(pub, h.tenantUserPublic(row))
+	}
+	response.Success(c, "success", gin.H{"list": pub, "total": total, "page": page, "size": size})
 }
 
 func (h *Handlers) getTenantUser(c *gin.Context) {
@@ -81,7 +88,7 @@ func (h *Handlers) getTenantUser(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	response.Success(c, "success", row)
+	response.Success(c, "success", h.tenantUserPublic(row))
 }
 
 func (h *Handlers) createTenantUser(c *gin.Context) {
@@ -123,9 +130,28 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		}
 	}
 
+	hash := strings.TrimSpace(req.PasswordHash)
+	if hash == "" {
+		pw := strings.TrimSpace(req.Password)
+		if len(pw) < 8 {
+			response.Fail(c, "password required (min 8 chars) or provide passwordHash", nil)
+			return
+		}
+		hv, err := access.HashPassword(pw)
+		if err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+		hash = hv
+	}
+
 	status := strings.TrimSpace(req.Status)
 	if status == "" {
 		status = models.TenantUserStatusActive
+	}
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		source = models.TenantUserSourceManual
 	}
 
 	user := &models.TenantUser{
@@ -133,9 +159,10 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		Email:        email,
 		Phone:        strings.TrimSpace(req.Phone),
 		Username:     strings.TrimSpace(req.Username),
-		PasswordHash: req.PasswordHash,
+		PasswordHash: hash,
 		DisplayName:  strings.TrimSpace(req.DisplayName),
 		Status:       status,
+		Source:       source,
 	}
 	if op := acdOperator(c); op != "" {
 		user.SetCreateInfo(op)
@@ -145,7 +172,7 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", user)
+	response.Success(c, "success", h.tenantUserPublic(*user))
 }
 
 func (h *Handlers) updateTenantUser(c *gin.Context) {
@@ -337,12 +364,10 @@ func (h *Handlers) getTenantUserStats(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-
 	total, _ := models.CountTenantUsers(h.db, tenantID)
 	active, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusActive)
 	disabled, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusDisabled)
 	pending, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusPending)
-
 	response.Success(c, "success", gin.H{
 		"total":    total,
 		"active":   active,

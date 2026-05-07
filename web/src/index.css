@@ -623,13 +623,63 @@
   animation-delay: 4s;
 }
 
-/* Collapsed sidebar: menu items icon-only + centered */
-.ling-sidebar-menu--collapsed-icons .arco-menu-inner .arco-menu-item {
-  display: flex;
-  justify-content: center;
-}
-.ling-sidebar-menu--collapsed-icons .arco-menu-inner .arco-menu-item-inner {
-  justify-content: center;
+/* Collapsed sidebar: strip sider horizontal padding so icons stay visually centered */
+.ling-sidebar-sider.arco-layout-sider-collapsed .arco-layout-sider-children {
   padding-left: 0 !important;
   padding-right: 0 !important;
+}
+
+/* Collapsed sidebar: menu items icon-only + centered (左右居中) */
+.ling-sidebar-menu--collapsed-icons.arco-menu-collapsed {
+  width: 100% !important;
+}
+.ling-sidebar-menu--collapsed-icons .arco-menu-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  box-sizing: border-box;
+  width: 100%;
+}
+.ling-sidebar-menu--collapsed-icons .arco-menu-inner .arco-menu-item {
+  height: 44px;
+  line-height: 44px;
+  width: 44px;
+  max-width: 44px;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  padding: 0 !important;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+.ling-sidebar-menu--collapsed-icons .arco-menu-inner .arco-menu-item-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+/* Arco 在折叠态下会再多包一层 .arco-menu-icon-suffix；把它隐藏避免视觉错位。 */
+.ling-sidebar-menu--collapsed-icons .arco-menu-icon-suffix {
+  display: none;
+}
+
+/* 折叠时菜单占满侧栏宽度，避免图标贴在左侧 */
+.ling-sidebar-sider.arco-layout-sider-collapsed .ling-sidebar-root > .arco-menu {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.ling-sidebar-profile-hit:hover {
+  background: var(--color-fill-2);
+}
+
+.ling-sidebar-profile-hit:focus-visible {
+  outline: 2px solid rgb(var(--primary-6));
+  outline-offset: 1px;
 }

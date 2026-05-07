@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -166,25 +167,110 @@ func issueTenantAccessToken(db *gorm.DB, user models.TenantUser, tenant models.T
 	return access.SignAccessTokenWithKey(p, bootstrap.GlobalKeyManager, tenantAccessTokenTTL)
 }
 
-func tenantUserPublic(u models.TenantUser) gin.H {
-	return gin.H{
+func (h *Handlers) tenantUserPublic(u models.TenantUser) gin.H {
+	out := gin.H{
 		"id":          u.ID,
 		"tenantId":    u.TenantID,
 		"email":       u.Email,
 		"phone":       u.Phone,
 		"username":    u.Username,
 		"displayName": u.DisplayName,
+		"avatarUrl":   u.AvatarURL,
 		"status":      u.Status,
+		"createdAt":   u.CreatedAt,
+		"lastLogin":   u.LastLogin,
+		"lastLoginIp": u.LastLoginIP,
+		"source":      u.Source,
+		"loginCount":  u.LoginCount,
+		"totpEnabled": u.TOTPEnabled,
 	}
+	if gs, err := models.ListTenantGroupsForUser(h.db, u.ID); err == nil && len(gs) > 0 {
+		gpub := make([]gin.H, 0, len(gs))
+		for _, g := range gs {
+			gpub = append(gpub, gin.H{"id": g.ID, "name": g.Name, "isDefault": g.IsDefault})
+		}
+		out["tenantGroups"] = gpub
+		out["tenantGroup"] = gin.H{"id": gs[0].ID, "name": gs[0].Name}
+	}
+	if roles, err := models.ListTenantRolesForUser(h.db, u.ID); err == nil && len(roles) > 0 {
+		rpub := make([]gin.H, 0, len(roles))
+		for _, r := range roles {
+			rpub = append(rpub, gin.H{"id": r.ID, "name": r.Name, "isSystem": r.IsSystem})
+		}
+		out["roles"] = rpub
+	}
+	return out
 }
 
 func tenantPublic(t models.Tenant) gin.H {
 	return gin.H{
-		"id":     t.ID,
-		"name":   t.Name,
-		"slug":   t.Slug,
-		"status": t.Status,
+		"id":          t.ID,
+		"name":        t.Name,
+		"slug":        t.Slug,
+		"description": t.Description,
+		"status":      t.Status,
+		"createdAt":   t.CreatedAt,
 	}
+}
+
+// provisionTenantWithAdmin creates tenant, system「管理员」role with full catalog permissions, first admin user, and role binding.
+func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash string, attachTag string) (tenant models.Tenant, user models.TenantUser, role models.TenantRole, err error) {
+	email := strings.TrimSpace(strings.ToLower(req.AdminEmail))
+	display := strings.TrimSpace(req.AdminDisplayName)
+	if display == "" {
+		display = strings.Split(email, "@")[0]
+	}
+	slugBase := baseSlugFromCompanyName(req.CompanyName)
+	err = db.Transaction(func(tx *gorm.DB) error {
+		slug, e := allocateUniqueTenantSlug(tx, slugBase)
+		if e != nil {
+			return e
+		}
+		t := &models.Tenant{
+			Name:        strings.TrimSpace(req.CompanyName),
+			Slug:        slug,
+			Description: strings.TrimSpace(req.TenantDescription),
+			Status:      "active",
+		}
+		if e := models.CreateTenant(tx, t); e != nil {
+			return e
+		}
+		tenant = *t
+
+		roleRow := &models.TenantRole{
+			TenantID:    tenant.ID,
+			Name:        models.TenantAdminRoleName,
+			Description: "组织管理员，注册时自动创建",
+			IsSystem:    true,
+		}
+		if e := models.CreateTenantRole(tx, roleRow); e != nil {
+			return e
+		}
+		role = *roleRow
+
+		u := &models.TenantUser{
+			TenantID:     tenant.ID,
+			Email:        email,
+			PasswordHash: passwordHash,
+			DisplayName:  display,
+			Status:       models.TenantUserStatusActive,
+			Source:       models.TenantUserSourceRegister,
+		}
+		if e := models.CreateTenantUser(tx, u); e != nil {
+			return e
+		}
+		user = *u
+
+		tur := &models.TenantUserRole{
+			TenantUserID: user.ID,
+			RoleID:       role.ID,
+		}
+		if e := models.CreateTenantUserRole(tx, tur); e != nil {
+			return e
+		}
+		return models.AttachAllPermissionsToRole(tx, role.ID, attachTag)
+	})
+	return tenant, user, role, err
 }
 
 // registerTenant creates a tenant, default admin role, first admin user, and returns JWT.
@@ -194,8 +280,6 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		response.Fail(c, "请求参数无效", err.Error())
 		return
 	}
-
-	slugBase := baseSlugFromCompanyName(req.CompanyName)
 
 	if bootstrap.GlobalKeyManager == nil {
 		response.Fail(c, "服务未就绪：JWT 密钥未初始化", nil)
@@ -220,64 +304,13 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 
-	display := strings.TrimSpace(req.AdminDisplayName)
-	if display == "" {
-		display = strings.Split(email, "@")[0]
-	}
-
-	var tenant models.Tenant
-	var user models.TenantUser
-	var role models.TenantRole
-
-	err = h.db.Transaction(func(tx *gorm.DB) error {
-		slug, err := allocateUniqueTenantSlug(tx, slugBase)
-		if err != nil {
-			return err
-		}
-		t := &models.Tenant{
-			Name:        strings.TrimSpace(req.CompanyName),
-			Slug:        slug,
-			Description: strings.TrimSpace(req.TenantDescription),
-			Status:      "active",
-		}
-		if err := models.CreateTenant(tx, t); err != nil {
-			return err
-		}
-		tenant = *t
-
-		roleRow := &models.TenantRole{
-			TenantID:    tenant.ID,
-			Name:        models.TenantAdminRoleName,
-			Description: "组织管理员，注册时自动创建",
-			IsSystem:    true,
-		}
-		if err := models.CreateTenantRole(tx, roleRow); err != nil {
-			return err
-		}
-		role = *roleRow
-
-		u := &models.TenantUser{
-			TenantID:     tenant.ID,
-			Email:        email,
-			PasswordHash: hash,
-			DisplayName:  display,
-			Status:       models.TenantUserStatusActive,
-		}
-		if err := models.CreateTenantUser(tx, u); err != nil {
-			return err
-		}
-		user = *u
-
-		tur := &models.TenantUserRole{
-			TenantUserID: user.ID,
-			RoleID:       role.ID,
-		}
-		return models.CreateTenantUserRole(tx, tur)
-	})
+	tenant, user, role, err := provisionTenantWithAdmin(h.db, req, hash, "register")
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
+
+	_ = models.RecordTenantUserLogin(h.db, user.ID, c.ClientIP())
 
 	token, err := issueTenantAccessToken(h.db, user, tenant)
 	if err != nil {
@@ -285,13 +318,131 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 
+	pc, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, user.ID)
 	response.Success(c, "success", gin.H{
-		"principal":   "tenant",
-		"token":       token,
-		"expiresIn":   int(tenantAccessTokenTTL.Seconds()),
-		"tenant":      tenantPublic(tenant),
-		"user":        tenantUserPublic(user),
-		"roleCreated": models.TenantAdminRoleName,
-		"roleId":      role.ID,
+		"principal":        "tenant",
+		"token":            token,
+		"expiresIn":        int(tenantAccessTokenTTL.Seconds()),
+		"tenant":           tenantPublic(tenant),
+		"user":             h.tenantUserPublic(user),
+		"permissionCodes":  pc,
+		"roleCreated":      models.TenantAdminRoleName,
+		"roleId":           role.ID,
 	})
+}
+
+type tenantPlatformUpdateReq struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+}
+
+func (h *Handlers) getTenant(c *gin.Context) {
+	if _, ok := requirePlatformAdmin(c); !ok {
+		return
+	}
+	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.Fail(c, "invalid id", nil)
+		return
+	}
+	t, err := models.GetActiveTenantByID(h.db, uint(id64))
+	if err != nil {
+		response.Fail(c, "not found", nil)
+		return
+	}
+	response.Success(c, "success", gin.H{"tenant": tenantPublic(t)})
+}
+
+// createTenantPlatform provisions a tenant (platform console); same payload as public register but returns JSON without issuing tenant JWT.
+func (h *Handlers) createTenantPlatform(c *gin.Context) {
+	if _, ok := requirePlatformAdmin(c); !ok {
+		return
+	}
+	var req tenantRegisterReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, "请求参数无效", err.Error())
+		return
+	}
+	hash, err := access.HashPassword(req.AdminPassword)
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	email := strings.TrimSpace(strings.ToLower(req.AdminEmail))
+	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, 0, email, 0)
+	if mailErr != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, mailErr)
+		return
+	}
+	if takenMail {
+		response.Fail(c, "该邮箱已被注册", nil)
+		return
+	}
+	tenant, user, role, err := provisionTenantWithAdmin(h.db, req, hash, "platform")
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{
+		"tenant":    tenantPublic(tenant),
+		"adminUser": h.tenantUserPublic(user),
+		"roleId":    role.ID,
+	})
+}
+
+func (h *Handlers) updateTenantPlatform(c *gin.Context) {
+	if _, ok := requirePlatformAdmin(c); !ok {
+		return
+	}
+	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.Fail(c, "invalid id", nil)
+		return
+	}
+	if _, err := models.GetActiveTenantByID(h.db, uint(id64)); err != nil {
+		response.Fail(c, "not found", nil)
+		return
+	}
+	var req tenantPlatformUpdateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, "invalid body", err.Error())
+		return
+	}
+	st := strings.TrimSpace(req.Status)
+	if st != "" && st != "active" && st != "suspended" {
+		response.Fail(c, "invalid status", nil)
+		return
+	}
+	op := fmt.Sprintf("platform")
+	if err := models.UpdateActiveTenant(h.db, uint(id64), strings.TrimSpace(req.Name), req.Description, st, op); err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	t, err := models.GetActiveTenantByID(h.db, uint(id64))
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{"tenant": tenantPublic(t)})
+}
+
+func (h *Handlers) deleteTenantPlatform(c *gin.Context) {
+	if _, ok := requirePlatformAdmin(c); !ok {
+		return
+	}
+	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.Fail(c, "invalid id", nil)
+		return
+	}
+	if _, err := models.GetActiveTenantByID(h.db, uint(id64)); err != nil {
+		response.Fail(c, "not found", nil)
+		return
+	}
+	if err := models.SoftDeleteTenant(h.db, uint(id64), "platform"); err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{"id": uint(id64)})
 }

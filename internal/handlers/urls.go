@@ -10,6 +10,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -36,6 +37,11 @@ func (h *Handlers) SetCampaignService(svc *sipserver.CampaignService) {
 
 func (h *Handlers) Register(engine *gin.Engine) {
 	engine.GET("/.well-known/jwks.json", h.JWKSHandler)
+	uploadDir := utils.GetEnv("UPLOAD_DIR")
+	if uploadDir == "" {
+		uploadDir = "./uploads"
+	}
+	engine.Static("/uploads", uploadDir)
 	r := engine.Group(config.GlobalConfig.Server.APIPrefix)
 	// Register Global Singleton DB
 	r.Use(middleware.InjectDB(h.db))
@@ -44,58 +50,114 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	protected := r.Group("")
 	protected.Use(middleware.RequireTenantJWTOrAKSK())
 	h.registerSIPContactCenterRoutes(protected)
-	h.registerVoiceDialogRoutes(protected)
 	h.registerTenantUserRoutes(protected)
 	h.registerCredentialRoutes(protected)
 
 	// WebSeat signaling is token-gated inside webseat package; keep it outside JWT/AKSK middleware
 	// so browser WebSocket/HTTP calls can connect with ?token=... only.
 	h.registerLingechoWebSeatRoutes(r)
+	// Voice-dialog WebSocket also has its own (?token=...) gate inside voicedialog.WebSocketTokenOK,
+	// and is dialed by SIP loopback (no JWT/AKSK). Keep it on the unprotected group.
+	h.registerVoiceDialogRoutes(r)
 }
 
 func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 	g := r.Group("sip-center")
+
+	sipUsersRead := g.Group("")
+	sipUsersRead.Use(middleware.RequireTenantPermissionAll("api.sip.users.read"))
 	{
-		g.GET("/users", h.listSIPUsers)
-		g.GET("/users/:id", h.getSIPUser)
-		g.DELETE("/users/:id", h.deleteSIPUser)
-		g.GET("/calls", h.listSIPCalls)
-		g.GET("/calls/:id", h.getSIPCall)
-		g.GET("/acd-pool", h.listACDPoolTargets)
-		g.POST("/acd-pool/web-seat/heartbeat", h.webSeatACDHeartbeat)
-		g.GET("/acd-pool/:id", h.getACDPoolTarget)
-		g.POST("/acd-pool", h.createACDPoolTarget)
-		g.PUT("/acd-pool/:id", h.updateACDPoolTarget)
-		g.DELETE("/acd-pool/:id", h.deleteACDPoolTarget)
-		g.GET("/scripts", h.listSIPScriptTemplates)
-		g.GET("/scripts/:id", h.getSIPScriptTemplate)
-		g.POST("/scripts", h.createSIPScriptTemplate)
-		g.PUT("/scripts/:id", h.updateSIPScriptTemplate)
-		g.DELETE("/scripts/:id", h.deleteSIPScriptTemplate)
-		g.POST("/campaigns", h.createSIPCampaign)
-		g.GET("/campaigns", h.listSIPCampaigns)
-		g.POST("/campaigns/:id/contacts", h.addSIPCampaignContacts)
-		g.GET("/campaigns/:id/contacts", h.listSIPCampaignContacts)
-		g.POST("/campaigns/:id/contacts/reset-suppressed", h.resetSIPCampaignSuppressedContacts)
-		g.POST("/campaigns/:id/start", h.startSIPCampaign)
-		g.POST("/campaigns/:id/pause", h.pauseSIPCampaign)
-		g.POST("/campaigns/:id/resume", h.resumeSIPCampaign)
-		g.POST("/campaigns/:id/stop", h.stopSIPCampaign)
-		g.DELETE("/campaigns/:id", h.deleteSIPCampaign)
-		g.GET("/campaigns/metrics", h.getSIPCampaignMetrics)
-		g.GET("/campaigns/worker-metrics", h.getSIPCampaignWorkerMetrics)
-		g.GET("/campaigns/:id/logs", h.getSIPCampaignLogs)
-		g.GET("/trunks", h.listTrunks)
-		g.POST("/trunks", h.createTrunk)
-		g.GET("/trunks/:id", h.getTrunk)
-		g.PUT("/trunks/:id", h.updateTrunk)
-		g.DELETE("/trunks/:id", h.deleteTrunk)
-		g.GET("/trunk-numbers", h.listTrunkNumbers)
-		g.POST("/trunk-numbers", h.createTrunkNumber)
-		g.GET("/trunk-numbers/:id", h.getTrunkNumber)
-		g.PUT("/trunk-numbers/:id", h.updateTrunkNumber)
-		g.DELETE("/trunk-numbers/:id", h.deleteTrunkNumber)
+		sipUsersRead.GET("/users", h.listSIPUsers)
+		sipUsersRead.GET("/users/:id", h.getSIPUser)
 	}
+	sipUsersWrite := g.Group("")
+	sipUsersWrite.Use(middleware.RequireTenantPermissionAll("api.sip.users.write"))
+	{
+		sipUsersWrite.DELETE("/users/:id", h.deleteSIPUser)
+	}
+
+	callsRead := g.Group("")
+	callsRead.Use(middleware.RequireTenantPermissionAll("api.sip.calls.read"))
+	{
+		callsRead.GET("/calls", h.listSIPCalls)
+		callsRead.GET("/calls/:id", h.getSIPCall)
+	}
+
+	acdRead := g.Group("")
+	acdRead.Use(middleware.RequireTenantPermissionAll("api.sip.acd.read"))
+	{
+		acdRead.GET("/acd-pool", h.listACDPoolTargets)
+		acdRead.GET("/acd-pool/:id", h.getACDPoolTarget)
+	}
+	acdWrite := g.Group("")
+	acdWrite.Use(middleware.RequireTenantPermissionAll("api.sip.acd.write"))
+	{
+		acdWrite.POST("/acd-pool", h.createACDPoolTarget)
+		acdWrite.PUT("/acd-pool/:id", h.updateACDPoolTarget)
+		acdWrite.DELETE("/acd-pool/:id", h.deleteACDPoolTarget)
+	}
+	acdSeat := g.Group("")
+	acdSeat.Use(middleware.RequireTenantPermissionAny("api.sip.acd.read", "api.sip.acd.write"))
+	{
+		acdSeat.POST("/acd-pool/web-seat/heartbeat", h.webSeatACDHeartbeat)
+	}
+
+	scriptsRead := g.Group("")
+	scriptsRead.Use(middleware.RequireTenantPermissionAll("api.sip.scripts.read"))
+	{
+		scriptsRead.GET("/scripts", h.listSIPScriptTemplates)
+		scriptsRead.GET("/scripts/:id", h.getSIPScriptTemplate)
+	}
+	scriptsWrite := g.Group("")
+	scriptsWrite.Use(middleware.RequireTenantPermissionAll("api.sip.scripts.write"))
+	{
+		scriptsWrite.POST("/scripts", h.createSIPScriptTemplate)
+		scriptsWrite.PUT("/scripts/:id", h.updateSIPScriptTemplate)
+		scriptsWrite.DELETE("/scripts/:id", h.deleteSIPScriptTemplate)
+	}
+
+	campRead := g.Group("")
+	campRead.Use(middleware.RequireTenantPermissionAll("api.sip.campaigns.read"))
+	{
+		campRead.GET("/campaigns", h.listSIPCampaigns)
+		campRead.GET("/campaigns/:id/contacts", h.listSIPCampaignContacts)
+		campRead.GET("/campaigns/metrics", h.getSIPCampaignMetrics)
+		campRead.GET("/campaigns/worker-metrics", h.getSIPCampaignWorkerMetrics)
+		campRead.GET("/campaigns/:id/logs", h.getSIPCampaignLogs)
+	}
+	campWrite := g.Group("")
+	campWrite.Use(middleware.RequireTenantPermissionAll("api.sip.campaigns.write"))
+	{
+		campWrite.POST("/campaigns", h.createSIPCampaign)
+		campWrite.POST("/campaigns/:id/contacts", h.addSIPCampaignContacts)
+		campWrite.POST("/campaigns/:id/contacts/reset-suppressed", h.resetSIPCampaignSuppressedContacts)
+		campWrite.POST("/campaigns/:id/start", h.startSIPCampaign)
+		campWrite.POST("/campaigns/:id/pause", h.pauseSIPCampaign)
+		campWrite.POST("/campaigns/:id/resume", h.resumeSIPCampaign)
+		campWrite.POST("/campaigns/:id/stop", h.stopSIPCampaign)
+		campWrite.DELETE("/campaigns/:id", h.deleteSIPCampaign)
+	}
+
+	numRead := g.Group("")
+	numRead.Use(middleware.RequireTenantPermissionAll("api.sip.numbers.read"))
+	{
+		numRead.GET("/trunks", h.listTrunks)
+		numRead.GET("/trunks/:id", h.getTrunk)
+		numRead.GET("/trunk-numbers", h.listTrunkNumbers)
+		numRead.GET("/trunk-numbers/:id", h.getTrunkNumber)
+	}
+	numWrite := g.Group("")
+	numWrite.Use(middleware.RequireTenantPermissionAll("api.sip.numbers.write"))
+	{
+		numWrite.POST("/trunks", h.createTrunk)
+		numWrite.PUT("/trunks/:id", h.updateTrunk)
+		numWrite.DELETE("/trunks/:id", h.deleteTrunk)
+		numWrite.POST("/trunk-numbers", h.createTrunkNumber)
+		numWrite.PUT("/trunk-numbers/:id", h.updateTrunkNumber)
+		numWrite.DELETE("/trunk-numbers/:id", h.deleteTrunkNumber)
+	}
+
+	h.registerTenantOrgRoutes(g)
 }
 
 func (h *Handlers) registerLingechoWebSeatRoutes(r *gin.RouterGroup) {
@@ -123,27 +185,52 @@ func (h *Handlers) registerTenantPublicRoutes(r *gin.RouterGroup) {
 
 func (h *Handlers) registerTenantUserRoutes(r *gin.RouterGroup) {
 	g := r.Group("tenant-users")
+	tuRead := g.Group("")
+	tuRead.Use(middleware.RequireTenantPermissionAll("api.tenant_users.read"))
 	{
-		g.GET("", h.listTenantUsers)
-		g.POST("", h.createTenantUser)
-		g.GET("/:id", h.getTenantUser)
-		g.PUT("/:id", h.updateTenantUser)
-		g.PUT("/:id/status", h.updateTenantUserStatus)
-		g.DELETE("/:id", h.deleteTenantUser)
-		g.POST("/:id/restore", h.restoreTenantUser)
-		g.GET("/stats", h.getTenantUserStats)
+		tuRead.GET("", h.listTenantUsers)
+		tuRead.GET("/stats", h.getTenantUserStats)
+		tuRead.GET("/:id", h.getTenantUser)
 	}
+	tuWrite := g.Group("")
+	tuWrite.Use(middleware.RequireTenantPermissionAll("api.tenant_users.write"))
+	{
+		tuWrite.POST("", h.createTenantUser)
+		tuWrite.PUT("/:id", h.updateTenantUser)
+		tuWrite.PUT("/:id/status", h.updateTenantUserStatus)
+		tuWrite.DELETE("/:id", h.deleteTenantUser)
+		tuWrite.POST("/:id/restore", h.restoreTenantUser)
+	}
+	r.GET("/tenants", h.listTenants)
+	r.GET("/tenants/:id", h.getTenant)
+	r.POST("/tenants", h.createTenantPlatform)
+	r.PUT("/tenants/:id", h.updateTenantPlatform)
+	r.DELETE("/tenants/:id", h.deleteTenantPlatform)
 	r.GET("/me", h.getMe)
+	// 个人资料：任意已登录租户用户 / 平台管理员均可修改，不纳入租户 RBAC 分配项。
 	r.PUT("/me", h.updateMe)
 	r.PUT("/me/password", h.updateMyPassword)
+	r.POST("/me/avatar", h.uploadMeAvatar)
+	r.POST("/me/totp/setup", h.setupTotp)
+	r.POST("/me/totp/enable", h.enableTotp)
+	r.POST("/me/totp/disable", h.disableTotp)
 	r.POST("/auth/logout", h.logout)
 }
 
 func (h *Handlers) registerCredentialRoutes(r *gin.RouterGroup) {
-	g := r.Group("credentials")
+	crRead := r.Group("credentials")
+	crRead.Use(middleware.RequireTenantPermissionAll("api.credentials.read"))
 	{
-		g.POST("", h.createCredential)
-		g.GET("", h.listCredentials)
+		crRead.GET("", h.listCredentials)
+	}
+	crWrite := r.Group("credentials")
+	crWrite.Use(middleware.RequireTenantPermissionAll("api.credentials.write"))
+	{
+		crWrite.POST("", h.createCredential)
+		crWrite.PUT("/:id", h.updateCredential)
+		crWrite.POST("/:id/disable", h.disableCredential)
+		crWrite.POST("/:id/enable", h.enableCredential)
+		crWrite.DELETE("/:id", h.deleteCredential)
 	}
 }
 

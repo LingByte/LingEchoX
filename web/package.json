@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@arco-design/web-react": "^2.66.1",
+    "@visactor/react-vchart": "^2.0.22",
+    "@visactor/vchart-arco-theme": "^1.12.3",
     "axios": "^1.12.2",
     "clsx": "^2.0.0",
     "dayjs": "^1.11.20",
@@ -40,7 +42,13 @@
     "typescript": "^5.2.2",
     "vite": "^5.0.8"
   },
-  "keywords": ["react", "template", "ui", "tailwindcss", "arco-design"],
+  "keywords": [
+    "react",
+    "template",
+    "ui",
+    "tailwindcss",
+    "arco-design"
+  ],
   "author": "Your Name",
   "license": "MIT"
 }

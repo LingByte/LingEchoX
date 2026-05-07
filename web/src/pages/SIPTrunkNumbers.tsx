@@ -20,6 +20,7 @@ import {
   type TrunkNumberRow,
   type TrunkRow,
 } from '@/api/trunks'
+import { listTenants, type TenantRow } from '@/api/tenants'
 import { showAlert } from '@/utils/notification'
 
 function toRFC3339OrUndefined(isoLocal: string): string | undefined {
@@ -32,7 +33,9 @@ function toRFC3339OrUndefined(isoLocal: string): string | undefined {
 
 type FormState = {
   trunkId: string
+  tenantId: string
   number: string
+  callerDisplayName: string
   prefix: string
   description: string
   direction: string
@@ -42,12 +45,14 @@ type FormState = {
   isTransferRelay: boolean
   effectiveTime: string
   expirationTime: string
-  providerId: string
+  voiceDialogWsUrl: string
 }
 
 const defaultForm = (): FormState => ({
   trunkId: '',
+  tenantId: '0',
   number: '',
+  callerDisplayName: '',
   prefix: '',
   description: '',
   direction: '',
@@ -57,11 +62,13 @@ const defaultForm = (): FormState => ({
   isTransferRelay: false,
   effectiveTime: '',
   expirationTime: '',
-  providerId: '0',
+  voiceDialogWsUrl: '',
 })
 
 const SIPTrunkNumbers = () => {
   const [trunks, setTrunks] = useState<TrunkRow[]>([])
+  const [tenants, setTenants] = useState<TenantRow[]>([])
+  const [tenantFilter, setTenantFilter] = useState('')
   const [rows, setRows] = useState<TrunkNumberRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -88,12 +95,26 @@ const SIPTrunkNumbers = () => {
     })()
   }, [])
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await listTenants(1, 500)
+        if (res.code === 200 && res.data?.list) setTenants(res.data.list)
+        else setTenants([])
+      } catch {
+        setTenants([])
+      }
+    })()
+  }, [])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const tid = trunkFilter ? parseInt(trunkFilter, 10) : 0
+      const assignTid = tenantFilter ? parseInt(tenantFilter, 10) : 0
       const res = await listTrunkNumbers(page, pageSize, {
         trunkId: Number.isFinite(tid) && tid > 0 ? tid : undefined,
+        tenantId: Number.isFinite(assignTid) && assignTid > 0 ? assignTid : undefined,
         number: numberQ.trim() || undefined,
       })
       if (res.code === 200 && res.data) {
@@ -105,7 +126,7 @@ const SIPTrunkNumbers = () => {
     } finally {
       setLoading(false)
     }
-  }, [page, trunkFilter, numberQ])
+  }, [page, trunkFilter, tenantFilter, numberQ])
 
   useEffect(() => {
     void load()
@@ -118,6 +139,7 @@ const SIPTrunkNumbers = () => {
     setForm({
       ...defaultForm(),
       trunkId: trunkFilter || (trunks[0]?.id != null ? String(trunks[0].id) : ''),
+      tenantId: tenantFilter || '0',
     })
     setModalOpen(true)
   }
@@ -128,7 +150,9 @@ const SIPTrunkNumbers = () => {
     const exp = r.expirationTime ? new Date(r.expirationTime).toISOString().slice(0, 16) : ''
     setForm({
       trunkId: String(r.trunkId),
+      tenantId: String(r.tenantId ?? 0),
       number: r.number || '',
+      callerDisplayName: r.callerDisplayName || '',
       prefix: r.prefix || '',
       description: r.description || '',
       direction: r.direction || '',
@@ -138,7 +162,7 @@ const SIPTrunkNumbers = () => {
       isTransferRelay: !!r.isTransferRelay,
       effectiveTime: eff,
       expirationTime: exp,
-      providerId: String(r.providerId ?? 0),
+      voiceDialogWsUrl: r.voiceDialogWsUrl || '',
     })
     setModalOpen(true)
   }
@@ -161,12 +185,14 @@ const SIPTrunkNumbers = () => {
     }
     const conc = parseInt(form.concurrent, 10) || 0
     const cin = parseInt(form.callInConcurrent, 10) || 0
-    const pid = parseInt(form.providerId, 10) || 0
     const eff = toRFC3339OrUndefined(form.effectiveTime)
     const exp = toRFC3339OrUndefined(form.expirationTime)
+    const assignTenant = parseInt(form.tenantId, 10)
     const body = {
       trunkId,
+      tenantId: Number.isFinite(assignTenant) && assignTenant >= 0 ? assignTenant : 0,
       number: num,
+      callerDisplayName: form.callerDisplayName.trim(),
       prefix: form.prefix.trim(),
       description: form.description.trim(),
       direction: form.direction.trim(),
@@ -176,7 +202,7 @@ const SIPTrunkNumbers = () => {
       isTransferRelay: form.isTransferRelay,
       effectiveTime: eff ?? null,
       expirationTime: exp ?? null,
-      providerId: pid,
+      voiceDialogWsUrl: form.voiceDialogWsUrl.trim(),
     }
     setSaving(true)
     try {
@@ -214,14 +240,60 @@ const SIPTrunkNumbers = () => {
   }
 
   const trunkOptions = trunks.map((t) => ({ label: t.name || `ID ${t.id}`, value: String(t.id) }))
+  const tenantOptions = [
+    { label: '待分配（平台池）', value: '0' },
+    ...tenants.map((t) => ({ label: `${t.name} (#${t.id})`, value: String(t.id) })),
+  ]
+  const tenantLabel = (tid?: number) => {
+    if (!tid) return '待分配'
+    const hit = tenants.find((x) => x.id === tid)
+    return hit ? `${hit.name} (#${tid})` : `租户 #${tid}`
+  }
+
+  const directionLabel = (raw?: string) => {
+    const s = (raw || '').trim().toLowerCase()
+    const map: Record<string, string> = {
+      inbound: '呼入',
+      outbound: '呼出',
+      both: '双向',
+      bidirectional: '双向',
+      duplex: '双向',
+    }
+    if (!raw?.trim()) return '—'
+    return map[s] || raw.trim()
+  }
 
   return (
     <BaseLayout title="中继号码" description="云联络中心 / 中继号码">
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Typography.Paragraph style={{ margin: 0, fontSize: 12, padding: '10px 12px', background: 'var(--color-fill-2)', borderRadius: 8 }}>
-          维护每条中继线路下的外显 / 入局号码；生效时间请使用本地时间选择（将按 RFC3339 提交）。
+          维护每条中继线路下的外显 / 入局号码；「号码」对应外呼主叫 user（原 SIP_CALLER_ID），「主叫显示名」对应 From 头引号显示名（原 SIP_CALLER_DISPLAY_NAME，可留空）。
+          通过「分配租户」将号码划拨给某个租户后，该租户才能在号码池绑定坐席（ACD）。生效时间请使用本地时间选择（将按 RFC3339 提交）。
+          「呼入语音对话 WebSocket」按每条号码单独配置：留空则走平台默认网关；填写 ws:// 或 wss:// 完整路径后，该局呼入会在媒体建立后向该地址拨号（自动附带 token、call_id 查询参数）。
+          <strong style={{ fontWeight: 600 }}>用途</strong>
+          （呼叫用途字段）：号码的业务标签 / 呼叫方向约定，常见填{' '}
+          <Typography.Text code style={{ fontSize: 11 }}>inbound</Typography.Text>（侧重入局）、
+          <Typography.Text code style={{ fontSize: 11 }}>outbound</Typography.Text>（侧重外呼）、
+          <Typography.Text code style={{ fontSize: 11 }}>both</Typography.Text>
+          （双向），也可填自定义说明便于运维区分。
+          <strong style={{ fontWeight: 600 }}>呼出并发</strong>
+          ：允许该号码同时占用的外呼通道数上限（容量规划用，具体是否在网关侧硬限流以实现为准）。
+          <strong style={{ fontWeight: 600 }}>呼入并发</strong>
+          ：允许同时并发的入局呼叫路数上限（入局容量）。下方表格较宽时可在区域内<strong style={{ fontWeight: 600 }}>左右滑动</strong>
+          查看全部列。
         </Typography.Paragraph>
         <Space wrap align="end">
+          <Space direction="vertical" size={4}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>分配租户</Typography.Text>
+            <Select
+              placeholder="全部"
+              allowClear
+              style={{ width: 240 }}
+              value={tenantFilter === '' ? undefined : tenantFilter}
+              onChange={(v) => setTenantFilter((v as string) ?? '')}
+              options={tenants.map((t) => ({ label: `${t.name} (#${t.id})`, value: String(t.id) }))}
+            />
+          </Space>
           <Space direction="vertical" size={4}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>所属线路</Typography.Text>
             <Select
@@ -241,39 +313,63 @@ const SIPTrunkNumbers = () => {
           <Button type="outline" onClick={openCreate} disabled={!trunks.length}>新增号码</Button>
         </Space>
 
-        <Card bordered={false}>
+        <Card bordered={false} bodyStyle={{ padding: 0 }}>
           {loading ? (
-            <Typography.Text type="secondary">加载中...</Typography.Text>
+            <div style={{ padding: 24 }}>
+              <Typography.Text type="secondary">加载中...</Typography.Text>
+            </div>
           ) : (
             <>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ minWidth: 960, width: '100%', fontSize: 13 }}>
+              <div
+                style={{
+                  overflowX: 'auto',
+                  overflowY: 'hidden',
+                  maxWidth: '100%',
+                  WebkitOverflowScrolling: 'touch',
+                  scrollbarGutter: 'stable',
+                }}
+              >
+                <table style={{ minWidth: 1520, width: '100%', fontSize: 13 }}>
                   <thead style={{ background: 'var(--color-fill-2)' }}>
                     <tr>
                       <th style={{ textAlign: 'left', padding: 12 }}>ID</th>
+                      <th style={{ textAlign: 'left', padding: 12 }}>分配租户</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>线路</th>
                       <th style={{ textAlign: 'left', padding: 12, fontFamily: 'monospace', fontSize: 12 }}>号码</th>
+                      <th style={{ textAlign: 'left', padding: 12 }}>主叫显示名</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>用途</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>状态</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>呼出并发</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>呼入并发</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>转人工中继</th>
+                      <th style={{ textAlign: 'left', padding: 12 }}>语音对话 WS</th>
+                      <th style={{ textAlign: 'left', padding: 12 }}>供应商编码</th>
                       <th style={{ textAlign: 'right', padding: 12 }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.length === 0 ? (
-                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center' }}>暂无数据</td></tr>
+                      <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center' }}>暂无数据</td></tr>
                     ) : rows.map((r) => (
                       <tr key={r.id} style={{ borderTop: '1px solid var(--color-border)' }}>
                         <td style={{ padding: 12 }}>{r.id}</td>
+                        <td style={{ padding: 12, fontSize: 12, maxWidth: 200 }}>{tenantLabel(r.tenantId)}</td>
                         <td style={{ padding: 12, maxWidth: 140 }}>{trunkLabel(r.trunkId)}</td>
                         <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12 }}>{r.number}</td>
-                        <td style={{ padding: 12, fontSize: 12 }}>{r.direction || '—'}</td>
+                        <td style={{ padding: 12, maxWidth: 160, wordBreak: 'break-all', fontSize: 12 }}>{r.callerDisplayName?.trim() || '—'}</td>
+                        <td style={{ padding: 12, fontSize: 12 }}>{directionLabel(r.direction)}</td>
                         <td style={{ padding: 12, fontSize: 12 }}>{r.status || '—'}</td>
                         <td style={{ padding: 12 }}>{r.concurrent ?? '—'}</td>
                         <td style={{ padding: 12 }}>{r.callInConcurrent ?? '—'}</td>
                         <td style={{ padding: 12, fontSize: 12 }}>{r.isTransferRelay ? '是' : '否'}</td>
+                        <td style={{ padding: 12, fontSize: 11, wordBreak: 'break-all', maxWidth: 160, color: 'var(--color-text-2)' }}>
+                          {(() => {
+                            const u = String(r.voiceDialogWsUrl || '').trim()
+                            if (!u) return '默认'
+                            return u.length > 36 ? `${u.slice(0, 34)}…` : u
+                          })()}
+                        </td>
+                        <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', maxWidth: 240 }}>{r.providerCode || '—'}</td>
                         <td style={{ padding: 12, textAlign: 'right' }}>
                           <Space>
                             <Button type="outline" size="small" onClick={() => openEdit(r)}>编辑</Button>
@@ -285,7 +381,7 @@ const SIPTrunkNumbers = () => {
                   </tbody>
                 </table>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, padding: '12px 16px 16px', borderTop: '1px solid var(--color-border)' }}>
                 <Typography.Text type="secondary">总计: {total}</Typography.Text>
                 <Space>
                   <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</Button>
@@ -313,6 +409,18 @@ const SIPTrunkNumbers = () => {
         >
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <div>
+              <Typography.Text style={{ fontSize: 12 }}>分配租户</Typography.Text>
+              <Select
+                placeholder="待分配（平台池）"
+                value={form.tenantId}
+                onChange={(v) => setForm((f) => ({ ...f, tenantId: v ?? '0' }))}
+                options={tenantOptions}
+              />
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                选择租户后，该号码仅对该租户可见，用于号码池坐席绑定与外呼选线。
+              </Typography.Paragraph>
+            </div>
+            <div>
               <Typography.Text style={{ fontSize: 12 }}>所属线路 *</Typography.Text>
               <Select
                 placeholder="请选择"
@@ -324,6 +432,33 @@ const SIPTrunkNumbers = () => {
             <div>
               <Typography.Text style={{ fontSize: 12 }}>号码 *</Typography.Text>
               <Input value={form.number} onChange={(v) => setForm((f) => ({ ...f, number: v }))} />
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                外呼 / 转呼时 INVITE From 的 user 部分（原 SIP_CALLER_ID）。
+              </Typography.Paragraph>
+            </div>
+            <div>
+              <Typography.Text style={{ fontSize: 12 }}>主叫显示名</Typography.Text>
+              <Input
+                placeholder="例如 七牛云客服专线（可留空）"
+                value={form.callerDisplayName}
+                onChange={(v) => setForm((f) => ({ ...f, callerDisplayName: v }))}
+              />
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                INVITE From 头的引号显示名（原 SIP_CALLER_DISPLAY_NAME）；留空则 From 仅含号码，无 display-name。
+              </Typography.Paragraph>
+            </div>
+            <div>
+              <Typography.Text style={{ fontSize: 12 }}>呼入语音对话 WebSocket</Typography.Text>
+              <Input.TextArea
+                placeholder="留空=平台默认 loopback；例如 wss://your-host/dialog/ws"
+                autoSize={{ minRows: 2, maxRows: 5 }}
+                value={form.voiceDialogWsUrl}
+                onChange={(v) => setForm((f) => ({ ...f, voiceDialogWsUrl: v }))}
+                style={{ fontFamily: 'monospace', fontSize: 12 }}
+              />
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                与本条「号码」入局匹配时生效；网关会自动追加 token、call_id 查询参数。
+              </Typography.Paragraph>
             </div>
             <div>
               <Typography.Text style={{ fontSize: 12 }}>前缀</Typography.Text>
@@ -336,7 +471,14 @@ const SIPTrunkNumbers = () => {
             <Space style={{ width: '100%' }} size={12}>
               <div style={{ flex: 1 }}>
                 <Typography.Text style={{ fontSize: 12 }}>呼叫用途</Typography.Text>
-                <Input value={form.direction} onChange={(v) => setForm((f) => ({ ...f, direction: v }))} />
+                <Input
+                  placeholder="如 inbound / outbound / both"
+                  value={form.direction}
+                  onChange={(v) => setForm((f) => ({ ...f, direction: v }))}
+                />
+                <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                  号码用途或呼叫方向标签；列表中会翻译成常见中文（未知值则原样显示）。
+                </Typography.Paragraph>
               </div>
               <div style={{ flex: 1 }}>
                 <Typography.Text style={{ fontSize: 12 }}>状态</Typography.Text>
@@ -347,10 +489,16 @@ const SIPTrunkNumbers = () => {
               <div style={{ flex: 1 }}>
                 <Typography.Text style={{ fontSize: 12 }}>呼出并发</Typography.Text>
                 <Input type="number" value={form.concurrent} onChange={(v) => setForm((f) => ({ ...f, concurrent: v }))} />
+                <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                  同时外呼路数上限（0 常表示不单独限制或未启用）。
+                </Typography.Paragraph>
               </div>
               <div style={{ flex: 1 }}>
                 <Typography.Text style={{ fontSize: 12 }}>呼入并发</Typography.Text>
                 <Input type="number" value={form.callInConcurrent} onChange={(v) => setForm((f) => ({ ...f, callInConcurrent: v }))} />
+                <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                  同时入局呼叫路数上限。
+                </Typography.Paragraph>
               </div>
             </Space>
             <Checkbox checked={form.isTransferRelay} onChange={(c) => setForm((f) => ({ ...f, isTransferRelay: !!c }))}>转人工中继号码</Checkbox>
@@ -364,10 +512,9 @@ const SIPTrunkNumbers = () => {
                 <Input type="datetime-local" value={form.expirationTime} onChange={(v) => setForm((f) => ({ ...f, expirationTime: v }))} />
               </div>
             </Space>
-            <div>
-              <Typography.Text style={{ fontSize: 12 }}>供应商 ID</Typography.Text>
-              <Input type="number" value={form.providerId} onChange={(v) => setForm((f) => ({ ...f, providerId: v }))} />
-            </div>
+            <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
+              供应商编码由系统自动分配，全局唯一，创建后请在列表中查看。
+            </Typography.Paragraph>
           </Space>
         </Drawer>
 

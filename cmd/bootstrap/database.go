@@ -63,6 +63,13 @@ func SetupDatabase(logWriter io.Writer, opts *Options) (*gorm.DB, error) {
 			zap.String("database", config.GlobalConfig.Database.Driver),
 			zap.String("dsn", config.GlobalConfig.Database.DSN),
 		)
+
+		if err := models.SyncPermissionCatalog(db); err != nil {
+			logger.Warn("sync permission catalog failed", zap.Error(err))
+		}
+		if err := models.BackfillAdminRolePermissions(db); err != nil {
+			logger.Warn("backfill admin role permissions failed", zap.Error(err))
+		}
 	}
 
 	// 4) Non-production: default configuration

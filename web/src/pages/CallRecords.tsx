@@ -151,10 +151,12 @@ const CallRecords = () => {
           搜索
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground max-w-2xl mb-3">点击查看详情可查看录音、对话回合和完整 SIP 信息。</p>
+      <p className="text-xs text-muted-foreground max-w-2xl mb-3">
+        列表仅展示主被叫号码；原始 SIP From/To 头保存在服务端，可在详情里折叠查看（一般用于排障）。
+      </p>
       <Card bordered={false} bodyStyle={{ padding: 0 }}>
         <div className="overflow-x-auto">
-          <table className="min-w-[1480px] w-full text-sm">
+          <table className="min-w-[1280px] w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
                 <th className="text-left p-3 whitespace-nowrap">ID</th>
@@ -186,8 +188,12 @@ const CallRecords = () => {
                       <td className="p-3 max-w-[240px] align-top"><EllipsisHoverCell text={c.callId} lines={2} mono /></td>
                       <td className="p-3 whitespace-nowrap">{mapCallState(c.state)}</td>
                       <td className="p-3 whitespace-nowrap">{mapDirection(c.direction)}</td>
-                      <td className="p-3 max-w-[200px] align-top"><EllipsisHoverCell text={c.fromHeader} lines={2} className="text-xs" /></td>
-                      <td className="p-3 max-w-[200px] align-top"><EllipsisHoverCell text={c.toHeader} lines={2} className="text-xs" /></td>
+                      <td className="p-3 max-w-[160px] align-top whitespace-nowrap">
+                        <div className="font-medium">{c.fromNumber?.trim() || '—'}</div>
+                      </td>
+                      <td className="p-3 max-w-[160px] align-top whitespace-nowrap">
+                        <div className="font-medium">{c.toNumber?.trim() || '—'}</div>
+                      </td>
                       <td className="p-3 whitespace-nowrap">{c.durationSec ?? '—'}</td>
                       <td className="p-3 text-xs max-w-[140px] align-top"><EllipsisHoverCell text={c.endStatus ? sipAiEndStatusI18nKey(c.endStatus) : '—'} lines={2} /></td>
                       <td className="p-3 whitespace-nowrap text-xs">{fmt(c.endedAt || c.byeAt || c.updatedAt)}</td>
@@ -252,12 +258,8 @@ const CallRecords = () => {
                         {detailField('Dur(s)', d.durationSec ?? '—')}
                         {detailField('结束方式', d.endStatus ? sipAiEndStatusI18nKey(d.endStatus) : '—')}
                         {detailField('对话轮次', d.turnCount != null && d.turnCount > 0 ? d.turnCount : '—')}
-                        {detailField('From', d.fromHeader || '—')}
-                        {detailField('To', d.toHeader || '—')}
-                        {detailField('远端信令', d.remoteAddr || '—')}
-                        {detailField('远端 RTP', d.remoteRtpAddr || '—')}
-                        {detailField('本端 RTP', d.localRtpAddr || '—')}
-                        {detailField('CSeq', d.cseqInvite || '—')}
+                        {detailField('From 号码', d.fromNumber || '—')}
+                        {detailField('To 号码', d.toNumber || '—')}
                         {detailField('创建时间', fmt(d.createdAt))}
                         {detailField('INVITE', fmt(d.inviteAt))}
                         {detailField('ACK', fmt(d.ackAt))}

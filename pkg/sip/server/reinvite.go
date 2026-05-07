@@ -131,19 +131,21 @@ func (s *SIPServer) handleReInvite(msg *stack.Message, addr *net.UDPAddr, cs *si
 	respMsg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(respSDP)))
 
 	if p := s.callPersistStore(); p != nil {
+		bind := s.resolveInboundDIDBinding(msg)
 		p.OnInvite(context.Background(), InvitePersistParams{
-			TenantID:    0,
-			CallID:      callID,
-			From:        msg.GetHeader("From"),
-			To:          msg.GetHeader("To"),
-			RemoteSig:   addr.String(),
-			RemoteRTP:   remoteAddr.String(),
-			LocalRTP:    fmt.Sprintf("%s:%d", s.localIP, rtpSess.LocalAddr.Port),
-			Codec:       neg.Name,
-			PayloadType: neg.PayloadType,
-			ClockRate:   neg.ClockRate,
-			CSeqInvite:  msg.GetHeader("CSeq"),
-			Direction:   "inbound_reinvite",
+			TenantID:             bind.TenantID,
+			InboundTrunkNumberID: bind.TrunkNumberID,
+			CallID:               callID,
+			From:                 msg.GetHeader("From"),
+			To:                   msg.GetHeader("To"),
+			RemoteSig:            addr.String(),
+			RemoteRTP:            remoteAddr.String(),
+			LocalRTP:             fmt.Sprintf("%s:%d", s.localIP, rtpSess.LocalAddr.Port),
+			Codec:                neg.Name,
+			PayloadType:          neg.PayloadType,
+			ClockRate:            neg.ClockRate,
+			CSeqInvite:           msg.GetHeader("CSeq"),
+			Direction:            "inbound_reinvite",
 		})
 	}
 

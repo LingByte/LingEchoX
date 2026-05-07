@@ -18,20 +18,18 @@ export interface SIPCallDialogTurn {
   pipelineMs?: number
 }
 
+/** Console API row: raw SIP headers / signaling topology are never returned (server strips before JSON). */
 export interface SIPCallRow {
   id: number
   callId: string
-  fromHeader?: string
-  toHeader?: string
-  cseqInvite?: string
+  tenantId?: number
+  fromNumber?: string
+  toNumber?: string
   direction?: string
   state?: string
   codec?: string
   payloadType?: number
   clockRate?: number
-  remoteAddr?: string
-  remoteRtpAddr?: string
-  localRtpAddr?: string
   recordingUrl?: string
   recordingRawBytes?: number
   recordingWavBytes?: number

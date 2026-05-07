@@ -13,6 +13,8 @@ export interface TenantAuthUser {
   email: string
   displayName?: string
   status?: string
+  avatarUrl?: string
+  totpEnabled?: boolean
 }
 
 export interface PlatformAdminAuth {
@@ -32,6 +34,7 @@ export type TenantAuthPayload =
       expiresIn: number
       tenant: TenantAuthTenant
       user: TenantAuthUser
+      permissionCodes?: string[]
       platformAdmin?: undefined
     }
   | {
@@ -54,6 +57,7 @@ export interface TenantRegisterBody {
 export interface TenantLoginBody {
   email: string
   password: string
+  totpCode?: string
 }
 
 export async function registerTenant(body: TenantRegisterBody): Promise<ApiResponse<TenantAuthPayload>> {

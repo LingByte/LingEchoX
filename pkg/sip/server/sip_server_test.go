@@ -28,6 +28,7 @@ func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {
 		Port:    0,
 		LocalIP: "192.0.2.10",
 	})
+	srv.SetInboundAllowUnknownDID(true)
 
 	// A minimal INVITE with SDP body.
 	sdpBody := strings.Join([]string{
@@ -101,6 +102,7 @@ func TestSIPServer_HandleBye_ClosesSession(t *testing.T) {
 	}
 
 	srv := New(Config{Host: "127.0.0.1", Port: 0, LocalIP: "127.0.0.1"})
+	srv.SetInboundAllowUnknownDID(true)
 
 	// First create a session via INVITE.
 	sdp := strings.Join([]string{

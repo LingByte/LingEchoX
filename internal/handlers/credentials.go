@@ -6,7 +6,10 @@ package handlers
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/LingByte/SoulNexus/internal/models"
@@ -14,22 +17,72 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type credentialCreateReq struct {
-	Name    string `json:"name"`
-	AllowIP string `json:"allowIp"` // 逗号分隔，可为空表示不限制
+	Name              string   `json:"name"`
+	AllowIP           string   `json:"allowIp"` // 逗号分隔，可为空表示不限制
+	PermissionCodes   []string `json:"permissionCodes"`
+}
+
+type credentialUpdateReq struct {
+	Name              *string  `json:"name"`
+	AllowIP           *string  `json:"allowIp"`
+	PermissionCodes   []string `json:"permissionCodes"`
+}
+
+func marshalCredentialPermissionCodes(codes []string) (string, error) {
+	if len(codes) == 0 {
+		codes = []string{"*"}
+	}
+	b, err := json.Marshal(codes)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// requireTenantUser 仅允许已登录的人类用户（JWT），AKSK 调用者拿不到 userID。
+// 访问管理本身只能用人类身份操作，避免凭据互相创建/吊销。
+func requireTenantUser(c *gin.Context) (tenantID uint, ok bool) {
+	if middleware.AuthUserID(c) == 0 {
+		response.Fail(c, "forbidden", nil)
+		return 0, false
+	}
+	tid := middleware.AuthTenantID(c)
+	if tid == 0 {
+		response.Fail(c, "unauthorized", nil)
+		return 0, false
+	}
+	return tid, true
+}
+
+// findCredentialForTenant 命中时返回行；未命中时已写过响应，调用方直接 return。
+func (h *Handlers) findCredentialForTenant(c *gin.Context, tenantID uint) (*models.Credential, bool) {
+	idStr := strings.TrimSpace(c.Param("id"))
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || id == 0 {
+		response.Fail(c, "invalid id", nil)
+		return nil, false
+	}
+	var row models.Credential
+	if err := h.db.Where("id = ? AND tenant_id = ? AND is_deleted = ?", id, tenantID, models.SoftDeleteStatusActive).
+		First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.Fail(c, "not found", nil)
+			return nil, false
+		}
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return nil, false
+	}
+	return &row, true
 }
 
 // createCredential issues AK/SK for the tenant (human JWT only).
 func (h *Handlers) createCredential(c *gin.Context) {
-	if middleware.AuthUserID(c) == 0 {
-		response.Fail(c, "forbidden", nil)
-		return
-	}
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := requireTenantUser(c)
+	if !ok {
 		return
 	}
 	var req credentialCreateReq
@@ -43,54 +96,228 @@ func (h *Handlers) createCredential(c *gin.Context) {
 	secretKey := hex.EncodeToString(skBytes)
 	accessKey := "ak_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 
+	var pcodes string
+	var err error
+	if req.PermissionCodes != nil && len(req.PermissionCodes) == 0 {
+		pcodes = "[]"
+	} else {
+		pcodes, err = marshalCredentialPermissionCodes(req.PermissionCodes)
+	}
+	if err != nil {
+		response.Fail(c, "invalid permissionCodes", nil)
+		return
+	}
 	row := &models.Credential{
-		TenantID:  tenantID,
-		Name:      strings.TrimSpace(req.Name),
-		AccessKey: accessKey,
-		SecretKey: secretKey,
-		Status:    models.CredentialStatusActive,
-		AllowIP:   strings.TrimSpace(req.AllowIP),
+		TenantID:        tenantID,
+		Name:            strings.TrimSpace(req.Name),
+		AccessKey:       accessKey,
+		SecretKey:       secretKey,
+		Status:          models.CredentialStatusActive,
+		AllowIP:         strings.TrimSpace(req.AllowIP),
+		PermissionCodes: pcodes,
 	}
 	row.SetCreateInfo(middleware.AuthEmail(c))
 	if row.Name == "" {
 		row.Name = "Integration"
 	}
-	if err := h.db.Create(row).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if creErr := h.db.Create(row).Error; creErr != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, creErr)
 		return
 	}
 
+	var pc []string
+	_ = json.Unmarshal([]byte(row.PermissionCodes), &pc)
 	response.Success(c, "success", gin.H{
-		"id":        row.ID,
-		"tenantId":  row.TenantID,
-		"name":      row.Name,
-		"accessKey": row.AccessKey,
-		"secretKey": secretKey,
-		"allowIp":   row.AllowIP,
-		"status":    row.Status,
-		"notice":    "secretKey is shown once; store it safely",
+		"id":               row.ID,
+		"tenantId":         row.TenantID,
+		"name":             row.Name,
+		"accessKey":        row.AccessKey,
+		"secretKey":        secretKey, // 仅本次响应返回，后续不再可读
+		"allowIp":          row.AllowIP,
+		"permissionCodes":  pc,
+		"status":           row.Status,
+		"createdAt":        row.CreatedAt,
+		"notice":           "secretKey is shown once; store it safely",
 	})
 }
 
 func (h *Handlers) listCredentials(c *gin.Context) {
-	if middleware.AuthUserID(c) == 0 {
-		response.Fail(c, "forbidden", nil)
+	tenantID, ok := requireTenantUser(c)
+	if !ok {
 		return
 	}
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+	statusFilter := strings.TrimSpace(c.Query("status"))
+	nameFilter := strings.TrimSpace(c.Query("name"))
+
+	q := h.db.Model(&models.Credential{}).
+		Where("tenant_id = ? AND is_deleted = ?", tenantID, models.SoftDeleteStatusActive)
+	if statusFilter == models.CredentialStatusActive || statusFilter == models.CredentialStatusDisabled {
+		q = q.Where("status = ?", statusFilter)
+	}
+	if nameFilter != "" {
+		q = q.Where("name LIKE ?", "%"+nameFilter+"%")
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
 
 	var rows []models.Credential
-	if err := h.db.Model(&models.Credential{}).
-		Select("id", "tenant_id", "name", "access_key", "status", "allow_ip", "created_at", "updated_at", "create_by").
-		Where("tenant_id = ? AND is_deleted = ?", tenantID, models.SoftDeleteStatusActive).
+	if err := q.
+		Select("id", "tenant_id", "name", "access_key", "status", "allow_ip", "permission_codes", "created_at", "updated_at", "create_by").
 		Order("id DESC").
+		Offset((page - 1) * size).
+		Limit(size).
 		Find(&rows).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"list": rows})
+	list := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		var pc []string
+		if strings.TrimSpace(row.PermissionCodes) != "" {
+			_ = json.Unmarshal([]byte(row.PermissionCodes), &pc)
+		}
+		list = append(list, gin.H{
+			"id":              row.ID,
+			"tenantId":        row.TenantID,
+			"name":            row.Name,
+			"accessKey":       row.AccessKey,
+			"status":          row.Status,
+			"allowIp":         row.AllowIP,
+			"permissionCodes": pc,
+			"createdAt":       row.CreatedAt,
+			"updatedAt":       row.UpdatedAt,
+			"createBy":        row.CreateBy,
+		})
+	}
+	response.Success(c, "success", gin.H{
+		"list":  list,
+		"total": total,
+		"page":  page,
+		"size":  size,
+	})
+}
+
+// updateCredential 仅允许修改 name / allowIp；ak / sk / status 走专门的接口。
+func (h *Handlers) updateCredential(c *gin.Context) {
+	tenantID, ok := requireTenantUser(c)
+	if !ok {
+		return
+	}
+	row, ok := h.findCredentialForTenant(c, tenantID)
+	if !ok {
+		return
+	}
+
+	var req credentialUpdateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, "invalid body", err.Error())
+		return
+	}
+	updates := map[string]any{
+		"update_by": middleware.AuthEmail(c),
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			response.Fail(c, "name cannot be empty", nil)
+			return
+		}
+		updates["name"] = name
+	}
+	if req.AllowIP != nil {
+		updates["allow_ip"] = strings.TrimSpace(*req.AllowIP)
+	}
+	if req.PermissionCodes != nil {
+		var pcodes string
+		var err error
+		if len(req.PermissionCodes) == 0 {
+			pcodes = "[]"
+		} else {
+			pcodes, err = marshalCredentialPermissionCodes(req.PermissionCodes)
+		}
+		if err != nil {
+			response.Fail(c, "invalid permissionCodes", nil)
+			return
+		}
+		updates["permission_codes"] = pcodes
+	}
+	if err := h.db.Model(&models.Credential{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{"id": row.ID})
+}
+
+func (h *Handlers) setCredentialStatus(c *gin.Context, target string) {
+	tenantID, ok := requireTenantUser(c)
+	if !ok {
+		return
+	}
+	row, ok := h.findCredentialForTenant(c, tenantID)
+	if !ok {
+		return
+	}
+	if row.Status == target {
+		response.Success(c, "success", gin.H{"id": row.ID, "status": row.Status})
+		return
+	}
+	if err := h.db.Model(&models.Credential{}).
+		Where("id = ?", row.ID).
+		Updates(map[string]any{
+			"status":    target,
+			"update_by": middleware.AuthEmail(c),
+		}).Error; err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{"id": row.ID, "status": target})
+}
+
+// disableCredential 立即禁用一个 AK/SK，禁用后所有签名请求都会失败。
+func (h *Handlers) disableCredential(c *gin.Context) {
+	h.setCredentialStatus(c, models.CredentialStatusDisabled)
+}
+
+// enableCredential 恢复一个被禁用的 AK/SK。
+func (h *Handlers) enableCredential(c *gin.Context) {
+	h.setCredentialStatus(c, models.CredentialStatusActive)
+}
+
+// deleteCredential 软删除：is_deleted = 1，AKSK 中间件用 is_deleted=0 过滤，所以删除后立即吊销。
+func (h *Handlers) deleteCredential(c *gin.Context) {
+	tenantID, ok := requireTenantUser(c)
+	if !ok {
+		return
+	}
+	row, ok := h.findCredentialForTenant(c, tenantID)
+	if !ok {
+		return
+	}
+	if err := h.db.Model(&models.Credential{}).
+		Where("id = ?", row.ID).
+		Updates(map[string]any{
+			"is_deleted": models.SoftDeleteStatusDeleted,
+			"status":     models.CredentialStatusDisabled,
+			"update_by":  middleware.AuthEmail(c),
+		}).Error; err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{"id": row.ID})
 }

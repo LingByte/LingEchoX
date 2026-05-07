@@ -3,6 +3,7 @@ import type { Paginated } from '@/api/types'
 
 export interface ACDPoolTargetRow {
   id: number
+  trunkNumberId?: number
   name?: string
   createBy?: string
   routeType: string
@@ -31,9 +32,14 @@ export const ACD_ROUTE_TYPES: ACDRouteType[] = ['sip', 'web']
 export const ACD_WORK_STATES = ['offline', 'available', 'ringing', 'busy', 'acw', 'break'] as const
 export type ACDWorkState = (typeof ACD_WORK_STATES)[number]
 
-export async function listACDPoolTargets(page = 1, size = 20, opts?: { routeType?: string }): Promise<ApiResponse<Paginated<ACDPoolTargetRow>>> {
+export async function listACDPoolTargets(
+  page = 1,
+  size = 20,
+  opts?: { routeType?: string; trunkNumberId?: number },
+): Promise<ApiResponse<Paginated<ACDPoolTargetRow>>> {
   const q = new URLSearchParams({ page: String(page), size: String(size) })
   if (opts?.routeType) q.set('routeType', opts.routeType)
+  if (opts?.trunkNumberId != null && opts.trunkNumberId > 0) q.set('trunkNumberId', String(opts.trunkNumberId))
   return get(`/sip-center/acd-pool?${q.toString()}`)
 }
 
@@ -43,6 +49,7 @@ export async function getACDPoolTarget(id: number): Promise<ApiResponse<ACDPoolT
 
 export async function createACDPoolTarget(body: {
   name?: string
+  trunkNumberId: number
   routeType: string
   sipSource?: string
   targetValue?: string
@@ -60,6 +67,7 @@ export async function createACDPoolTarget(body: {
 
 export async function updateACDPoolTarget(id: number, body: {
   name?: string
+  trunkNumberId: number
   routeType: string
   sipSource?: string
   targetValue?: string

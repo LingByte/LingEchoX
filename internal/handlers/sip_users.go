@@ -6,7 +6,9 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/gin-gonic/gin"
@@ -64,11 +66,12 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 	response.Success(c, "success", gin.H{"id": id})
 }
 
+// listSIPCalls 通话记录分页查询：
+//   - 平台管理员：跨租户查看全部；可用 ?tenantId=N 过滤指定租户（0 / 缺省 = 全部，包括测试通话 tenant_id=0）。
+//   - 租户用户：仅返回自身租户的通话记录。
+//   - 入局话单的 tenant_id / inbound_trunk_number_id 由被叫 DID 在 sip_trunk_numbers 的解析结果写入（与限并发、号码池作用域一致）。
+//     未匹配 DID 且未开启 SIP_INBOUND_ALLOW_UNKNOWN_DID 的呼叫不会落库为租户数据。
 func (h *Handlers) listSIPCalls(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
@@ -80,32 +83,61 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 	if size > 100 {
 		size = 100
 	}
-	list, total, err := persist.ListSIPCallsPage(h.db, tid, page, size, c.Query("callId"), c.Query("state"))
+
+	var (
+		list  []persist.SIPCall
+		total int64
+		err   error
+	)
+
+	if middleware.AuthPlatformAdminID(c) > 0 {
+		var tenantFilter uint
+		if s := strings.TrimSpace(c.Query("tenantId")); s != "" {
+			if v, perr := strconv.ParseUint(s, 10, 32); perr == nil {
+				tenantFilter = uint(v)
+			}
+		}
+		list, total, err = persist.ListAllSIPCallsPage(h.db, tenantFilter, page, size, c.Query("callId"), c.Query("state"))
+	} else {
+		tid, ok := requireTenant(c)
+		if !ok {
+			return
+		}
+		list, total, err = persist.ListSIPCallsPage(h.db, tid, page, size, c.Query("callId"), c.Query("state"))
+	}
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
 	for i := range list {
 		persist.EnrichSIPCallResponse(&list[i])
+		persist.RedactSIPCallForAPI(&list[i])
 	}
 	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
 }
 
 func (h *Handlers) getSIPCall(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := persist.GetActiveSIPCallForTenant(h.db, uint(id), tid)
+
+	var row persist.SIPCall
+	if middleware.AuthPlatformAdminID(c) > 0 {
+		row, err = persist.GetActiveSIPCallByID(h.db, uint(id))
+	} else {
+		tid, ok := requireTenant(c)
+		if !ok {
+			return
+		}
+		row, err = persist.GetActiveSIPCallForTenant(h.db, uint(id), tid)
+	}
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
 	persist.EnrichSIPCallResponse(&row)
+	persist.RedactSIPCallForAPI(&row)
 	response.Success(c, "success", row)
 }

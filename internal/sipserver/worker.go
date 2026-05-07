@@ -4,19 +4,17 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/task"
-	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type Dialer interface {
@@ -257,7 +255,7 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 			zap.String("script_id", strings.TrimSpace(campaign.ScriptID)),
 		)
 	}
-	target, err := buildDialTarget(campaign, contact)
+	target, err := buildDialTarget(s.db, campaign, contact)
 	if err != nil {
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).Where("id = ?", contact.ID).
 			Updates(map[string]any{"status": models.SIPCampaignContactFailed, "failure_reason": err.Error()}).Error
@@ -346,6 +344,7 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 		MediaProfile:      outbound.MediaProfile(strings.TrimSpace(campaign.MediaProfile)),
 		CallerUser:        strings.TrimSpace(contact.CallerUser),
 		CallerDisplayName: strings.TrimSpace(contact.CallerName),
+		DialTenantID:      campaign.TenantID,
 	}
 	callID, err := dialer.Dial(ctx, req)
 	if err != nil {
@@ -552,33 +551,33 @@ func (s *CampaignService) isDuplicateWithinWindow(ctx context.Context, contactID
 	return count > 0
 }
 
-func buildDialTarget(c models.SIPCampaign, ct models.SIPCampaignContact) (outbound.DialTarget, error) {
-	host := utils.GetEnv(constants.EnvSIPOutboundHost)
-	if host == "" {
-		return outbound.DialTarget{}, fmt.Errorf("SIP_OUTBOUND_HOST is required")
+// buildDialTarget 决定一通外呼的 INVITE Request-URI + 信令地址。
+//
+// 网关（host:port）必须由数据库提供：
+//  1. 当前 campaign 所属租户名下「direction 允许外呼」的 TrunkNumber → 其 Trunk.LocalAddr 解析出的 host:port。
+//  2. tenantID=0 的平台级中继。
+//
+// 数据库里没有可用 trunk → 直接报错，不再读 env 兜底（设计上「是否开通外呼」就该由 UI 决定）。
+func buildDialTarget(db *gorm.DB, c models.SIPCampaign, ct models.SIPCampaignContact) (outbound.DialTarget, error) {
+	cfg, ok := models.PickTrunkOutboundConfig(db, c.TenantID)
+	if !ok {
+		return outbound.DialTarget{}, fmt.Errorf("租户 %d 没有可用外呼中继：请在「中继线路 / 中继号码」里给至少一条号码勾选 direction ∈ {outbound, both}", c.TenantID)
 	}
-	port := 6050
-	if s := utils.GetEnv(constants.EnvSIPOutboundPort); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 65535 {
-			port = n
-		}
-	}
-	defaultSig := utils.GetEnv(constants.EnvSIPSignalingAddr)
-	if defaultSig == "" {
-		defaultSig = fmt.Sprintf("%s:%d", host, port)
-	}
+	host := cfg.Host
+	port := cfg.Port
+	sigAddr := cfg.SignalingAddr()
 
 	if u := strings.TrimSpace(ct.RequestURI); u != "" {
-		return outbound.DialTarget{RequestURI: u, SignalingAddr: defaultSig}, nil
+		return outbound.DialTarget{RequestURI: u, SignalingAddr: sigAddr}, nil
 	}
 	if tmpl := strings.TrimSpace(c.RequestURIFmt); tmpl != "" {
 		return outbound.DialTarget{
 			RequestURI:    fmt.Sprintf(tmpl, strings.TrimSpace(ct.Phone)),
-			SignalingAddr: defaultSig,
+			SignalingAddr: sigAddr,
 		}, nil
 	}
 	return outbound.DialTarget{
 		RequestURI:    fmt.Sprintf("sip:%s@%s:%d", strings.TrimSpace(ct.Phone), host, port),
-		SignalingAddr: defaultSig,
+		SignalingAddr: sigAddr,
 	}, nil
 }

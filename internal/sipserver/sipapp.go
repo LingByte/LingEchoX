@@ -15,6 +15,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/sip/server"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
 	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
 	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
@@ -79,16 +80,46 @@ func warnIfSIPViaLoopback(sipHostEffective, localIP, sipListenHost string) {
 	}
 }
 
-func resolveOutboundDialTarget(store *persist.GormStore) (outbound.DialTarget, bool) {
+// resolveOutboundDialTarget 仅在启动时打一行「外呼试拨目标」日志使用。
+// 优先级：
+//  1. SIP_TARGET_NUMBER 命中已注册的 SIP user（store.DialTargetForUsername）；
+//  2. tenantID=0 的平台级 Trunk + 一条允许外呼的 TrunkNumber + SIP_TARGET_NUMBER 作为被叫。
+//
+// 没有可用中继时直接返回 false；不再读 SIP_OUTBOUND_HOST 等 env 兜底。
+func resolveOutboundDialTarget(db *gorm.DB, store *persist.GormStore) (outbound.DialTarget, bool) {
 	if store != nil {
-		n := utils.GetEnv(constants.EnvSIPTargetNumber)
-		if n != "" {
+		if n := utils.GetEnv(constants.EnvSIPTargetNumber); n != "" {
 			if dt, ok := store.DialTargetForUsername(context.Background(), n); ok {
 				return dt, true
 			}
 		}
 	}
-	return outbound.DialTargetFromEnv()
+	return buildOutboundDialTargetFromDB(db)
+}
+
+// buildOutboundDialTargetFromDB 用 PickTrunkOutboundConfig + SIP_TARGET_NUMBER 拼一个外呼目标。
+//
+// SIP_TARGET_NUMBER 仅作为「试拨被叫号码」用，不再作为主叫身份；主叫已由 TrunkNumber 提供。
+// 找不到外呼 trunk 或 SIP_TARGET_NUMBER 为空均返回 false。
+func buildOutboundDialTargetFromDB(db *gorm.DB) (outbound.DialTarget, bool) {
+	if db == nil {
+		return outbound.DialTarget{}, false
+	}
+	target := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTargetNumber))
+	if target == "" {
+		return outbound.DialTarget{}, false
+	}
+	cfg, ok := models.PickTrunkOutboundConfig(db, 0)
+	if !ok {
+		return outbound.DialTarget{}, false
+	}
+	dt, ok := outbound.DialTargetFromACDTrunk(target, cfg.Host, "", cfg.Port)
+	if !ok {
+		return outbound.DialTarget{}, false
+	}
+	dt.CallerUser = cfg.CallerUser
+	dt.CallerDisplayName = cfg.CallerDisplay
+	return dt, true
 }
 
 // httpDialHostPortForVoicedialog maps HTTP listen addr (e.g. :8080, 0.0.0.0:8080) to a loopback host:port for ws dial.
@@ -109,6 +140,7 @@ func Start(cfg Config) (*Embedded, error) {
 		return nil, fmt.Errorf("sipapp: Config.DB is required")
 	}
 	acdDB := cfg.DB
+	capTracker := server.NewTrunkCapacityTracker()
 
 	persist.SetRegisterOutboundRequestURIServerPort(cfg.Port)
 	// SDP c=/Call-ID host: cfg.LocalIP (e.g. cmd/server -sip-local-ip). Empty → 127.0.0.1 in server/outbound.
@@ -125,7 +157,24 @@ func Start(cfg Config) (*Embedded, error) {
 	var sipCallPersist *persist.CallStore
 	var campaignSvc *CampaignService
 
+	// 主叫身份：优先从 Trunk + TrunkNumber 推导（数据库可见即生效），找不到再回退到 SIP_CALLER_ID / SIP_CALLER_DISPLAY_NAME。
 	callerUser, callerDisplay := config.CallerIdentityFromEnv()
+	if dbCfg, ok := models.PickTrunkTransferConfig(cfg.DB, 0); ok {
+		if dbCfg.CallerUser != "" {
+			callerUser = dbCfg.CallerUser
+		}
+		if dbCfg.CallerDisplay != "" {
+			callerDisplay = dbCfg.CallerDisplay
+		}
+		if logger.Lg != nil {
+			logger.Lg.Info("sipapp: using trunk-derived caller identity",
+				zap.String("caller_user", callerUser),
+				zap.String("caller_display", callerDisplay),
+				zap.Uint("trunk_id", dbCfg.TrunkID),
+				zap.Uint("trunk_number_id", dbCfg.TrunkNumberID),
+			)
+		}
+	}
 	outMgr := outbound.NewManager(outbound.ManagerConfig{
 		LocalIP:         localIP,
 		SIPHost:         sipHost,
@@ -224,6 +273,68 @@ func Start(cfg Config) (*Embedded, error) {
 	sipServerPtr.SetRegisterStore(sipRegStore)
 	sipCallPersist = persist.NewCallStore(cfg.DB, logger.Lg)
 	sipServerPtr.SetCallPersist(sipCallPersist)
+	sipServerPtr.SetInboundDIDBindingResolver(func(msg *stack.Message) server.InboundDIDBinding {
+		if acdDB == nil || msg == nil {
+			return server.InboundDIDBinding{}
+		}
+		raw := server.InboundCalledPartyUser(msg)
+		if raw == "" {
+			return server.InboundDIDBinding{}
+		}
+		row, ok := models.FindTrunkNumberByInboundDID(acdDB, raw)
+		if !ok {
+			return server.InboundDIDBinding{}
+		}
+		if row.TenantID > 0 && logger.Lg != nil {
+			logger.Lg.Info("sip inbound DID bound to trunk number",
+				zap.String("called_user", raw),
+				zap.Uint("tenant_id", row.TenantID),
+				zap.Uint("trunk_number_id", row.ID))
+		}
+		return server.InboundDIDBinding{TenantID: row.TenantID, TrunkNumberID: row.ID}
+	})
+	sipServerPtr.SetInboundCapacityGate(func(callID, calledUser string) (bool, int, string) {
+		if acdDB == nil {
+			return true, 0, ""
+		}
+		raw := strings.TrimSpace(calledUser)
+		if raw == "" {
+			return true, 0, ""
+		}
+		row, ok := models.FindTrunkNumberByInboundDID(acdDB, raw)
+		if !ok || row.CallInConcurrent == 0 {
+			return true, 0, ""
+		}
+		if !capTracker.TryAcquireInbound(callID, row.ID, row.CallInConcurrent) {
+			return false, 486, "Busy Here"
+		}
+		return true, 0, ""
+	})
+	sipServerPtr.SetInboundCapacityRelease(capTracker.ReleaseInbound)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SIP_INBOUND_ALLOW_UNKNOWN_DID"))) {
+	case "1", "true", "yes", "on":
+		sipServerPtr.SetInboundAllowUnknownDID(true)
+	default:
+		sipServerPtr.SetInboundAllowUnknownDID(false)
+	}
+	sipServerPtr.SetVoiceDialogWSLookup(func(callID string) string {
+		cid := strings.TrimSpace(callID)
+		if cid == "" || acdDB == nil {
+			return ""
+		}
+		callRow, err := persist.FindActiveSIPCallByCallID(context.Background(), acdDB, cid)
+		if err != nil {
+			return ""
+		}
+		called := strings.TrimSpace(callRow.ToNumber)
+		if called == "" {
+			return ""
+		}
+		if tn, ok := models.FindTrunkNumberByInboundDID(acdDB, called); ok {
+			return strings.TrimSpace(tn.VoiceDialogWSURL)
+		}
+		return ""
+	})
 	conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
 		sipCallPersist.SaveConversationTurn(ctx, callID, turn)
 	})
@@ -236,6 +347,40 @@ func Start(cfg Config) (*Embedded, error) {
 	}
 	em.campaignSvc = campaignSvc
 	outMgr.BindSender(sipServerPtr)
+	outMgr.SetOutboundCapacityRelease(capTracker.ReleaseOutbound)
+	outMgr.SetDialGate(func(ctx context.Context, req outbound.DialRequest, callID string) error {
+		if acdDB == nil {
+			return nil
+		}
+		caller := strings.TrimSpace(req.CallerUser)
+		if caller == "" {
+			caller = strings.TrimSpace(req.Target.CallerUser)
+		}
+		if caller == "" {
+			return nil
+		}
+		tenantID := req.DialTenantID
+		if tenantID == 0 {
+			cid := strings.TrimSpace(req.CorrelationID)
+			if cid != "" {
+				row, err := persist.FindActiveSIPCallByCallID(ctx, acdDB, cid)
+				if err == nil && row.TenantID > 0 {
+					tenantID = row.TenantID
+				}
+			}
+		}
+		if tenantID == 0 {
+			return nil
+		}
+		tn, ok := models.FindTrunkNumberForOutboundCaller(acdDB, tenantID, caller)
+		if !ok || tn.Concurrent == 0 {
+			return nil
+		}
+		if !capTracker.TryAcquireOutbound(callID, tn.ID, tn.Concurrent) {
+			return fmt.Errorf("outbound concurrent limit exceeded for CLI %q (limit=%d)", caller, tn.Concurrent)
+		}
+		return nil
+	})
 	conversation.SetTransferDialer(outMgr)
 	conversation.SetInboundSessionLookup(func(callID string) *sipSession.CallSession {
 		if sipServerPtr == nil {
@@ -321,22 +466,37 @@ func Start(cfg Config) (*Embedded, error) {
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "sipapp: listening on udp %s:%d (SDP local-ip effective=%q cli=%q)\n", cfg.Host, cfg.Port, localIP, strings.TrimSpace(cfg.LocalIP))
 	}
-	if dt, ok := resolveOutboundDialTarget(sipRegStore); ok {
+	if dt, ok := resolveOutboundDialTarget(cfg.DB, sipRegStore); ok {
 		if logger.Lg != nil {
-			logger.Lg.Info("sipapp: outbound target from env",
+			logger.Lg.Info("sipapp: outbound target ready",
 				zap.String("uri", dt.RequestURI),
 				zap.String("signaling", dt.SignalingAddr),
 			)
 		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "sipapp: outbound target from env: uri=%s signaling=%s\n", dt.RequestURI, dt.SignalingAddr)
+			_, _ = fmt.Fprintf(os.Stdout, "sipapp: outbound target ready: uri=%s signaling=%s\n", dt.RequestURI, dt.SignalingAddr)
 		}
 	} else {
 		if utils.GetEnv(constants.EnvSIPTargetNumber) != "" {
-			_, _ = fmt.Fprintf(os.Stderr, "sipapp: SIP_TARGET_NUMBER is set but outbound target is incomplete; set SIP_OUTBOUND_HOST (and optionally SIP_OUTBOUND_PORT, SIP_SIGNALING_ADDR). See docs/SIP_OUTBOUND_MODULE.md\n")
+			_, _ = fmt.Fprintf(os.Stderr, "sipapp: SIP_TARGET_NUMBER 已设置但找不到外呼目标；请在「中继线路 / 中继号码」里给某条号码勾选 direction ∈ {outbound, both}。详见 docs/SIP_OUTBOUND_MODULE.md\n")
 		}
 	}
 
 	return em, nil
+}
+
+// resolveInboundTrunkNumberPK maps called-party digits (sip_calls.to_number) to sip_trunk_numbers.id for ACD trunk scope.
+func resolveInboundTrunkNumberPK(db *gorm.DB, calledUser string) uint {
+	if db == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(calledUser)
+	if raw == "" {
+		return 0
+	}
+	if tn, ok := models.FindTrunkNumberByInboundDID(db, raw); ok {
+		return tn.ID
+	}
+	return 0
 }
 
 // Shutdown stops the campaign worker and SIP UDP.
@@ -362,17 +522,23 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 // Ordering: weight DESC, id ASC (highest weight wins; tie-break lower id first).
 //   - web → WebSeat (browser agent leg).
 //   - sip trunk → DialTargetFromACDTrunk; sip internal → reg.DialTargetForUsername.
+//
+// Blind transfer targets come only from acd_pool_targets (plus trunk-level SIP fields on each pool row).
+// There is no env-based fallback dial string (configure Web/SIP rows in the pool).
 func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormStore, inboundCallID string, exclude []uint) (outbound.DialTarget, bool) {
 	if db == nil {
 		return outbound.DialTarget{}, false
 	}
 	var tenantID uint
+	var calledUser string
 	if cid := strings.TrimSpace(inboundCallID); cid != "" {
 		if call, err := persist.FindSIPCallByCallID(ctx, db, cid); err == nil {
 			tenantID = call.TenantID
+			calledUser = strings.TrimSpace(call.ToNumber)
 		}
 	}
-	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db, exclude, tenantID)
+	inboundTrunkNumberID := resolveInboundTrunkNumberPK(db, calledUser)
+	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db, exclude, tenantID, inboundTrunkNumberID)
 	if err != nil {
 		return outbound.DialTarget{}, false
 	}
@@ -411,6 +577,17 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 	}
 	dt.CallerUser = strings.TrimSpace(row.SipCallerID)
 	dt.CallerDisplayName = strings.TrimSpace(row.SipCallerDisplayName)
+	// 即便 ACD 行命中了，也允许 Trunk 信息补齐缺失字段（例如运营忘了在 ACD 行上填 caller_id）。
+	if dt.CallerUser == "" || dt.CallerDisplayName == "" {
+		if tc, ok := models.PickTrunkTransferConfig(db, tenantID); ok {
+			if dt.CallerUser == "" {
+				dt.CallerUser = tc.CallerUser
+			}
+			if dt.CallerDisplayName == "" {
+				dt.CallerDisplayName = tc.CallerDisplay
+			}
+		}
+	}
 	dt.ACDPoolTargetID = row.ID
 	return dt, true
 }

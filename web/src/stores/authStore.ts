@@ -117,6 +117,7 @@ export const useAuthStore = create<AuthState>()(
                 tenantSlug: data.tenant?.slug,
                 tenantName: data.tenant?.name,
                 principal: 'tenant' as const,
+                permissionCodes: data.permissionCodes ?? [],
               }
               localStorage.setItem('auth_user', JSON.stringify(user))
               set({ user, isAuthenticated: true, token })
