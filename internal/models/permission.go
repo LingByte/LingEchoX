@@ -13,6 +13,14 @@ var ErrInvalidOrgReference = errors.New("invalid organization reference")
 // Copyright (c) 2026 LingByte
 // SPDX-License-Identifier: MIT
 
+const (
+	PermissionKindModule = "module"
+	PermissionKindMenu   = "menu"
+	PermissionKindButton = "button"
+	PermissionKindAPI    = "api"
+	PermissionKindData   = "data"
+)
+
 // Permission is a global capability code (shared RBAC catalog across tenants).
 type Permission struct {
 	BaseModel
@@ -105,6 +113,60 @@ func AttachAllPermissionsToRole(tx *gorm.DB, roleID uint, operator string) error
 		rp := &TenantRolePermission{RoleID: roleID, PermissionID: pid}
 		rp.SetCreateInfo(operator)
 		if err := tx.Create(rp).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// builtinPermissions defines the default RBAC permission catalog seeded on startup.
+var builtinPermissions = []struct {
+	Code       string
+	Name       string
+	Kind       string
+	ParentCode string
+}{
+	// SIP contact center
+	{"api.sip.calls.read", "通话记录查看", PermissionKindAPI, "api.sip"},
+	{"api.sip.acd.read", "ACD 坐席查看", PermissionKindAPI, "api.sip"},
+	{"api.sip.acd.write", "ACD 坐席管理", PermissionKindAPI, "api.sip"},
+	{"api.sip.scripts.read", "话术模板查看", PermissionKindAPI, "api.sip"},
+	{"api.sip.scripts.write", "话术模板管理", PermissionKindAPI, "api.sip"},
+	{"api.sip.campaigns.read", "外呼任务查看", PermissionKindAPI, "api.sip"},
+	{"api.sip.campaigns.write", "外呼任务管理", PermissionKindAPI, "api.sip"},
+	{"api.sip.numbers.read", "号码资源查看", PermissionKindAPI, "api.sip"},
+	// Tenant organization
+	{"api.tenant_org.read", "组织架构查看", PermissionKindAPI, "api.tenant"},
+	{"api.tenant_org.write", "组织架构管理", PermissionKindAPI, "api.tenant"},
+	{"api.tenant_users.read", "成员查看", PermissionKindAPI, "api.tenant"},
+	{"api.tenant_users.write", "成员管理", PermissionKindAPI, "api.tenant"},
+	// Credentials
+	{"api.credentials.read", "访问密钥查看", PermissionKindAPI, "api.credentials"},
+	{"api.credentials.write", "访问密钥管理", PermissionKindAPI, "api.credentials"},
+}
+
+// SyncPermissionCatalog upserts the built-in permission rows; existing rows are updated, missing ones created.
+func SyncPermissionCatalog(db *gorm.DB) error {
+	for _, p := range builtinPermissions {
+		var existing Permission
+		err := db.Where("code = ?", p.Code).First(&existing).Error
+		if err == nil {
+			// Update name / kind / parent if changed.
+			db.Model(&existing).Updates(map[string]any{
+				"name":        p.Name,
+				"kind":        p.Kind,
+				"parent_code": p.ParentCode,
+			})
+			continue
+		}
+		row := Permission{
+			Code:       p.Code,
+			Name:       p.Name,
+			Kind:       p.Kind,
+			ParentCode: p.ParentCode,
+		}
+		row.SetCreateInfo("system")
+		if err := db.Create(&row).Error; err != nil {
 			return err
 		}
 	}

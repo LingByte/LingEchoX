@@ -292,10 +292,9 @@ func startNoAgentRetryLoop(inboundCallID string, lg *zap.Logger) {
 		return
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
-	if old, loaded := transferNoAgentRetry.LoadOrStore(inboundCallID, cancel); loaded {
-		if oldCancel, ok := old.(context.CancelFunc); ok && oldCancel != nil {
-			oldCancel()
-		}
+	if _, loaded := transferNoAgentRetry.LoadOrStore(inboundCallID, cancel); loaded {
+		// Another goroutine raced us; cancel our context to avoid leak, keep the existing loop.
+		cancel()
 		return
 	}
 	go func() {
@@ -333,4 +332,18 @@ func stopNoAgentRetryLoop(inboundCallID string) {
 			cancel()
 		}
 	}
+}
+
+// CleanupCallState releases all per-call transfer / script-mode state.
+// Must be called on every call termination path (BYE, abort, hangup).
+func CleanupCallState(callID string) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return
+	}
+	transferStarted.Delete(callID)
+	stopTransferRinging(callID)
+	stopNoAgentRetryLoop(callID)
+	ResetTransferRoutingState(callID)
+	ClearSIPScriptMode(callID)
 }

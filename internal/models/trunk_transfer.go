@@ -10,15 +10,6 @@ import (
 )
 
 // TrunkTransferConfig 描述了从 Trunk + TrunkNumber 推导出来的转呼/呼出网关与呼叫者身份。
-//
-// 它取代了过去靠环境变量配置的：
-//
-//	SIP_CALLER_ID            -> CallerUser    （TrunkNumber.Number）
-//	SIP_CALLER_DISPLAY_NAME  -> CallerDisplay （TrunkNumber.CallerDisplayName，可留空）
-//	SIP_TRANSFER_HOST        -> Host          （Trunk.LocalAddr 的主机部分）
-//	SIP_TRANSFER_PORT        -> Port          （Trunk.LocalAddr 的端口部分）
-//
-// 外呼网关与信令地址一律来自 Trunk.LocalAddr（及解析结果）；不再使用 SIP_OUTBOUND_* / SIP_TARGET_NUMBER 等环境变量。
 type TrunkTransferConfig struct {
 	Host          string // 网关 host，如 "183.213.19.195"
 	Port          int    // 网关端口，如 50400

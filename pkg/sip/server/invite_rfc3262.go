@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
 	"go.uber.org/zap"
@@ -170,6 +171,7 @@ func (s *SIPServer) stopCallSessionLocked(callID string) {
 		return
 	}
 	s.endVoiceDialogBridge(callID)
+	conversation.CleanupCallState(callID)
 	s.mu.Lock()
 	cs := s.callStore[callID]
 	delete(s.callStore, callID)

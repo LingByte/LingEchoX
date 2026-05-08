@@ -540,6 +540,7 @@ func (s *SIPServer) Stop() error {
 	s.mu.Lock()
 	for callID, cs := range s.callStore {
 		s.endVoiceDialogBridge(callID)
+		conversation.CleanupCallState(callID)
 		if cs != nil {
 			cs.Stop()
 		}
@@ -1017,6 +1018,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	}
 	defer s.endVoiceDialogBridge(callID)
 	defer s.inviteFinalRetransmitCleanup(callID)
+	defer conversation.CleanupCallState(callID)
 
 	if tb := conversation.HangupTransferBridgeIfAny(callID); tb != nil {
 		s.forgetUASDialog(callID)
