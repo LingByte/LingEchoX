@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Form, Input, Button, Message } from '@arco-design/web-react'
-import { IconLock, IconUser } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import AuthShell from '@/components/Auth/AuthShell'
 import { tenantLogin } from '@/api/tenantAuth'
@@ -17,7 +16,6 @@ export default function TenantLogin() {
   return (
     <AuthShell
       title="租户登录"
-      subtitle="企业成员与平台运维共用此入口：平台管理员登录后将进入 SIP 用户等运维菜单。"
       footer={
         <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--color-text-3)' }}>
           还没有组织？
@@ -105,13 +103,6 @@ export default function TenantLogin() {
           </Button>
         </FormItem>
       </Form>
-      <div style={{ marginTop: 20, fontSize: 12, color: 'var(--color-text-4)', lineHeight: 1.6 }}>
-        <IconUser style={{ marginRight: 6, verticalAlign: -2 }} />
-        一家企业注册成功后，系统将自动为新组织生成唯一 slug（由公司名拼音/英文与随机后缀组成）。
-        <br />
-        <IconLock style={{ marginRight: 6, verticalAlign: -2 }} />
-        令牌仅保存在本机浏览器，请勿在公共设备勾选「记住密码」类插件写入明文。
-      </div>
     </AuthShell>
   )
 }

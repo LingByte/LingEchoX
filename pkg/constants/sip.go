@@ -8,10 +8,6 @@ package constants
 // pkg/sip/persist, internal/sipserver, or pkg/sip/session; do not remove without updating those sites.
 
 const (
-	EnvSIPTargetNumber      = "SIP_TARGET_NUMBER"
-	EnvSIPOutboundHost      = "SIP_OUTBOUND_HOST"
-	EnvSIPOutboundPort      = "SIP_OUTBOUND_PORT"
-	EnvSIPSignalingAddr     = "SIP_SIGNALING_ADDR"
 	EnvSIPCallerID          = "SIP_CALLER_ID"
 	EnvSIPCallerDisplayName = "SIP_CALLER_DISPLAY_NAME"
 	EnvSIPDefaultDomain     = "SIP_DEFAULT_DOMAIN"

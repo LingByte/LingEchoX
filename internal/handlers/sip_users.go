@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
@@ -113,6 +114,42 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 		persist.EnrichSIPCallResponse(&list[i])
 		persist.RedactSIPCallForAPI(&list[i])
 	}
+	// Attach transferTo label in batch (if transferred).
+	{
+		ids := make([]uint, 0, len(list))
+		seen := map[uint]struct{}{}
+		for i := range list {
+			if list[i].TransferACDTargetID > 0 {
+				if _, ok := seen[list[i].TransferACDTargetID]; !ok {
+					seen[list[i].TransferACDTargetID] = struct{}{}
+					ids = append(ids, list[i].TransferACDTargetID)
+				}
+			}
+		}
+		if len(ids) > 0 {
+			var rows []models.ACDPoolTarget
+			_ = h.db.Model(&models.ACDPoolTarget{}).Where("id IN ?", ids).Find(&rows).Error
+			m := map[uint]string{}
+			for _, r := range rows {
+				label := strings.TrimSpace(r.Name)
+				if label == "" {
+					if r.RouteType == models.ACDPoolRouteTypeWeb {
+						label = "WebSeat"
+					} else {
+						label = strings.TrimSpace(r.TargetValue)
+					}
+				}
+				m[r.ID] = label
+			}
+			for i := range list {
+				if list[i].TransferACDTargetID > 0 {
+					if v := strings.TrimSpace(m[list[i].TransferACDTargetID]); v != "" {
+						list[i].TransferTo = v
+					}
+				}
+			}
+		}
+	}
 	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
 }
 
@@ -139,5 +176,19 @@ func (h *Handlers) getSIPCall(c *gin.Context) {
 	}
 	persist.EnrichSIPCallResponse(&row)
 	persist.RedactSIPCallForAPI(&row)
+	if row.TransferACDTargetID > 0 {
+		var tgt models.ACDPoolTarget
+		if err := h.db.Model(&models.ACDPoolTarget{}).Where("id = ?", row.TransferACDTargetID).First(&tgt).Error; err == nil {
+			label := strings.TrimSpace(tgt.Name)
+			if label == "" {
+				if tgt.RouteType == models.ACDPoolRouteTypeWeb {
+					label = "WebSeat"
+				} else {
+					label = strings.TrimSpace(tgt.TargetValue)
+				}
+			}
+			row.TransferTo = label
+		}
+	}
 	response.Success(c, "success", row)
 }

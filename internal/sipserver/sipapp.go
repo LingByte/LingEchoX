@@ -9,17 +9,15 @@ import (
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
 	"github.com/LingByte/SoulNexus/pkg/sip/server"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	"github.com/LingByte/SoulNexus/pkg/sip/stack"
 	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
 	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
-	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -80,46 +78,25 @@ func warnIfSIPViaLoopback(sipHostEffective, localIP, sipListenHost string) {
 	}
 }
 
-// resolveOutboundDialTarget 仅在启动时打一行「外呼试拨目标」日志使用。
-// 优先级：
-//  1. SIP_TARGET_NUMBER 命中已注册的 SIP user（store.DialTargetForUsername）；
-//  2. tenantID=0 的平台级 Trunk + 一条允许外呼的 TrunkNumber + SIP_TARGET_NUMBER 作为被叫。
-//
-// 没有可用中继时直接返回 false；不再读 SIP_OUTBOUND_HOST 等 env 兜底。
-func resolveOutboundDialTarget(db *gorm.DB, store *persist.GormStore) (outbound.DialTarget, bool) {
-	if store != nil {
-		if n := utils.GetEnv(constants.EnvSIPTargetNumber); n != "" {
-			if dt, ok := store.DialTargetForUsername(context.Background(), n); ok {
-				return dt, true
-			}
-		}
-	}
-	return buildOutboundDialTargetFromDB(db)
-}
-
-// buildOutboundDialTargetFromDB 用 PickTrunkOutboundConfig + SIP_TARGET_NUMBER 拼一个外呼目标。
-//
-// SIP_TARGET_NUMBER 仅作为「试拨被叫号码」用，不再作为主叫身份；主叫已由 TrunkNumber 提供。
-// 找不到外呼 trunk 或 SIP_TARGET_NUMBER 为空均返回 false。
-func buildOutboundDialTargetFromDB(db *gorm.DB) (outbound.DialTarget, bool) {
+// logPlatformOutboundTrunkAtStartup logs gateway/signaling when tenant 0 has an outbound-capable trunk (informational only).
+func logPlatformOutboundTrunkAtStartup(db *gorm.DB) {
 	if db == nil {
-		return outbound.DialTarget{}, false
-	}
-	target := strings.TrimSpace(utils.GetEnv(constants.EnvSIPTargetNumber))
-	if target == "" {
-		return outbound.DialTarget{}, false
+		return
 	}
 	cfg, ok := models.PickTrunkOutboundConfig(db, 0)
 	if !ok {
-		return outbound.DialTarget{}, false
+		return
 	}
-	dt, ok := outbound.DialTargetFromACDTrunk(target, cfg.Host, "", cfg.Port)
-	if !ok {
-		return outbound.DialTarget{}, false
+	sig := cfg.SignalingAddr()
+	if logger.Lg != nil {
+		logger.Lg.Info("sipapp: platform outbound trunk configured",
+			zap.String("gateway_host", cfg.Host),
+			zap.Int("gateway_port", cfg.Port),
+			zap.String("signaling", sig),
+		)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "sipapp: platform outbound trunk configured host=%s port=%d signaling=%s\n", cfg.Host, cfg.Port, sig)
 	}
-	dt.CallerUser = cfg.CallerUser
-	dt.CallerDisplayName = cfg.CallerDisplay
-	return dt, true
 }
 
 // httpDialHostPortForVoicedialog maps HTTP listen addr (e.g. :8080, 0.0.0.0:8080) to a loopback host:port for ws dial.
@@ -466,20 +443,7 @@ func Start(cfg Config) (*Embedded, error) {
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "sipapp: listening on udp %s:%d (SDP local-ip effective=%q cli=%q)\n", cfg.Host, cfg.Port, localIP, strings.TrimSpace(cfg.LocalIP))
 	}
-	if dt, ok := resolveOutboundDialTarget(cfg.DB, sipRegStore); ok {
-		if logger.Lg != nil {
-			logger.Lg.Info("sipapp: outbound target ready",
-				zap.String("uri", dt.RequestURI),
-				zap.String("signaling", dt.SignalingAddr),
-			)
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "sipapp: outbound target ready: uri=%s signaling=%s\n", dt.RequestURI, dt.SignalingAddr)
-		}
-	} else {
-		if utils.GetEnv(constants.EnvSIPTargetNumber) != "" {
-			_, _ = fmt.Fprintf(os.Stderr, "sipapp: SIP_TARGET_NUMBER 已设置但找不到外呼目标；请在「中继线路 / 中继号码」里给某条号码勾选 direction ∈ {outbound, both}。详见 docs/SIP_OUTBOUND_MODULE.md\n")
-		}
-	}
+	logPlatformOutboundTrunkAtStartup(cfg.DB)
 
 	return em, nil
 }
@@ -538,56 +502,111 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 		}
 	}
 	inboundTrunkNumberID := resolveInboundTrunkNumberPK(db, calledUser)
-	row, err := models.PickEligibleACDPoolTargetForTransfer(ctx, db, exclude, tenantID, inboundTrunkNumberID)
-	if err != nil {
-		return outbound.DialTarget{}, false
+	mode := models.ACDDispatchModeWeight
+	if inboundTrunkNumberID > 0 && tenantID > 0 {
+		if tn, err := models.GetTrunkNumberByIDForTenant(db, inboundTrunkNumberID, tenantID); err == nil && tn.ID > 0 {
+			mode = models.NormalizeACDDispatchMode(tn.ACDDispatchMode)
+		}
 	}
+	tried := append([]uint(nil), exclude...)
+	// Try multiple eligible rows in priority order. One misconfigured row should not block transfer.
+	for attempt := 0; attempt < 32; attempt++ {
+		row, err := models.PickEligibleACDPoolTargetForTransferWithMode(ctx, db, tried, tenantID, inboundTrunkNumberID, mode)
+		if err != nil {
+			return outbound.DialTarget{}, false
+		}
 
-	if row.RouteType == models.ACDPoolRouteTypeWeb {
-		if strings.TrimSpace(inboundCallID) != "" {
-			if err := models.UpdateACDPoolTargetWorkState(ctx, db, row.ID, models.ACDWorkStateRinging, "sip-transfer"); err == nil {
-				webseat.BindInboundCallToWebACD(strings.TrimSpace(inboundCallID), row.ID)
+		if row.RouteType == models.ACDPoolRouteTypeWeb {
+			if strings.TrimSpace(inboundCallID) != "" {
+				if err := models.UpdateACDPoolTargetWorkState(ctx, db, row.ID, models.ACDWorkStateRinging, "sip-transfer"); err == nil {
+					webseat.BindInboundCallToWebACD(strings.TrimSpace(inboundCallID), row.ID)
+				}
 			}
+			return outbound.DialTarget{WebSeat: true, ACDPoolTargetID: row.ID}, true
 		}
-		return outbound.DialTarget{WebSeat: true, ACDPoolTargetID: row.ID}, true
-	}
 
-	var dt outbound.DialTarget
-	src := strings.ToLower(strings.TrimSpace(row.SipSource))
-	switch src {
-	case models.ACDSipSourceTrunk:
-		t, ok := outbound.DialTargetFromACDTrunk(row.TargetValue, row.SipTrunkHost, row.SipTrunkSignalingAddr, row.SipTrunkPort)
-		if !ok {
-			return outbound.DialTarget{}, false
-		}
-		dt = t
-	default:
-		if reg == nil {
-			return outbound.DialTarget{}, false
-		}
-		u := strings.TrimSpace(row.TargetValue)
-		if u == "" {
-			return outbound.DialTarget{}, false
-		}
-		t, ok := reg.DialTargetForUsername(ctx, u)
-		if !ok {
-			return outbound.DialTarget{}, false
-		}
-		dt = t
-	}
-	dt.CallerUser = strings.TrimSpace(row.SipCallerID)
-	dt.CallerDisplayName = strings.TrimSpace(row.SipCallerDisplayName)
-	// 即便 ACD 行命中了，也允许 Trunk 信息补齐缺失字段（例如运营忘了在 ACD 行上填 caller_id）。
-	if dt.CallerUser == "" || dt.CallerDisplayName == "" {
-		if tc, ok := models.PickTrunkTransferConfig(db, tenantID); ok {
-			if dt.CallerUser == "" {
-				dt.CallerUser = tc.CallerUser
+		var dt outbound.DialTarget
+		picked := false
+		src := strings.ToLower(strings.TrimSpace(row.SipSource))
+		switch src {
+		case models.ACDSipSourceTrunk:
+			host := row.SipTrunkHost
+			sig := row.SipTrunkSignalingAddr
+			port := row.SipTrunkPort
+			// Compatibility fallback: allow legacy ACD trunk rows without explicit sip_trunk_host
+			// to use tenant trunk gateway from PickTrunkTransferConfig.
+			if strings.TrimSpace(host) == "" {
+				if tc, ok := models.PickTrunkTransferConfig(db, tenantID); ok {
+					host = tc.Host
+					if port <= 0 {
+						port = tc.Port
+					}
+					if strings.TrimSpace(sig) == "" {
+						sig = tc.SignalingAddr()
+					}
+				}
 			}
-			if dt.CallerDisplayName == "" {
-				dt.CallerDisplayName = tc.CallerDisplay
+			t, ok := outbound.DialTargetFromACDTrunk(row.TargetValue, host, sig, port)
+			if ok {
+				dt = t
+				picked = true
+			} else if logger.Lg != nil {
+				logger.Lg.Warn("sip transfer: skip acd row due to invalid sip trunk fields",
+					zap.String("call_id", strings.TrimSpace(inboundCallID)),
+					zap.Uint("acd_pool_target_id", row.ID),
+					zap.String("target_value", strings.TrimSpace(row.TargetValue)),
+					zap.String("sip_trunk_host", strings.TrimSpace(host)),
+					zap.Int("sip_trunk_port", port),
+				)
+			}
+		default:
+			u := strings.TrimSpace(row.TargetValue)
+			if reg == nil {
+				if logger.Lg != nil {
+					logger.Lg.Warn("sip transfer: skip acd row because sip registry store is nil",
+						zap.String("call_id", strings.TrimSpace(inboundCallID)),
+						zap.Uint("acd_pool_target_id", row.ID),
+					)
+				}
+			} else if u == "" {
+				if logger.Lg != nil {
+					logger.Lg.Warn("sip transfer: skip acd row due to empty sip username target",
+						zap.String("call_id", strings.TrimSpace(inboundCallID)),
+						zap.Uint("acd_pool_target_id", row.ID),
+					)
+				}
+			} else if t, ok := reg.DialTargetForUsername(ctx, u); ok {
+				dt = t
+				picked = true
+			} else if logger.Lg != nil {
+				logger.Lg.Warn("sip transfer: skip acd row because sip user not registered",
+					zap.String("call_id", strings.TrimSpace(inboundCallID)),
+					zap.Uint("acd_pool_target_id", row.ID),
+					zap.String("sip_username", u),
+				)
 			}
 		}
+
+		if !picked {
+			tried = append(tried, row.ID)
+			continue
+		}
+
+		dt.CallerUser = strings.TrimSpace(row.SipCallerID)
+		dt.CallerDisplayName = strings.TrimSpace(row.SipCallerDisplayName)
+		// 即便 ACD 行命中了，也允许 Trunk 信息补齐缺失字段（例如运营忘了在 ACD 行上填 caller_id）。
+		if dt.CallerUser == "" || dt.CallerDisplayName == "" {
+			if tc, ok := models.PickTrunkTransferConfig(db, tenantID); ok {
+				if dt.CallerUser == "" {
+					dt.CallerUser = tc.CallerUser
+				}
+				if dt.CallerDisplayName == "" {
+					dt.CallerDisplayName = tc.CallerDisplay
+				}
+			}
+		}
+		dt.ACDPoolTargetID = row.ID
+		return dt, true
 	}
-	dt.ACDPoolTargetID = row.ID
-	return dt, true
+	return outbound.DialTarget{}, false
 }

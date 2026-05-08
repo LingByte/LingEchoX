@@ -17,11 +17,8 @@ import (
 //	SIP_CALLER_DISPLAY_NAME  -> CallerDisplay （TrunkNumber.CallerDisplayName，可留空）
 //	SIP_TRANSFER_HOST        -> Host          （Trunk.LocalAddr 的主机部分）
 //	SIP_TRANSFER_PORT        -> Port          （Trunk.LocalAddr 的端口部分）
-//	SIP_OUTBOUND_HOST        -> Host          （外呼复用同一 Trunk.LocalAddr）
-//	SIP_OUTBOUND_PORT        -> Port          （同上）
-//	SIP_SIGNALING_ADDR       -> SignalingAddr()（host:port，如需对外暴露另一个 host:port 仍可用 env 覆盖）
 //
-// 当数据库里有可用的 Trunk + 号码时，应优先使用这里返回的值；env 仅作为兜底。
+// 外呼网关与信令地址一律来自 Trunk.LocalAddr（及解析结果）；不再使用 SIP_OUTBOUND_* / SIP_TARGET_NUMBER 等环境变量。
 type TrunkTransferConfig struct {
 	Host          string // 网关 host，如 "183.213.19.195"
 	Port          int    // 网关端口，如 50400
@@ -66,7 +63,7 @@ const (
 //	"sip:183.213.19.195:50400"
 //	"183.213.19.195"           （没有端口时，默认 50400）
 //
-// 任意一步失败都会返回 ok=false，调用方应直接报错（不再有 env 兜底）。
+// 任意一步失败都会返回 ok=false，调用方应直接报错。
 func PickTrunkConfig(db *gorm.DB, tenantID uint, role TrunkPickRole) (TrunkTransferConfig, bool) {
 	if db == nil {
 		return TrunkTransferConfig{}, false
@@ -110,9 +107,41 @@ func PickTrunkTransferConfig(db *gorm.DB, tenantID uint) (TrunkTransferConfig, b
 }
 
 // PickTrunkOutboundConfig 是 PickTrunkConfig(_, _, TrunkRoleOutbound) 的快捷方式。
-// 用于外呼场景（campaign worker / startup smoke-test），代替 SIP_OUTBOUND_HOST 等环境变量。
+// 用于外呼场景（campaign worker / 启动日志）；网关来自中继 LocalAddr。
 func PickTrunkOutboundConfig(db *gorm.DB, tenantID uint) (TrunkTransferConfig, bool) {
 	return PickTrunkConfig(db, tenantID, TrunkRoleOutbound)
+}
+
+// PickTrunkOutboundConfigByCaller selects trunk gateway by an explicitly specified caller number.
+// The matched number must belong to tenantID and be outbound-enabled (direction in outbound/both/all).
+func PickTrunkOutboundConfigByCaller(db *gorm.DB, tenantID uint, callerRaw string) (TrunkTransferConfig, bool) {
+	if db == nil || tenantID == 0 {
+		return TrunkTransferConfig{}, false
+	}
+	row, ok := FindTrunkNumberForOutboundCaller(db, tenantID, callerRaw)
+	if !ok || row.ID == 0 {
+		return TrunkTransferConfig{}, false
+	}
+	dir := strings.ToLower(strings.TrimSpace(row.Direction))
+	if dir != "outbound" && dir != "both" && dir != "all" {
+		return TrunkTransferConfig{}, false
+	}
+	var trunk Trunk
+	if err := db.First(&trunk, row.TrunkID).Error; err != nil {
+		return TrunkTransferConfig{}, false
+	}
+	host, port, ok := parseTrunkLocalAddr(trunk.LocalAddr)
+	if !ok {
+		return TrunkTransferConfig{}, false
+	}
+	return TrunkTransferConfig{
+		Host:          host,
+		Port:          port,
+		CallerUser:    strings.TrimSpace(row.Number),
+		CallerDisplay: strings.TrimSpace(row.CallerDisplayName),
+		TrunkID:       trunk.ID,
+		TrunkNumberID: row.ID,
+	}, true
 }
 
 // pickTrunkNumberForTenant 在「号码所属租户 = tenantID」的范围内，按 role 选一条号码。

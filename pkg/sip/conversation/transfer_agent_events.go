@@ -15,7 +15,8 @@ import (
 )
 
 var (
-	transferInviteTimers   sync.Map // outbound Call-ID -> *time.Timer
+	transferInviteTimers sync.Map // outbound Call-ID -> *time.Timer
+	webSeatJoinTimers    sync.Map // inbound Call-ID -> *time.Timer
 	transferLegAbandonMu sync.Mutex
 	transferLegAbandonFn func(callID string) bool
 
@@ -128,6 +129,52 @@ func cancelTransferInviteWatch(outbound string) {
 	}
 }
 
+func scheduleWebSeatJoinWatch(inbound string, acdTargetID uint) {
+	inbound = strings.TrimSpace(inbound)
+	if inbound == "" {
+		return
+	}
+	cancelWebSeatJoinWatch(inbound)
+	d := transferAnswerTimeout()
+	t := time.AfterFunc(d, func() {
+		v, loaded := webSeatJoinTimers.LoadAndDelete(inbound)
+		if !loaded || v == nil {
+			return
+		}
+		if ActiveTransferBridgeForCallID(inbound) || ActiveWebSeatBridge(inbound) {
+			return
+		}
+		if acdTargetID != 0 {
+			transferExcludeAdd(inbound, acdTargetID)
+		}
+		webseat.ReleaseInboundWebACDOffer(inbound)
+		transferStarted.Delete(inbound)
+		transferLastACDRowByInbound.Delete(inbound)
+		notifyTransferPhase(inbound, "retrying", map[string]any{"reason": "webseat_join_timeout"})
+		lg := logger.Lg
+		if lg == nil {
+			lg = zap.NewNop()
+		}
+		go func() {
+			time.Sleep(60 * time.Millisecond)
+			TriggerTransferToAgent(context.Background(), inbound, lg)
+		}()
+	})
+	webSeatJoinTimers.Store(inbound, t)
+}
+
+func cancelWebSeatJoinWatch(inbound string) {
+	inbound = strings.TrimSpace(inbound)
+	if inbound == "" {
+		return
+	}
+	if v, ok := webSeatJoinTimers.LoadAndDelete(inbound); ok && v != nil {
+		if t, ok := v.(*time.Timer); ok {
+			t.Stop()
+		}
+	}
+}
+
 func transferFailureRetryable(code int, reason string) bool {
 	r := strings.ToLower(strings.TrimSpace(reason))
 	if strings.Contains(r, "transfer_invite_timeout") {
@@ -180,14 +227,16 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 		transferExcludeReset(inbound)
 		transferStarted.Delete(inbound)
 		notifyTransferPhase(inbound, "failed", map[string]any{"sip_code": evt.StatusCode, "reason": evt.Reason})
-		go playNoSeatGoodbyeAndHangup(context.Background(), inbound, lg)
+		startTransferRinging(context.Background(), inbound, lg)
+		startNoAgentRetryLoop(inbound, lg)
 		return
 	}
 	if !transferFailureRetryable(evt.StatusCode, evt.Reason) {
 		transferExcludeReset(inbound)
 		transferStarted.Delete(inbound)
 		notifyTransferPhase(inbound, "failed", map[string]any{"sip_code": evt.StatusCode, "reason": evt.Reason})
-		go playNoSeatGoodbyeAndHangup(context.Background(), inbound, lg)
+		startTransferRinging(context.Background(), inbound, lg)
+		startNoAgentRetryLoop(inbound, lg)
 		return
 	}
 	var rowID uint
@@ -218,6 +267,8 @@ func ResetTransferRoutingState(inboundCallID string) {
 	}
 	transferExcludeReset(inboundCallID)
 	transferLastACDRowByInbound.Delete(inboundCallID)
+	cancelWebSeatJoinWatch(inboundCallID)
+	stopNoAgentRetryLoop(inboundCallID)
 }
 
 // OnWebSeatJoinTimeout is invoked after the browser seat misses the join deadline; tries the next ACD target.
@@ -229,6 +280,10 @@ func OnWebSeatJoinTimeout(inboundCallID string, acdTargetID uint) {
 	if acdTargetID != 0 {
 		transferExcludeAdd(inboundCallID, acdTargetID)
 	}
+	cancelWebSeatJoinWatch(inboundCallID)
+	transferStarted.Delete(inboundCallID)
+	transferLastACDRowByInbound.Delete(inboundCallID)
+	webseat.ReleaseInboundWebACDOffer(inboundCallID)
 	lg := logger.Lg
 	if lg == nil {
 		lg = zap.NewNop()

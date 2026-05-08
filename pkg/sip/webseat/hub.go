@@ -277,6 +277,35 @@ func (h *Hub) broadcastIncoming(callID string) {
 	}
 }
 
+// broadcastIncomingEnd notifies agents that the incoming card/ringing for call_id should stop.
+func (h *Hub) broadcastIncomingEnd(callID, reason string) {
+	if h == nil || strings.TrimSpace(callID) == "" {
+		return
+	}
+	msg, err := json.Marshal(map[string]any{
+		"type":    "incoming_end",
+		"call_id": strings.TrimSpace(callID),
+		"reason":  strings.TrimSpace(reason),
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	h.wsMu.Lock()
+	list := make([]*websocket.Conn, 0, len(h.wsConns))
+	for c := range h.wsConns {
+		list = append(list, c)
+	}
+	h.wsMu.Unlock()
+	for _, c := range list {
+		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+			_ = c.Close()
+			h.wsRemove(c)
+		}
+	}
+}
+
 // broadcastPresence notifies all agent WS clients of current listener count (replaces a separate HTTP presence probe).
 func (h *Hub) broadcastPresence() {
 	if h == nil {
@@ -364,6 +393,7 @@ func (h *Hub) awaitWatchdog(callID string) {
 		if h.cfg.OnWebSeatJoinTimeout != nil {
 			h.cfg.OnWebSeatJoinTimeout(callID, acdID)
 		}
+		h.broadcastIncomingEnd(callID, "join_timeout")
 	}
 }
 
@@ -441,6 +471,7 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 		if waiting {
 			delete(h.awaiting, callID)
 			h.mu.Unlock()
+			h.broadcastIncomingEnd(callID, "ended")
 			initiator := "remote"
 			if sendByeToCustomer {
 				initiator = "local"
@@ -473,6 +504,7 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 	}
 	delete(h.active, callID)
 	h.mu.Unlock()
+	h.broadcastIncomingEnd(callID, "ended")
 
 	initiator := "remote"
 	if sendByeToCustomer {

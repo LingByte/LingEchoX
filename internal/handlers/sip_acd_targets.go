@@ -21,17 +21,14 @@ type acdPoolTargetWriteReq struct {
 	// TrunkNumberID 把这条坐席绑定到「某个具体的中继号码」（即被叫号码）。
 	// 0 = 任意号码（全租户兜底）；>0 = 仅对该 TrunkNumber 生效。
 	// 租户写入时后端会校验：该 TrunkNumber 必须 tenant_id = 当前租户。
-	TrunkNumberID         uint   `json:"trunkNumberId"`
-	RouteType             string `json:"routeType"`
-	SipSource             string `json:"sipSource"` // internal | trunk (SIP only)
-	TargetValue           string `json:"targetValue"`
-	SipTrunkHost          string `json:"sipTrunkHost"`
-	SipTrunkPort          int    `json:"sipTrunkPort"`
-	SipTrunkSignalingAddr string `json:"sipTrunkSignalingAddr"`
-	SipCallerID           string `json:"sipCallerId"`
-	SipCallerDisplayName  string `json:"sipCallerDisplayName"`
-	Weight                int    `json:"weight"`
-	WorkState             string `json:"workState"`
+	TrunkNumberID        uint   `json:"trunkNumberId"`
+	RouteType            string `json:"routeType"`
+	SipSource            string `json:"sipSource"` // internal | trunk (SIP only)
+	TargetValue          string `json:"targetValue"`
+	SipCallerID          string `json:"sipCallerId"`
+	SipCallerDisplayName string `json:"sipCallerDisplayName"`
+	Weight               int    `json:"weight"`
+	WorkState            string `json:"workState"`
 	// ShiftSchedule JSON: e.g. [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}] (weekdays 0=Sun .. 6=Sat). Empty = 24/7.
 	ShiftSchedule string `json:"shiftSchedule"`
 }
@@ -107,6 +104,62 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 	response.Success(c, "success", gin.H{"list": out, "total": total, "page": page, "size": size})
 }
 
+// getACDDispatchMode returns current dispatch mode for one trunkNumberId (tenant-owned).
+func (h *Handlers) getACDDispatchMode(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
+	var trunkNumID uint
+	if s := strings.TrimSpace(c.Query("trunkNumberId")); s != "" {
+		if v, err := strconv.ParseUint(s, 10, 32); err == nil {
+			trunkNumID = uint(v)
+		}
+	}
+	if trunkNumID == 0 {
+		response.Fail(c, "invalid trunkNumberId", nil)
+		return
+	}
+	if !h.validateTrunkNumberOwnedByTenant(c, trunkNumID, tid) {
+		return
+	}
+	num, err := models.GetTrunkNumberByIDForTenant(h.db, trunkNumID, tid)
+	if err != nil || num.ID == 0 {
+		response.Fail(c, "not found", nil)
+		return
+	}
+	response.Success(c, "success", gin.H{"trunkNumberId": trunkNumID, "acdDispatchMode": models.NormalizeACDDispatchMode(num.ACDDispatchMode)})
+}
+
+type acdDispatchModeReq struct {
+	TrunkNumberID   uint   `json:"trunkNumberId"`
+	ACDDispatchMode string `json:"acdDispatchMode"`
+}
+
+// updateACDDispatchMode updates sip_trunk_numbers.acd_dispatch_mode for the current tenant.
+func (h *Handlers) updateACDDispatchMode(c *gin.Context) {
+	tid, ok := requireTenant(c)
+	if !ok {
+		return
+	}
+	var req acdDispatchModeReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.TrunkNumberID == 0 {
+		response.Fail(c, "invalid body: need trunkNumberId", nil)
+		return
+	}
+	if !h.validateTrunkNumberOwnedByTenant(c, req.TrunkNumberID, tid) {
+		return
+	}
+	mode := models.NormalizeACDDispatchMode(req.ACDDispatchMode)
+	if err := h.db.Model(&models.TrunkNumber{}).
+		Where("id = ? AND tenant_id = ?", req.TrunkNumberID, tid).
+		Update("acd_dispatch_mode", mode).Error; err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{"trunkNumberId": req.TrunkNumberID, "acdDispatchMode": mode})
+}
+
 func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 	tid, ok := requireTenant(c)
 	if !ok {
@@ -155,6 +208,10 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		return
 	}
 	ws := models.NormalizeACDWorkState(req.WorkState)
+	if ws != models.ACDWorkStateAvailable && ws != models.ACDWorkStateOffline && ws != models.ACDWorkStateBreak {
+		response.Fail(c, "workState 仅允许 available/offline/break", nil)
+		return
+	}
 	now := time.Now()
 	sipSrc := ""
 	if rt == models.ACDPoolRouteTypeSIP {
@@ -167,7 +224,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 	}
 	row := models.NewACDPoolTargetForCreate(
 		req.Name, rt, sipSrc, req.TargetValue,
-		req.SipTrunkHost, req.SipTrunkPort, req.SipTrunkSignalingAddr,
+		"", 0, "",
 		req.SipCallerID, req.SipCallerDisplayName,
 		req.Weight, ws, now, webSeen,
 		req.ShiftSchedule,
@@ -256,6 +313,10 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		return
 	}
 	ws := models.NormalizeACDWorkState(req.WorkState)
+	if ws != models.ACDWorkStateAvailable && ws != models.ACDWorkStateOffline && ws != models.ACDWorkStateBreak {
+		response.Fail(c, "workState 仅允许 available/offline/break", nil)
+		return
+	}
 	now := time.Now()
 	sipSrc := ""
 	if rt == models.ACDPoolRouteTypeSIP {
@@ -265,7 +326,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 	op := acdOperator(c)
 	updates := models.BuildACDPoolTargetUpdateMap(
 		row, req.Name, rt, sipSrc, req.TargetValue,
-		req.SipTrunkHost, req.SipTrunkPort, req.SipTrunkSignalingAddr,
+		"", 0, "",
 		req.SipCallerID, req.SipCallerDisplayName,
 		req.Weight, ws, now, op,
 		req.ShiftSchedule,

@@ -32,6 +32,18 @@ export const ACD_ROUTE_TYPES: ACDRouteType[] = ['sip', 'web']
 export const ACD_WORK_STATES = ['offline', 'available', 'ringing', 'busy', 'acw', 'break'] as const
 export type ACDWorkState = (typeof ACD_WORK_STATES)[number]
 
+export const ACD_DISPATCH_MODES = ['weight', 'round_robin'] as const
+export type ACDDispatchMode = (typeof ACD_DISPATCH_MODES)[number]
+
+export async function getACDDispatchMode(trunkNumberId: number): Promise<ApiResponse<{ trunkNumberId: number; acdDispatchMode: ACDDispatchMode }>> {
+  const q = new URLSearchParams({ trunkNumberId: String(trunkNumberId) })
+  return get(`/sip-center/acd-dispatch-mode?${q.toString()}`)
+}
+
+export async function updateACDDispatchMode(trunkNumberId: number, acdDispatchMode: ACDDispatchMode): Promise<ApiResponse<{ trunkNumberId: number; acdDispatchMode: ACDDispatchMode }>> {
+  return put('/sip-center/acd-dispatch-mode', { trunkNumberId, acdDispatchMode })
+}
+
 export async function listACDPoolTargets(
   page = 1,
   size = 20,

@@ -3,6 +3,7 @@ package persist
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,9 +11,9 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
-	"github.com/LingByte/SoulNexus/pkg/stores"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
+	"github.com/LingByte/SoulNexus/pkg/stores"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -86,6 +87,7 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	}
 
 	sipAgent, webSeat := conversation.TakeInboundTransferFlags(callID)
+	transferTargetID := conversation.TakeInboundTransferACDTargetID(callID)
 	endStatus := SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
 
 	now := time.Now()
@@ -95,6 +97,9 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 		durationSec = SIPCallDurationSince(call.AckAt, call.InviteAt, now)
 	}
 	updates := SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
+	if transferTargetID > 0 {
+		updates["transfer_acd_target_id"] = transferTargetID
+	}
 	if bi := strings.ToLower(strings.TrimSpace(initiator)); bi != "" {
 		updates["bye_initiator"] = bi
 	}
@@ -156,6 +161,9 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 		}
 		if len(wav) > 0 {
+			if wavSec := wavDurationSec(wav); wavSec > 0 {
+				updates["duration_sec"] = wavSec
+			}
 			key := fmt.Sprintf("sip/recordings/%s_%d.wav", sanitizeRecordingKey(callID), now.Unix())
 			if err := store.Write(bucket, key, bytes.NewReader(wav)); err != nil {
 				s.lg.Warn("sippersist recording upload", zap.String("call_id", callID), zap.Error(err))
@@ -280,4 +288,51 @@ func sanitizeRecordingKey(s string) string {
 		return out[:120]
 	}
 	return out
+}
+
+// wavDurationSec parses a minimal PCM WAV header and returns rounded seconds.
+// It is used to keep sip_calls.duration_sec aligned with the actual uploaded audio.
+func wavDurationSec(wav []byte) int {
+	if len(wav) < 44 {
+		return 0
+	}
+	if string(wav[0:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
+		return 0
+	}
+	var byteRate uint32
+	var dataSize uint32
+	i := 12
+	for i+8 <= len(wav) {
+		chunkID := string(wav[i : i+4])
+		chunkSize := int(binary.LittleEndian.Uint32(wav[i+4 : i+8]))
+		if chunkSize < 0 {
+			return 0
+		}
+		payloadStart := i + 8
+		payloadEnd := payloadStart + chunkSize
+		if payloadEnd > len(wav) {
+			break
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize >= 16 {
+				byteRate = binary.LittleEndian.Uint32(wav[payloadStart+8 : payloadStart+12])
+			}
+		case "data":
+			dataSize = uint32(chunkSize)
+		}
+		advance := 8 + chunkSize
+		if chunkSize%2 == 1 {
+			advance++
+		}
+		i += advance
+	}
+	if byteRate == 0 || dataSize == 0 {
+		return 0
+	}
+	sec := int((float64(dataSize) / float64(byteRate)) + 0.5) // round to nearest second
+	if sec < 0 {
+		return 0
+	}
+	return sec
 }

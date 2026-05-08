@@ -24,9 +24,6 @@ func DialTargetFromACDTrunk(userPart, host, signalingOverride string, port int) 
 		host = utils.GetEnv(constants.EnvSIPTransferHost)
 	}
 	if host == "" {
-		host = utils.GetEnv(constants.EnvSIPOutboundHost)
-	}
-	if host == "" {
 		return DialTarget{}, false
 	}
 	if port <= 0 || port >= 65536 {

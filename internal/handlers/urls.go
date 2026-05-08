@@ -88,6 +88,7 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 	{
 		acdRead.GET("/acd-pool", h.listACDPoolTargets)
 		acdRead.GET("/acd-pool/:id", h.getACDPoolTarget)
+		acdRead.GET("/acd-dispatch-mode", h.getACDDispatchMode)
 	}
 	acdWrite := g.Group("")
 	acdWrite.Use(middleware.RequireTenantPermissionAll("api.sip.acd.write"))
@@ -95,6 +96,7 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		acdWrite.POST("/acd-pool", h.createACDPoolTarget)
 		acdWrite.PUT("/acd-pool/:id", h.updateACDPoolTarget)
 		acdWrite.DELETE("/acd-pool/:id", h.deleteACDPoolTarget)
+		acdWrite.PUT("/acd-dispatch-mode", h.updateACDDispatchMode)
 	}
 	acdSeat := g.Group("")
 	acdSeat.Use(middleware.RequireTenantPermissionAny("api.sip.acd.read", "api.sip.acd.write"))

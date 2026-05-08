@@ -2,7 +2,10 @@ package models
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
@@ -49,10 +52,10 @@ type ACDPoolTarget struct {
 	// 没有则回退到 trunk_number_id = 0 的全局兜底行。
 	TrunkNumberID         uint       `json:"trunkNumberId" gorm:"column:trunk_number_id;not null;default:0;index"` // per-number routing
 	Name                  string     `json:"name" gorm:"size:128"`                                                 // optional admin label
-	RouteType             string     `json:"routeType" gorm:"size:16;not null;index"`            // RouteType is ACDPoolRouteTypeSIP or ACDPoolRouteTypeWeb.
-	TargetValue           string     `json:"targetValue" gorm:"size:256"`                        // TargetValue: sip internal → sip_users.username; sip trunk → dial digits / URI; web → usually empty.
-	SipSource             string     `json:"sipSource" gorm:"size:16;not null;default:'';index"` // SipSource: internal | trunk when RouteType is SIP; empty when web.
-	SipTrunkHost          string     `json:"sipTrunkHost" gorm:"size:128"`                       // Sip trunk only: next SIP hop for INVITE (Request-URI host:port + optional signaling override).
+	RouteType             string     `json:"routeType" gorm:"size:16;not null;index"`                              // RouteType is ACDPoolRouteTypeSIP or ACDPoolRouteTypeWeb.
+	TargetValue           string     `json:"targetValue" gorm:"size:256"`                                          // TargetValue: sip internal → sip_users.username; sip trunk → dial digits / URI; web → usually empty.
+	SipSource             string     `json:"sipSource" gorm:"size:16;not null;default:'';index"`                   // SipSource: internal | trunk when RouteType is SIP; empty when web.
+	SipTrunkHost          string     `json:"sipTrunkHost" gorm:"size:128"`                                         // Sip trunk only: next SIP hop for INVITE (Request-URI host:port + optional signaling override).
 	SipTrunkPort          int        `json:"sipTrunkPort" gorm:"not null;default:0"`
 	SipTrunkSignalingAddr string     `json:"sipTrunkSignalingAddr" gorm:"size:160"` // host:port, optional; default host:port from above
 	SipCallerID           string     `json:"sipCallerId" gorm:"size:64"`            // SIP only: optional outbound From user / display (like SIP_CALLER_ID); empty → cmd/sip uses global .env default.
@@ -420,6 +423,73 @@ func PickEligibleACDPoolTargetForTransfer(ctx context.Context, db *gorm.DB, excl
 		return ACDPoolTarget{}, gorm.ErrRecordNotFound
 	}
 	return rows[0], nil
+}
+
+var acdRRLastPicked sync.Map // key=tenantID:trunkNumberScope:topWeight -> uint(lastPickedTargetID)
+
+// PickEligibleACDPoolTargetForTransferWithMode picks one eligible target using the given dispatch mode.
+// Modes:
+//   - weight: deterministic (existing behavior): highest weight, then lowest id.
+//   - round_robin: hybrid strategy (available-only + top-weight first + round-robin among same top weight).
+//     This gives "idle priority + weight + round-robin" in one normalized flow.
+func PickEligibleACDPoolTargetForTransferWithMode(ctx context.Context, db *gorm.DB, excludeIDs []uint, tenantID uint, inboundTrunkNumberID uint, mode string) (ACDPoolTarget, error) {
+	mode = NormalizeACDDispatchMode(mode)
+	if mode != ACDDispatchModeRoundRobin {
+		return PickEligibleACDPoolTargetForTransfer(ctx, db, excludeIDs, tenantID, inboundTrunkNumberID)
+	}
+	rows, err := ListEligibleACDPoolTargetsForTransfer(ctx, db, excludeIDs, 64, tenantID, inboundTrunkNumberID)
+	if err != nil {
+		return ACDPoolTarget{}, err
+	}
+	if len(rows) == 0 {
+		return ACDPoolTarget{}, gorm.ErrRecordNotFound
+	}
+	// Always sort by id for stable RR candidate order.
+	slices.SortFunc(rows, func(a, b ACDPoolTarget) int {
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
+	})
+	// Keep only the top-weight group: weight priority remains effective in RR mode.
+	topWeight := rows[0].Weight
+	group := make([]ACDPoolTarget, 0, len(rows))
+	for _, r := range rows {
+		if r.Weight == topWeight {
+			group = append(group, r)
+		}
+	}
+	if len(group) == 0 {
+		return ACDPoolTarget{}, gorm.ErrRecordNotFound
+	}
+
+	key := fmt.Sprintf("%d:%d:%d", tenantID, inboundTrunkNumberID, topWeight)
+	var last uint
+	if v, ok := acdRRLastPicked.Load(key); ok {
+		if n, ok := v.(uint); ok {
+			last = n
+		}
+	}
+	// find next after last id (wrap)
+	pick := group[0]
+	if last != 0 {
+		for i := 0; i < len(group); i++ {
+			if group[i].ID == last {
+				pick = group[(i+1)%len(group)]
+				break
+			}
+			// if last falls between ids, pick the first higher id
+			if group[i].ID > last {
+				pick = group[i]
+				break
+			}
+		}
+	}
+	acdRRLastPicked.Store(key, pick.ID)
+	return pick, nil
 }
 
 // MarkACDPoolTargetsOfflineOutsideSchedule forces offline when current time is outside configured shift windows.

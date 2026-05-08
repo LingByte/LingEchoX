@@ -421,7 +421,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
             <Select
               value={form.workState}
               onChange={(v) => setForm((f) => ({ ...f, workState: v as string }))}
-              options={ACD_WORK_STATES.map((ws) => ({ label: workStateLabel(ws), value: ws }))}
+              options={ACD_WORK_STATES.filter((ws) => ws === 'offline' || ws === 'available' || ws === 'break').map((ws) => ({ label: workStateLabel(ws), value: ws }))}
             />
           </div>
           <div>

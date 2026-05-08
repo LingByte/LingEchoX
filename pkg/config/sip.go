@@ -11,44 +11,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// SIPDialEnv holds outbound dial fields parsed from environment. Callers map this to
-// pkg/sip/outbound.DialTarget at the SIP boundary so this package does not import outbound
+// SIPDialEnv holds SIP dial fields parsed from SIP_TRANSFER_* environment variables.
+// Callers map this to pkg/sip/outbound.DialTarget at the SIP boundary so this package does not import outbound
 // (outbound HTTP helpers live in the same module and would create an import cycle).
 type SIPDialEnv struct {
 	RequestURI    string
 	SignalingAddr string
 	WebSeat       bool
-}
-
-// DialTargetFromEnv builds SIP dial fields from .env using utils.GetEnv.
-// Requires SIP_TARGET_NUMBER + SIP_OUTBOUND_HOST; builds sip:TARGET@HOST:PORT and signaling HOST:PORT unless SIP_SIGNALING_ADDR is set.
-//
-// Returns ok=false if required variables are missing.
-func DialTargetFromEnv() (t SIPDialEnv, ok bool) {
-	sig := utils.GetEnv(constants.EnvSIPSignalingAddr)
-	target := utils.GetEnv(constants.EnvSIPTargetNumber)
-	host := utils.GetEnv(constants.EnvSIPOutboundHost)
-	if target == "" || host == "" {
-		return SIPDialEnv{}, false
-	}
-
-	port := 6050
-	if ps := utils.GetEnv(constants.EnvSIPOutboundPort); ps != "" {
-		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
-			port = p
-			logger.Info("parse ture", zap.Int("port", port))
-		} else {
-			logger.Error("parse error", zap.Error(err))
-		}
-	}
-
-	t.RequestURI = fmt.Sprintf("sip:%s@%s:%d", target, host, port)
-	if sig == "" {
-		t.SignalingAddr = fmt.Sprintf("%s:%d", host, port)
-	} else {
-		t.SignalingAddr = sig
-	}
-	return t, true
 }
 
 // CallerIdentityFromEnv reads SIP_CALLER_ID / SIP_CALLER_DISPLAY_NAME for outbound INVITE From/Contact.
@@ -66,7 +35,6 @@ func RegisterPasswordFromEnv() string {
 }
 
 // TransferDialTargetFromEnv reads SIP_TRANSFER_* (agent extension for blind transfer dial).
-// Same shape as DialTargetFromEnv but separate keys so campaign and transfer can coexist.
 func TransferDialTargetFromEnv() (t SIPDialEnv, ok bool) {
 	sig := utils.GetEnv(constants.EnvSIPTransferSigAddr)
 	num := utils.GetEnv(constants.EnvSIPTransferNumber)

@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LingByte/SoulNexus/pkg/media"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
 	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
@@ -26,18 +25,19 @@ type TransferDialer interface {
 }
 
 var (
-	transferMu       sync.Mutex
-	transferDialer   TransferDialer
+	transferMu     sync.Mutex
+	transferDialer TransferDialer
 	// Optional: DB-backed dial target (acd_pool_targets); env fallback only when this resolver is nil.
 	// inboundCallID is the PSTN inbound Call-ID (used to bind Web ACD rows to this call).
 	// excludeIDs lists acd_pool_targets ids already attempted for this inbound leg (SIP busy / no-answer chain).
 	transferDialTarget func(context.Context, string, []uint) (outbound.DialTarget, bool)
 	// WebSeatTransfer starts inbound ↔ browser WebRTC bridging when DialTarget.WebSeat (pool route_type web).
 	// If nil and WebSeat is requested, transfer logs a warning and releases the dedupe slot.
-	webSeatTransfer func(inboundCallID string, lg *zap.Logger)
-	transferStarted sync.Map // inbound Call-ID -> bool (dedupe)
-	transferRingMu   sync.Mutex
-	transferRingStop map[string]context.CancelFunc
+	webSeatTransfer      func(inboundCallID string, lg *zap.Logger)
+	transferStarted      sync.Map // inbound Call-ID -> bool (dedupe)
+	transferRingMu       sync.Mutex
+	transferRingStop     map[string]context.CancelFunc
+	transferNoAgentRetry sync.Map // inbound Call-ID -> context.CancelFunc
 )
 
 // SetTransferDialer wires the outbound module (call from cmd/sip after creating outbound.Manager).
@@ -109,7 +109,8 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 			lg.Warn("sip transfer: configure SIP_TRANSFER_* env for standalone mode, or wire SetTransferDialTargetResolver (ACD pool) in cmd/sip")
 		}
 		notifyTransferPhase(inboundCallID, "no_agent", map[string]any{"reason": "no_dial_target"})
-		go playNoSeatGoodbyeAndHangup(ctx, inboundCallID, lg)
+		startTransferRinging(context.Background(), inboundCallID, lg)
+		startNoAgentRetryLoop(inboundCallID, lg)
 		return
 	}
 
@@ -117,6 +118,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		lg.Info("sip transfer: already started for this call", zap.String("call_id", inboundCallID))
 		return
 	}
+	stopNoAgentRetryLoop(inboundCallID)
 
 	if tgt.ACDPoolTargetID != 0 {
 		transferLastACDRowByInbound.Store(inboundCallID, tgt.ACDPoolTargetID)
@@ -138,6 +140,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		notifyTransferPhase(inboundCallID, "loading", nil)
 		startTransferRinging(ctx, inboundCallID, lg)
 		notifyTransferPhase(inboundCallID, "ringing", nil)
+		scheduleWebSeatJoinWatch(inboundCallID, tgt.ACDPoolTargetID)
 		go func() { webFn(inboundCallID, lg) }()
 		return
 	}
@@ -177,13 +180,15 @@ func startTransferRinging(ctx context.Context, inboundCallID string, lg *zap.Log
 	if inbound == nil {
 		return
 	}
-	stopTransferRinging(inboundCallID)
-
-	runCtx, cancel := context.WithCancel(ctx)
 	transferRingMu.Lock()
 	if transferRingStop == nil {
 		transferRingStop = make(map[string]context.CancelFunc)
 	}
+	if _, exists := transferRingStop[inboundCallID]; exists {
+		transferRingMu.Unlock()
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
 	transferRingStop[inboundCallID] = cancel
 	transferRingMu.Unlock()
 
@@ -239,8 +244,6 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 	if bytesPerFrame <= 0 {
 		bytesPerFrame = 640
 	}
-	const maxRingDuration = 35 * time.Second
-	deadline := time.Now().Add(maxRingDuration)
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	if lg != nil {
@@ -248,9 +251,6 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 	}
 	offset := 0
 	for {
-		if time.Now().After(deadline) {
-			return nil
-		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -283,104 +283,54 @@ func errorsIsCtxDone(err error) bool {
 	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
-// sipTransferGoodbyeTailWait is extra wall time after the last goodbye PCM frame is queued, so playout
-// can finish before BYE (RTP jitter buffer / far-end playout). Override with SIP_TRANSFER_GOODBYE_TAIL_MS (milliseconds).
-func sipTransferGoodbyeTailWait() time.Duration {
-	const defaultMS = 900
-	raw := utils.GetEnv("SIP_TRANSFER_GOODBYE_TAIL_MS")
-	if raw == "" {
-		return defaultMS * time.Millisecond
+func startNoAgentRetryLoop(inboundCallID string, lg *zap.Logger) {
+	inboundCallID = strings.TrimSpace(inboundCallID)
+	if inboundCallID == "" {
+		return
 	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return defaultMS * time.Millisecond
+	if _, exists := transferNoAgentRetry.Load(inboundCallID); exists {
+		return
 	}
-	if n > 120000 {
-		n = 120000
+	runCtx, cancel := context.WithCancel(context.Background())
+	if old, loaded := transferNoAgentRetry.LoadOrStore(inboundCallID, cancel); loaded {
+		if oldCancel, ok := old.(context.CancelFunc); ok && oldCancel != nil {
+			oldCancel()
+		}
+		return
 	}
-	return time.Duration(n) * time.Millisecond
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		defer transferNoAgentRetry.Delete(inboundCallID)
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			if ActiveTransferBridgeForCallID(inboundCallID) || ActiveWebSeatBridge(inboundCallID) {
+				return
+			}
+			if _, active := transferStarted.Load(inboundCallID); active {
+				return
+			}
+			inbound := lookupInboundSession(inboundCallID)
+			if inbound == nil || inbound.MediaSession() == nil {
+				return
+			}
+			TriggerTransferToAgent(context.Background(), inboundCallID, lg)
+		}
+	}()
 }
 
-func playNoSeatGoodbyeAndHangup(ctx context.Context, inboundCallID string, lg *zap.Logger) {
-	transferExcludeReset(inboundCallID)
-	inbound := lookupInboundSession(inboundCallID)
-	if inbound == nil {
-		RequestSIPHangup(inboundCallID)
+func stopNoAgentRetryLoop(inboundCallID string) {
+	inboundCallID = strings.TrimSpace(inboundCallID)
+	if inboundCallID == "" {
 		return
 	}
-	ms := inbound.MediaSession()
-	if ms == nil {
-		RequestSIPHangup(inboundCallID)
-		return
-	}
-	path := "scripts/goodbye.wav"
-	if !filepath.IsAbs(path) {
-		path = filepath.Clean(path)
-	}
-	pcmSR := inbound.PCMSampleRate()
-	if pcmSR <= 0 {
-		pcmSR = 16000
-	}
-	pcm, err := LoadWAVAsPCM16Mono(path, pcmSR)
-	if err != nil {
-		if lg != nil {
-			lg.Warn("sip transfer: load goodbye wav failed, hangup directly",
-				zap.String("inbound_call_id", inboundCallID),
-				zap.Error(err))
+	if v, ok := transferNoAgentRetry.LoadAndDelete(inboundCallID); ok && v != nil {
+		if cancel, ok := v.(context.CancelFunc); ok && cancel != nil {
+			cancel()
 		}
-		RequestSIPHangup(inboundCallID)
-		return
 	}
-	// Allow full WAV plus margin; a short cap used to avoid hanging forever if the session never ends.
-	pcmSecs := len(pcm) / (pcmSR * 2)
-	if pcmSecs < 1 {
-		pcmSecs = 1
-	}
-	maxRun := time.Duration(pcmSecs)*time.Second + 25*time.Second
-	if maxRun < 45*time.Second {
-		maxRun = 45 * time.Second
-	}
-	if maxRun > 3*time.Minute {
-		maxRun = 3 * time.Minute
-	}
-	runCtx, cancel := context.WithTimeout(ctx, maxRun)
-	defer cancel()
-	bytesPerFrame := pcmSR * 2 * 20 / 1000
-	if bytesPerFrame <= 0 {
-		bytesPerFrame = 640
-	}
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for off := 0; off < len(pcm); off += bytesPerFrame {
-		select {
-		case <-runCtx.Done():
-			RequestSIPHangup(inboundCallID)
-			return
-		case <-ms.GetContext().Done():
-			RequestSIPHangup(inboundCallID)
-			return
-		case <-ticker.C:
-		}
-		end := off + bytesPerFrame
-		if end > len(pcm) {
-			end = len(pcm)
-		}
-		frame := pcm[off:end]
-		if len(frame) == 0 {
-			continue
-		}
-		ms.SendToOutput("sip-transfer-no-seat-goodbye", &media.AudioPacket{
-			Payload:       frame,
-			IsSynthesized: true,
-		})
-	}
-	tail := sipTransferGoodbyeTailWait()
-	timer := time.NewTimer(tail)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-runCtx.Done():
-	case <-ms.GetContext().Done():
-	}
-	RequestSIPHangup(inboundCallID)
 }

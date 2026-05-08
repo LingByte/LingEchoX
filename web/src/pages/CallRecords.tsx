@@ -170,8 +170,7 @@ const CallRecords = () => {
                 <th className="text-left p-3 whitespace-nowrap">时间</th>
                 <th className="text-left p-3 whitespace-nowrap min-w-[72px]">对话轮次</th>
                 <th className="text-left p-3 whitespace-nowrap min-w-[72px]">录音</th>
-                <th className="text-left p-3 min-w-[120px]">失败原因</th>
-                <th className="text-right p-3 whitespace-nowrap min-w-[100px]">操作</th>
+                <th className="text-left p-3 whitespace-nowrap min-w-[100px]">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -199,7 +198,6 @@ const CallRecords = () => {
                       <td className="p-3 whitespace-nowrap text-xs">{fmt(c.endedAt || c.byeAt || c.updatedAt)}</td>
                       <td className="p-3 whitespace-nowrap text-xs">{c.turnCount != null && c.turnCount > 0 ? c.turnCount : '—'}</td>
                       <td className="p-3 whitespace-nowrap text-xs">{hasRec ? <span className="text-primary font-medium">有录音</span> : <span className="text-muted-foreground">—</span>}</td>
-                      <td className="p-3 max-w-[200px] align-top"><EllipsisHoverCell text={c.failureReason} lines={2} className="text-xs" /></td>
                       <td className="p-3 text-right whitespace-nowrap">
                         <Button type="outline" size="small" className="text-xs" onClick={() => void openCallDetailDrawer(c.id)}>
                           查看详情
@@ -253,8 +251,6 @@ const CallRecords = () => {
                         {detailField('ID', d.id)}
                         {detailField('状态', d.state || '—')}
                         {detailField('Dir', d.direction || '—')}
-                        {detailField('Codec', d.codec || '—')}
-                        {detailField('Payload', d.payloadType != null || d.clockRate ? `${d.payloadType ?? '—'} / ${d.clockRate ?? '—'}` : '—')}
                         {detailField('Dur(s)', d.durationSec ?? '—')}
                         {detailField('结束方式', d.endStatus ? sipAiEndStatusI18nKey(d.endStatus) : '—')}
                         {detailField('对话轮次', d.turnCount != null && d.turnCount > 0 ? d.turnCount : '—')}

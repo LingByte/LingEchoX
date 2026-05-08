@@ -17,15 +17,6 @@ func normalizeSIPRequestURI(u string) string {
 	return u
 }
 
-// DialTargetFromEnv reads SIP_* outbound env vars (see pkg/config) and maps them to DialTarget.
-func DialTargetFromEnv() (DialTarget, bool) {
-	e, ok := config.DialTargetFromEnv()
-	if !ok {
-		return DialTarget{}, false
-	}
-	return DialTarget{RequestURI: e.RequestURI, SignalingAddr: e.SignalingAddr, WebSeat: e.WebSeat}, true
-}
-
 // TransferDialTargetFromEnv reads SIP_TRANSFER_* env vars via pkg/config.
 func TransferDialTargetFromEnv() (DialTarget, bool) {
 	e, ok := config.TransferDialTargetFromEnv()

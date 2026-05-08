@@ -454,6 +454,10 @@ func (s *CampaignService) resolveRegisteredDialTarget(ctx context.Context, phone
 	return persist.DialTargetFromSIPUser(row), true
 }
 
+// shouldResolveFromRegister is true for extension-style callee strings (e.g. "alice"): the worker
+// resolves the latest REGISTER Contact and sends INVITE directly to that UA (lab / internal peers).
+// Pure digit strings and +E164 use buildDialTarget instead → Request-URI is sip:DIGITS@trunk_gateway,
+// which is what carrier PSTN outbound expects.
 func shouldResolveFromRegister(phone string) bool {
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
@@ -553,31 +557,45 @@ func (s *CampaignService) isDuplicateWithinWindow(ctx context.Context, contactID
 
 // buildDialTarget 决定一通外呼的 INVITE Request-URI + 信令地址。
 //
-// 网关（host:port）必须由数据库提供：
-//  1. 当前 campaign 所属租户名下「direction 允许外呼」的 TrunkNumber → 其 Trunk.LocalAddr 解析出的 host:port。
-//  2. tenantID=0 的平台级中继。
+// 网关（host:port）必须由数据库提供，且必须显式指定主叫号码（contact.callerUser）：
+//  1. 用 callerUser 命中当前租户的 TrunkNumber；
+//  2. 该号码 direction 必须允许外呼（outbound/both/all）；
+//  3. 再由其 Trunk.LocalAddr 解析 host:port。
 //
-// 数据库里没有可用 trunk → 直接报错，不再读 env 兜底（设计上「是否开通外呼」就该由 UI 决定）。
+// 未指定 callerUser 或 callerUser 不合法时，直接失败（不做“随便挑一条外呼号码”的回退）。
 func buildDialTarget(db *gorm.DB, c models.SIPCampaign, ct models.SIPCampaignContact) (outbound.DialTarget, error) {
-	cfg, ok := models.PickTrunkOutboundConfig(db, c.TenantID)
+	callerUser := strings.TrimSpace(ct.CallerUser)
+	if callerUser == "" {
+		return outbound.DialTarget{}, fmt.Errorf("外呼必须指定 callerUser（中继号码）")
+	}
+	cfg, ok := models.PickTrunkOutboundConfigByCaller(db, c.TenantID, callerUser)
 	if !ok {
-		return outbound.DialTarget{}, fmt.Errorf("租户 %d 没有可用外呼中继：请在「中继线路 / 中继号码」里给至少一条号码勾选 direction ∈ {outbound, both}", c.TenantID)
+		return outbound.DialTarget{}, fmt.Errorf("callerUser=%q 未命中可外呼中继号码（需属于当前租户且 direction ∈ {outbound,both,all}）", callerUser)
 	}
 	host := cfg.Host
 	port := cfg.Port
 	sigAddr := cfg.SignalingAddr()
 
 	if u := strings.TrimSpace(ct.RequestURI); u != "" {
-		return outbound.DialTarget{RequestURI: u, SignalingAddr: sigAddr}, nil
+		return outbound.DialTarget{
+			RequestURI:        u,
+			SignalingAddr:     sigAddr,
+			CallerUser:        cfg.CallerUser,
+			CallerDisplayName: cfg.CallerDisplay,
+		}, nil
 	}
 	if tmpl := strings.TrimSpace(c.RequestURIFmt); tmpl != "" {
 		return outbound.DialTarget{
-			RequestURI:    fmt.Sprintf(tmpl, strings.TrimSpace(ct.Phone)),
-			SignalingAddr: sigAddr,
+			RequestURI:        fmt.Sprintf(tmpl, strings.TrimSpace(ct.Phone)),
+			SignalingAddr:     sigAddr,
+			CallerUser:        cfg.CallerUser,
+			CallerDisplayName: cfg.CallerDisplay,
 		}, nil
 	}
 	return outbound.DialTarget{
-		RequestURI:    fmt.Sprintf("sip:%s@%s:%d", strings.TrimSpace(ct.Phone), host, port),
-		SignalingAddr: sigAddr,
+		RequestURI:        fmt.Sprintf("sip:%s@%s:%d", strings.TrimSpace(ct.Phone), host, port),
+		SignalingAddr:     sigAddr,
+		CallerUser:        cfg.CallerUser,
+		CallerDisplayName: cfg.CallerDisplay,
 	}, nil
 }

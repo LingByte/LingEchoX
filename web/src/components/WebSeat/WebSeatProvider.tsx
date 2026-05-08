@@ -185,7 +185,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       ws.onmessage = (ev) => {
         logRx('WS <-', String(ev.data || ''))
         try {
-          const data = JSON.parse(ev.data as string) as { type?: string; call_id?: string; ws_clients?: number; online?: boolean }
+          const data = JSON.parse(ev.data as string) as { type?: string; call_id?: string; ws_clients?: number; online?: boolean; reason?: string }
           if (data?.type === 'presence') {
             setPresenceWsClients(typeof data.ws_clients === 'number' ? data.ws_clients : 0)
             setPresenceOnline(Boolean(data.online))
@@ -195,6 +195,11 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
             const cid = String(data.call_id)
             setPendingIncomingCallId(cid)
             logSignal('incoming call', cid)
+          }
+          if (data?.type === 'incoming_end' && data.call_id) {
+            const cid = String(data.call_id)
+            setPendingIncomingCallId((prev) => (prev === cid ? null : prev))
+            logSignal('incoming end', { call_id: cid, reason: data.reason || '' })
           }
         } catch {}
       }
@@ -436,6 +441,16 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       logSignal('reject sent', cid, res.status)
     } catch {}
   }, [httpBase, logSignal, pendingIncomingCallId])
+
+  useEffect(() => {
+    if (!pendingIncomingCallId) return
+    const id = pendingIncomingCallId
+    const timer = window.setTimeout(() => {
+      setPendingIncomingCallId((prev) => (prev === id ? null : prev))
+      logSignal('incoming auto-cleared by timeout', id)
+    }, 31_000)
+    return () => window.clearTimeout(timer)
+  }, [logSignal, pendingIncomingCallId])
 
   useEffect(() => {
     if (!configured) return

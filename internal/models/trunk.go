@@ -48,8 +48,8 @@ type TrunkNumber struct {
 	// TenantID 表示「这条号码当前已分配给哪个租户」。
 	// 0 表示平台号池待分配；>0 表示该租户独占。租户用户只能看到 tenant_id = 自己的号码。
 	// 与 Trunk.TenantID 解耦：Trunk 通常是平台级（tenant_id=0）的运营商资源，号码却是按个分配。
-	TenantID  uint   `json:"tenantId" gorm:"column:tenant_id;index;not null;default:0" label:"分配租户"`
-	Number    string `json:"number" gorm:"size:200" label:"号码"`
+	TenantID uint   `json:"tenantId" gorm:"column:tenant_id;index;not null;default:0" label:"分配租户"`
+	Number   string `json:"number" gorm:"size:200" label:"号码"`
 	// CallerDisplayName 写入外呼/转呼 INVITE From 的引号显示名（quoted display-name），如「七牛云客服专线」。
 	// 取代环境变量 SIP_CALLER_DISPLAY_NAME；主叫号码 user 部分用 Number（取代 SIP_CALLER_ID）。
 	CallerDisplayName string     `json:"callerDisplayName" gorm:"column:caller_display_name;size:200" label:"主叫显示名"`
@@ -66,6 +66,10 @@ type TrunkNumber struct {
 	Provider          string     `json:"-" label:"供应商"`
 	// VoiceDialogWSURL 入局呼叫匹配此号码时，语音对话 WebSocket 客户端拨号地址（ws/wss）；空则走平台默认 loopback。
 	VoiceDialogWSURL string `json:"voiceDialogWsUrl,omitempty" gorm:"column:voice_dialog_ws_url;size:512" label:"呼入语音对话WS"`
+	// ACDDispatchMode controls how inbound calls matching this trunk number select an ACDPoolTarget:
+	// - "weight" (default): pick highest weight (tie-break lower id)
+	// - "round_robin": pick next eligible target in id order (still requires weight>0; weight acts as enable/disable)
+	ACDDispatchMode string `json:"acdDispatchMode,omitempty" gorm:"column:acd_dispatch_mode;size:24;index;default:weight" label:"ACD 分配模式"`
 }
 
 // newProviderCode 生成 <prefix>_<32位无短横线UUID>，约 36 字节，留充足余量。
@@ -233,10 +237,52 @@ func NormalizeDialDigits(s string) string {
 		}
 	}
 	out := b.String()
-	if strings.HasPrefix(out, "86") && len(out) >= 13 {
+	// Strip country code "86" for external DID matching.
+	// Use len>10 to also support +86 prefixed service numbers like 400-xxxx-xxx (10 digits local, 12 with 86).
+	if strings.HasPrefix(out, "86") && len(out) > 10 {
 		out = out[2:]
 	}
 	return out
+}
+
+func dialDigitsOnly(s string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		if unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// isLikelyDialUser reports whether the called user is treated as an external DID candidate.
+// Rule (strict):
+// 1) "+<digits>" (international style), OR
+// 2) "<digits>" only.
+// Anything else (extensions/usernames like "alice", "1001a", "ext-100") is treated as internal and
+// will NOT enter digit-normalized DID matching.
+func isLikelyDialUser(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	if strings.HasPrefix(raw, "+") {
+		if len(raw) == 1 {
+			return false
+		}
+		for _, r := range raw[1:] {
+			if !unicode.IsDigit(r) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, r := range raw {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return len(raw) > 0
 }
 
 // FindTrunkNumberByInboundDID finds an allocated tenant trunk number whose DID matches the SIP Request-URI / To user.
@@ -249,7 +295,13 @@ func FindTrunkNumberByInboundDID(db *gorm.DB, calledRaw string) (TrunkNumber, bo
 	if raw == "" {
 		return TrunkNumber{}, false
 	}
-	norm := NormalizeDialDigits(raw)
+	rawDigits := dialDigitsOnly(raw)
+	calledNo86 := ""
+	rawTrim := strings.TrimSpace(raw)
+	if strings.HasPrefix(rawTrim, "+86") && len(rawDigits) > 10 && strings.HasPrefix(rawDigits, "86") {
+		calledNo86 = rawDigits[2:]
+	}
+	rawHasOnlyDigits := isLikelyDialUser(raw)
 	var rows []TrunkNumber
 	if err := db.Where("tenant_id > 0").Order("id ASC").Find(&rows).Error; err != nil {
 		return TrunkNumber{}, false
@@ -262,11 +314,19 @@ func FindTrunkNumberByInboundDID(db *gorm.DB, calledRaw string) (TrunkNumber, bo
 		if num == raw {
 			return row, true
 		}
-		rn := NormalizeDialDigits(num)
-		if rn == "" || norm == "" {
+		rn := dialDigitsOnly(num)
+		// Strict inbound DID matching:
+		// 1) no suffix/substring fuzzy matching;
+		// 2) only compare normalized digits when called user itself is a pure digit string.
+		// This prevents extension-like users such as "test1" from being normalized to "1"
+		// and accidentally matching trunk DID numbers ending with "1".
+		if !rawHasOnlyDigits || rn == "" || rawDigits == "" {
 			continue
 		}
-		if rn == norm || strings.HasSuffix(rn, norm) || strings.HasSuffix(norm, rn) {
+		if rn == rawDigits {
+			return row, true
+		}
+		if calledNo86 != "" && rn == calledNo86 {
 			return row, true
 		}
 	}

@@ -73,21 +73,21 @@ type SIPCall struct {
 	// InboundTrunkNumberID is sip_trunk_numbers.id when the inbound DID matched that row (same resolver as tenant_id).
 	InboundTrunkNumberID uint `json:"inboundTrunkNumberId,omitempty" gorm:"column:inbound_trunk_number_id;index;default:0"`
 
-	CallID            string         `json:"callId" gorm:"size:128;uniqueIndex;not null"`
-	FromHeader        string         `json:"fromHeader" gorm:"type:text"`
-	ToHeader          string         `json:"toHeader" gorm:"type:text"`
+	CallID     string `json:"callId" gorm:"size:128;uniqueIndex;not null"`
+	FromHeader string `json:"fromHeader" gorm:"type:text"`
+	ToHeader   string `json:"toHeader" gorm:"type:text"`
 	// FromNumber / ToNumber 是从 FromHeader / ToHeader 中提取出来的纯数字号码，用于日志和列表展示。
 	// 例如 `"bob" <sip:13800138000@10.0.4.12>;tag=xyz` → "13800138000"。
-	FromNumber string `json:"fromNumber" gorm:"size:64;index"`
-	ToNumber   string `json:"toNumber" gorm:"size:64;index"`
+	FromNumber        string         `json:"fromNumber" gorm:"size:64;index"`
+	ToNumber          string         `json:"toNumber" gorm:"size:64;index"`
 	CSeqInvite        string         `json:"cseqInvite" gorm:"size:64"`
 	RemoteAddr        string         `json:"remoteAddr" gorm:"size:128;index"`
 	Direction         string         `json:"direction" gorm:"size:16;index"`
 	RemoteRTPAddr     string         `json:"remoteRtpAddr" gorm:"size:128;index"`
 	LocalRTPAddr      string         `json:"localRtpAddr" gorm:"size:128;index"`
-	PayloadType       uint8          `json:"payloadType" gorm:"index"`
-	Codec             string         `json:"codec" gorm:"size:32;index"`
-	ClockRate         int            `json:"clockRate"`
+	PayloadType       uint8          `json:"-" gorm:"index"`
+	Codec             string         `json:"-" gorm:"size:32;index"`
+	ClockRate         int            `json:"-" gorm:"column:clock_rate"`
 	State             string         `json:"state" gorm:"size:32;index"`
 	InviteAt          *time.Time     `json:"inviteAt" gorm:"index"`
 	AckAt             *time.Time     `json:"ackAt" gorm:"index"`
@@ -106,6 +106,11 @@ type SIPCall struct {
 	LastTurnAt        *time.Time     `json:"lastTurnAt"`
 	HadSIPTransfer    bool           `json:"hadSipTransfer" gorm:"column:had_sip_transfer;default:0"`
 	HadWebSeat        bool           `json:"hadWebSeat" gorm:"column:had_web_seat;default:0"`
+	// TransferACDTargetID is the acd_pool_targets.id selected when the call was transferred to an agent.
+	// 0 means no transfer or unknown target.
+	TransferACDTargetID uint `json:"transferAcdTargetId,omitempty" gorm:"column:transfer_acd_target_id;index;default:0"`
+	// TransferTo is derived for UI (e.g. seat name / targetValue) and is not stored.
+	TransferTo string `json:"transferTo,omitempty" gorm:"-"`
 }
 
 func (SIPCall) TableName() string { return constants.SIP_CALL_TABLE_NAME }
@@ -413,20 +418,20 @@ func NewSIPCallRinging(callID, from, to, cseqInvite, remoteAddr, direction, remo
 		TenantID:             tenantID,
 		InboundTrunkNumberID: inboundTrunkNumberID,
 		CallID:               callID,
-		FromHeader:    from,
-		ToHeader:      to,
-		FromNumber:    ExtractSIPUserPart(from),
-		ToNumber:      ExtractSIPUserPart(to),
-		CSeqInvite:    cseqInvite,
-		RemoteAddr:    remoteAddr,
-		Direction:     dir,
-		RemoteRTPAddr: remoteRTP,
-		LocalRTPAddr:  localRTP,
-		PayloadType:   payloadType,
-		Codec:         codec,
-		ClockRate:     clockRate,
-		State:         SIPCallStateRinging,
-		InviteAt:      &inviteAt,
+		FromHeader:           from,
+		ToHeader:             to,
+		FromNumber:           ExtractSIPUserPart(from),
+		ToNumber:             ExtractSIPUserPart(to),
+		CSeqInvite:           cseqInvite,
+		RemoteAddr:           remoteAddr,
+		Direction:            dir,
+		RemoteRTPAddr:        remoteRTP,
+		LocalRTPAddr:         localRTP,
+		PayloadType:          payloadType,
+		Codec:                codec,
+		ClockRate:            clockRate,
+		State:                SIPCallStateRinging,
+		InviteAt:             &inviteAt,
 	}
 }
 

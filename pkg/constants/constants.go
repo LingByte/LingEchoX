@@ -20,19 +20,16 @@ const (
 	SIP_TRUNK_NUMBER_TABLE_NAME     = "sip_trunk_numbers"
 
 	// SaaS multi-tenant + RBAC (tenant-scoped users, groups, roles; global permission catalog).
-	TENANT_TABLE_NAME                = "tenants"
-	TENANT_GROUP_TABLE_NAME          = "tenant_groups"
-	TENANT_USER_TABLE_NAME           = "tenant_users"
-	TENANT_USER_GROUP_TABLE_NAME     = "tenant_user_groups"
-	PERMISSION_TABLE_NAME            = "permissions"
-	TENANT_ROLE_TABLE_NAME           = "tenant_roles"
+	TENANT_TABLE_NAME                 = "tenants"
+	TENANT_GROUP_TABLE_NAME           = "tenant_groups"
+	TENANT_USER_TABLE_NAME            = "tenant_users"
+	TENANT_USER_GROUP_TABLE_NAME      = "tenant_user_groups"
+	PERMISSION_TABLE_NAME             = "permissions"
+	TENANT_ROLE_TABLE_NAME            = "tenant_roles"
 	TENANT_ROLE_PERMISSION_TABLE_NAME = "tenant_role_permissions"
-	TENANT_USER_ROLE_TABLE_NAME      = "tenant_user_roles"
-
-	CREDENTIAL_TABLE_NAME = "credential"
-
-	// Platform admins (global, isolated from tenants).
-	PLATFORM_ADMIN_TABLE_NAME = "platform_admins"
+	TENANT_USER_ROLE_TABLE_NAME       = "tenant_user_roles"
+	CREDENTIAL_TABLE_NAME             = "credential"
+	PLATFORM_ADMIN_TABLE_NAME         = "platform_admins"
 )
 
 // Default Value: 1024

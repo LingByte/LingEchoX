@@ -58,6 +58,5 @@ func ActiveWebSeatBridge(callID string) bool {
 
 // ReleaseTransferStartDedupe clears the per-call transfer lock (join timeout, failed register).
 func ReleaseTransferStartDedupe(callID string) {
-	stopTransferRinging(callID)
 	transferStarted.Delete(callID)
 }

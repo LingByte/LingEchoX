@@ -156,8 +156,8 @@ This project includes an AGPL-3.0 license file (`LICENSE`).
 //
 // # Outbound / ACD / hybrid script (pkg/sip/outbound, pkg/constants)
 //
-//   - SIP_OUTBOUND_HOST, SIP_OUTBOUND_PORT, SIP_SIGNALING_ADDR,
-//     SIP_TARGET_NUMBER, SIP_CALLER_ID, SIP_CALLER_DISPLAY_NAME,
+//   - Outbound gateway: configure Trunk LocalAddr + TrunkNumber direction in DB (no SIP_OUTBOUND_* / SIP_TARGET_NUMBER).
+//   - SIP_CALLER_ID, SIP_CALLER_DISPLAY_NAME,
 //     SIP_DEFAULT_DOMAIN, SIP_DEFAULT_URI_PORT, SIP_PASSWORD (REGISTER auth),
 //     SIP_TRANSFER_* (host/port/sig/request-uri/number),
 //     SIP_SCRIPT_LISTEN_AFTER_TTS_TAIL, SIP_SCRIPT_LISTEN_TAIL_MS_MAX/MIN, SIP_SCRIPT_LISTEN_POLL_MS,
