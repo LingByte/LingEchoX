@@ -80,7 +80,10 @@ export async function listOutboundCampaigns(page = 1, size = 20, opts?: { status
   return get(`/sip-center/campaigns?${q.toString()}`)
 }
 
-export async function enqueueOutboundCampaignContacts(campaignId: number, contacts: Array<{ phone: string; display?: string; priority?: number }>): Promise<ApiResponse<{ accepted: number }>> {
+export async function enqueueOutboundCampaignContacts(
+  campaignId: number,
+  contacts: Array<{ phone: string; display?: string; priority?: number; caller_user?: string }>,
+): Promise<ApiResponse<{ accepted: number }>> {
   return post(`/sip-center/campaigns/${campaignId}/contacts`, contacts)
 }
 

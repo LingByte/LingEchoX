@@ -346,6 +346,9 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 		CallerDisplayName: strings.TrimSpace(contact.CallerName),
 		DialTenantID:      campaign.TenantID,
 	}
+	if req.CallerUser != "" && req.CallerDisplayName == "" {
+		req.CallerDisplayName = strings.TrimSpace(target.CallerDisplayName)
+	}
 	callID, err := dialer.Dial(ctx, req)
 	if err != nil {
 		if logger.Lg != nil {

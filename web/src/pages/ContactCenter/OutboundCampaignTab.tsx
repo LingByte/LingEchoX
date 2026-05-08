@@ -22,6 +22,7 @@ import {
   type OutboundCampaignWorkerMetrics,
 } from '@/api/outboundCampaigns'
 import { listSIPScriptTemplates, type SIPScriptTemplateRow } from '@/api/sipScripts'
+import { listTrunkNumbers, type TrunkNumberRow } from '@/api/trunks'
 
 function normCampaignStatus(s?: string): string {
   return String(s || '').trim().toLowerCase()
@@ -66,6 +67,8 @@ export default function OutboundCampaignTab() {
   const [detailCampaignId, setDetailCampaignId] = useState<number | null>(null)
   const [name, setName] = useState('')
   const [contactsText, setContactsText] = useState('1001\n1002')
+  const [outboundCallerUser, setOutboundCallerUser] = useState('')
+  const [outboundNumberOptions, setOutboundNumberOptions] = useState<TrunkNumberRow[]>([])
   const pageSize = 10
 
   const detailCampaign = useMemo(() => campaigns.find((c) => c.id === detailCampaignId) || null, [campaigns, detailCampaignId])
@@ -89,6 +92,26 @@ export default function OutboundCampaignTab() {
         const res = await listSIPScriptTemplates(1, 200)
         if (res.code === 200 && res.data?.list) setScripts(res.data.list.filter((x) => x.enabled))
       } catch { setScripts([]) }
+    })()
+  }, [])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await listTrunkNumbers(1, 500)
+        if (res.code === 200 && res.data?.list) {
+          const opts = (res.data.list || []).filter((n) => {
+            const d = String(n.direction || '').toLowerCase()
+            return d === 'outbound' || d === 'both' || d === 'all'
+          })
+          setOutboundNumberOptions(opts)
+          if (!outboundCallerUser && opts[0]?.number) setOutboundCallerUser(String(opts[0].number))
+        } else {
+          setOutboundNumberOptions([])
+        }
+      } catch {
+        setOutboundNumberOptions([])
+      }
     })()
   }, [])
 
@@ -131,7 +154,13 @@ export default function OutboundCampaignTab() {
 
   const submitContacts = async () => {
     if (!detailCampaignId) return showAlert('请先选择任务', 'error')
-    const contacts = contactsText.split('\n').map((x) => x.trim()).filter(Boolean).map((phone, idx) => ({ phone, priority: Math.max(1, 10 - idx) }))
+    const callerUser = outboundCallerUser.trim()
+    if (!callerUser) return showAlert('请选择外呼号码(caller_user)', 'error')
+    const contacts = contactsText
+      .split('\n')
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .map((phone, idx) => ({ phone, priority: Math.max(1, 10 - idx), caller_user: callerUser }))
     if (!contacts.length) return showAlert('请输入联系人号码', 'error')
     setSubmittingContacts(true)
     try {
@@ -290,7 +319,26 @@ export default function OutboundCampaignTab() {
             <Button size="small" type="outline" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, 'pause')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canPause}>暂停</Button>
             <Button size="small" type="outline" onClick={() => detailCampaignId && void doCampaignOp(detailCampaignId, 'stop')} disabled={!detailCampaignId || opBusyId === detailCampaignId || !detailActionFlags?.canStop}>停止</Button>
           </div>
-          <div className="space-y-2"><label className="text-xs text-muted-foreground">联系人（每行一个号码）</label><textarea className="border border-border rounded-md px-3 py-2 bg-background w-full h-24 font-mono text-xs" value={contactsText} onChange={(e) => setContactsText(e.target.value)} /><Button size="small" type="outline" onClick={() => void submitContacts()} disabled={submittingContacts || !detailCampaignId}>{submittingContacts ? '导入中...' : '导入联系人'}</Button><Button size="small" type="outline" onClick={() => void resetSuppressedContacts()} disabled={!detailCampaignId || resetSuppressedBusy}>{resetSuppressedBusy ? '处理中...' : '重置被抑制号码'}</Button></div>
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground">外呼号码（caller_user，必选）</label>
+            <select
+              className="border border-border rounded-md px-3 py-2 bg-background w-full text-sm"
+              value={outboundCallerUser}
+              onChange={(e) => setOutboundCallerUser(e.target.value)}
+            >
+              <option value="">请选择可外呼号码</option>
+              {outboundNumberOptions.map((n) => (
+                <option key={n.id} value={String(n.number || '')}>
+                  {`${n.number || '—'}${n.callerDisplayName ? `（${n.callerDisplayName}）` : ''} #${n.id}`}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">仅显示 direction=outbound/both/all 的中继号码；不选择将无法导入。</p>
+            <label className="text-xs text-muted-foreground">联系人（每行一个号码）</label>
+            <textarea className="border border-border rounded-md px-3 py-2 bg-background w-full h-24 font-mono text-xs" value={contactsText} onChange={(e) => setContactsText(e.target.value)} />
+            <Button size="small" type="outline" onClick={() => void submitContacts()} disabled={submittingContacts || !detailCampaignId}>{submittingContacts ? '导入中...' : '导入联系人'}</Button>
+            <Button size="small" type="outline" onClick={() => void resetSuppressedContacts()} disabled={!detailCampaignId || resetSuppressedBusy}>{resetSuppressedBusy ? '处理中...' : '重置被抑制号码'}</Button>
+          </div>
           <div className="rounded-lg border border-border bg-card p-3 space-y-2">
             <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">已导入联系人</h3><Button size="small" type="outline" onClick={() => void loadContacts()} disabled={!detailCampaignId || contactsLoading}>{contactsLoading ? '加载中...' : '刷新'}</Button></div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs"><div className="rounded border border-border p-2">总联系人: {queueView.total}</div><div className="rounded border border-border p-2">队列中: {queueView.waiting}</div><div className="rounded border border-border p-2">拨号中: {queueView.dialing}</div><div className="rounded border border-border p-2">活跃任务: {queueView.active}</div></div>
