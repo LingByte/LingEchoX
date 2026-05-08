@@ -44,7 +44,7 @@ func CreateTenantRole(db *gorm.DB, r *TenantRole) error {
 // GetTenantRoleByTenantAndName returns a role by tenant and display name.
 func GetTenantRoleByTenantAndName(db *gorm.DB, tenantID uint, name string) (TenantRole, error) {
 	var row TenantRole
-	err := db.Where("tenant_id = ? AND name = ? AND is_deleted = ?", tenantID, name, SoftDeleteStatusActive).First(&row).Error
+	err := db.Where("tenant_id = ? AND name = ?", tenantID, name).First(&row).Error
 	return row, err
 }
 
@@ -64,7 +64,7 @@ func TenantUserHasRoleName(db *gorm.DB, tenantUserID uint, roleName string) (boo
 	}
 	var n int64
 	err := db.Model(&TenantRole{}).
-		Where("id IN ? AND name = ? AND is_deleted = ?", roleIDs, roleName, SoftDeleteStatusActive).
+		Where("id IN ? AND name = ?", roleIDs, roleName).
 		Count(&n).Error
 	return n > 0, err
 }
@@ -72,7 +72,7 @@ func TenantUserHasRoleName(db *gorm.DB, tenantUserID uint, roleName string) (boo
 // ListTenantRolesByTenant lists named roles for one tenant.
 func ListTenantRolesByTenant(db *gorm.DB, tenantID uint) ([]TenantRole, error) {
 	var rows []TenantRole
-	err := db.Where("tenant_id = ? AND is_deleted = ?", tenantID, SoftDeleteStatusActive).
+	err := db.Where("tenant_id = ?", tenantID).
 		Order("name ASC").
 		Find(&rows).Error
 	return rows, err
@@ -81,7 +81,7 @@ func ListTenantRolesByTenant(db *gorm.DB, tenantID uint) ([]TenantRole, error) {
 // GetTenantRoleScoped returns a role owned by the tenant.
 func GetTenantRoleScoped(db *gorm.DB, tenantID, roleID uint) (TenantRole, error) {
 	var r TenantRole
-	err := db.Where("id = ? AND tenant_id = ? AND is_deleted = ?", roleID, tenantID, SoftDeleteStatusActive).
+	err := db.Where("id = ? AND tenant_id = ?", roleID, tenantID).
 		First(&r).Error
 	return r, err
 }
@@ -90,7 +90,7 @@ func GetTenantRoleScoped(db *gorm.DB, tenantID, roleID uint) (TenantRole, error)
 func ListTenantRolesForUser(db *gorm.DB, tenantUserID uint) ([]TenantRole, error) {
 	var roleIDs []uint
 	if err := db.Model(&TenantUserRole{}).
-		Where("tenant_user_id = ? AND is_deleted = ?", tenantUserID, SoftDeleteStatusActive).
+		Where("tenant_user_id = ?", tenantUserID).
 		Pluck("role_id", &roleIDs).Error; err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func ListTenantRolesForUser(db *gorm.DB, tenantUserID uint) ([]TenantRole, error
 		return nil, nil
 	}
 	var rows []TenantRole
-	err := db.Where("id IN ? AND is_deleted = ?", roleIDs, SoftDeleteStatusActive).
+	err := db.Where("id IN ?", roleIDs).
 		Order("name ASC").
 		Find(&rows).Error
 	return rows, err
@@ -113,10 +113,10 @@ func ListEffectivePermissionCodesForTenantUser(db *gorm.DB, tenantUserID uint) (
 	var codes []string
 	err := db.Table(perm).
 		Select("DISTINCT "+perm+".code").
-		Joins("INNER JOIN "+trp+" ON "+trp+".permission_id = "+perm+".id AND "+trp+".is_deleted = ?", SoftDeleteStatusActive).
-		Joins("INNER JOIN "+tr+" ON "+tr+".id = "+trp+".role_id AND "+tr+".is_deleted = ?", SoftDeleteStatusActive).
-		Joins("INNER JOIN "+tur+" ON "+tur+".role_id = "+tr+".id AND "+tur+".is_deleted = ?", SoftDeleteStatusActive).
-		Where(tur+".tenant_user_id = ? AND "+perm+".is_deleted = ?", tenantUserID, SoftDeleteStatusActive).
+		Joins("INNER JOIN "+trp+" ON "+trp+".permission_id = "+perm+".id AND "+trp+".deleted_at IS NULL").
+		Joins("INNER JOIN "+tr+" ON "+tr+".id = "+trp+".role_id AND "+tr+".deleted_at IS NULL").
+		Joins("INNER JOIN "+tur+" ON "+tur+".role_id = "+tr+".id AND "+tur+".deleted_at IS NULL").
+		Where(tur+".tenant_user_id = ? AND "+perm+".deleted_at IS NULL", tenantUserID).
 		Order(perm+".code ASC").
 		Pluck(perm+".code", &codes).Error
 	return codes, err
@@ -129,7 +129,7 @@ func ReplaceTenantUserRoles(db *gorm.DB, tenantID, tenantUserID uint, roleIDs []
 		if len(roleIDs) > 0 {
 			var n int64
 			if err := tx.Model(&TenantRole{}).
-				Where("tenant_id = ? AND id IN ? AND is_deleted = ?", tenantID, roleIDs, SoftDeleteStatusActive).
+				Where("tenant_id = ? AND id IN ?", tenantID, roleIDs).
 				Count(&n).Error; err != nil {
 				return err
 			}
@@ -153,11 +153,14 @@ func ReplaceTenantUserRoles(db *gorm.DB, tenantID, tenantUserID uint, roleIDs []
 
 // SoftDeleteTenantRole soft-deletes a custom tenant role (system roles are protected in the handler).
 func SoftDeleteTenantRole(db *gorm.DB, tenantID, roleID uint, updateBy string) error {
-	return db.Model(&TenantRole{}).
-		Where("id = ? AND tenant_id = ? AND is_deleted = ? AND is_system = ?", roleID, tenantID, SoftDeleteStatusActive, false).
-		Updates(map[string]any{
-			"is_deleted": SoftDeleteStatusDeleted,
-			"update_by":  updateBy,
-			"updated_at": time.Now(),
-		}).Error
+	updates := map[string]any{"updated_at": time.Now()}
+	if updateBy != "" {
+		updates["update_by"] = updateBy
+	}
+	if err := db.Model(&TenantRole{}).
+		Where("id = ? AND tenant_id = ? AND is_system = ?", roleID, tenantID, false).
+		Updates(updates).Error; err != nil {
+		return err
+	}
+	return db.Where("id = ? AND tenant_id = ? AND is_system = ?", roleID, tenantID, false).Delete(&TenantRole{}).Error
 }

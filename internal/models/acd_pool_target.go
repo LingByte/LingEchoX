@@ -162,7 +162,7 @@ func ValidateACDTrunkCreateUpdate(routeType, sipSource, targetValue, trunkHost s
 
 // ActiveACDPoolTargets is the non-deleted scope.
 func ActiveACDPoolTargets(db *gorm.DB) *gorm.DB {
-	return db.Model(&ACDPoolTarget{}).Where("is_deleted = ?", SoftDeleteStatusActive)
+	return db.Model(&ACDPoolTarget{})
 }
 
 // ListACDPoolTargetsPage lists active targets; routeType empty skips filter.
@@ -205,29 +205,27 @@ func ReloadACDPoolTargetByID(db *gorm.DB, id uint) (ACDPoolTarget, error) {
 
 // SoftDeleteACDPoolTargetByID soft-deletes an active row.
 func SoftDeleteACDPoolTargetByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{
-		"is_deleted": SoftDeleteStatusDeleted,
-		"updated_at": time.Now(),
-	}
+	u := map[string]any{"updated_at": time.Now()}
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&ACDPoolTarget{}).Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).Updates(u)
+	if err := db.Model(&ACDPoolTarget{}).Where("id = ?", id).Updates(u).Error; err != nil {
+		return 0, err
+	}
+	res := db.Where("id = ?", id).Delete(&ACDPoolTarget{})
 	return res.RowsAffected, res.Error
 }
 
 // SoftDeleteACDPoolTargetByIDForTenant deletes within tenant scope.
 func SoftDeleteACDPoolTargetByIDForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
-	u := map[string]any{
-		"is_deleted": SoftDeleteStatusDeleted,
-		"updated_at": time.Now(),
-	}
+	u := map[string]any{"updated_at": time.Now()}
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&ACDPoolTarget{}).
-		Where("id = ? AND tenant_id = ? AND is_deleted = ?", id, tenantID, SoftDeleteStatusActive).
-		Updates(u)
+	if err := db.Model(&ACDPoolTarget{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u).Error; err != nil {
+		return 0, err
+	}
+	res := db.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&ACDPoolTarget{})
 	return res.RowsAffected, res.Error
 }
 
@@ -540,16 +538,14 @@ func SoftDeleteACDPoolTargetsByIDs(ctx context.Context, db *gorm.DB, ids []uint,
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	u := map[string]any{
-		"is_deleted": SoftDeleteStatusDeleted,
-		"updated_at": time.Now(),
-	}
+	u := map[string]any{"updated_at": time.Now()}
 	if s := strings.TrimSpace(updateBy); s != "" {
 		u["update_by"] = s
 	}
-	res := db.WithContext(ctx).Model(&ACDPoolTarget{}).
-		Where("id IN ? AND is_deleted = ?", ids, SoftDeleteStatusActive).
-		Updates(u)
+	if err := db.WithContext(ctx).Model(&ACDPoolTarget{}).Where("id IN ?", ids).Updates(u).Error; err != nil {
+		return 0, err
+	}
+	res := db.WithContext(ctx).Where("id IN ?", ids).Delete(&ACDPoolTarget{})
 	return res.RowsAffected, res.Error
 }
 

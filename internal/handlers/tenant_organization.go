@@ -107,7 +107,7 @@ func (h *Handlers) createOrgGroup(c *gin.Context) {
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		if req.IsDefault {
 			if err := tx.Model(&models.TenantGroup{}).
-				Where("tenant_id = ? AND is_deleted = ?", tid, models.SoftDeleteStatusActive).
+				Where("tenant_id = ?", tid).
 				Update("is_default", false).Error; err != nil {
 				return err
 			}
@@ -138,7 +138,7 @@ func (h *Handlers) updateOrgGroup(c *gin.Context) {
 		return
 	}
 	var row models.TenantGroup
-	if err := h.db.Where("id = ? AND tenant_id = ? AND is_deleted = ?", uint(id64), tid, models.SoftDeleteStatusActive).
+	if err := h.db.Where("id = ? AND tenant_id = ?", uint(id64), tid).
 		First(&row).Error; err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -148,7 +148,7 @@ func (h *Handlers) updateOrgGroup(c *gin.Context) {
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		if req.IsDefault {
 			if err := tx.Model(&models.TenantGroup{}).
-				Where("tenant_id = ? AND is_deleted = ?", tid, models.SoftDeleteStatusActive).
+				Where("tenant_id = ?", tid).
 				Update("is_default", false).Error; err != nil {
 				return err
 			}

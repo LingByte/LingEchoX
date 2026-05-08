@@ -150,13 +150,13 @@ func SyncPermissionCatalog(db *gorm.DB) error {
 			return err
 		}
 		u := map[string]any{
-			"is_deleted":   SoftDeleteStatusActive,
-			"name":         def.Name,
-			"description":  def.Description,
-			"kind":         def.Kind,
-			"parent_code":  def.ParentCode,
-			"resource":     def.Resource,
-			"action":       def.Action,
+			"deleted_at":  nil,
+			"name":        def.Name,
+			"description": def.Description,
+			"kind":        def.Kind,
+			"parent_code": def.ParentCode,
+			"resource":    def.Resource,
+			"action":      def.Action,
 		}
 		if err := db.Unscoped().Model(&Permission{}).Where("id = ?", row.ID).Updates(u).Error; err != nil {
 			return err
@@ -171,14 +171,14 @@ func BackfillAdminRolePermissions(db *gorm.DB) error {
 		return nil
 	}
 	var ids []uint
-	if err := db.Model(&Permission{}).Where("is_deleted = ?", SoftDeleteStatusActive).Order("id ASC").Pluck("id", &ids).Error; err != nil {
+	if err := db.Model(&Permission{}).Order("id ASC").Pluck("id", &ids).Error; err != nil {
 		return err
 	}
 	if len(ids) == 0 {
 		return nil
 	}
 	var roles []TenantRole
-	if err := db.Where("name = ? AND is_system = ? AND is_deleted = ?", TenantAdminRoleName, true, SoftDeleteStatusActive).
+	if err := db.Where("name = ? AND is_system = ?", TenantAdminRoleName, true).
 		Find(&roles).Error; err != nil {
 		return err
 	}

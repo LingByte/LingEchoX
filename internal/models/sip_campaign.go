@@ -161,7 +161,7 @@ func (SIPCampaignEvent) TableName() string {
 
 // ActiveSIPCampaigns is the non-deleted campaign scope.
 func ActiveSIPCampaigns(db *gorm.DB) *gorm.DB {
-	return db.Model(&SIPCampaign{}).Where("is_deleted = ?", SoftDeleteStatusActive)
+	return db.Model(&SIPCampaign{})
 }
 
 // ListSIPCampaignsPage lists active campaigns with optional status / name filters.
@@ -211,7 +211,7 @@ func SIPCampaignStatusUpdates(status string, now time.Time) map[string]any {
 	return u
 }
 
-// UpdateSIPCampaignStatusByID updates status (no is_deleted filter; API / internal worker).
+// UpdateSIPCampaignStatusByID updates status (no extra soft-delete filter; API / internal worker).
 func UpdateSIPCampaignStatusByID(ctx context.Context, db *gorm.DB, id uint, status string) error {
 	now := time.Now()
 	return db.WithContext(ctx).Model(&SIPCampaign{}).Where("id = ?", id).Updates(SIPCampaignStatusUpdates(status, now)).Error
@@ -224,7 +224,7 @@ func UpdateActiveSIPCampaignStatus(db *gorm.DB, id uint, status, updateBy string
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&SIPCampaign{}).Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).Updates(u)
+	res := db.Model(&SIPCampaign{}).Where("id = ?", id).Updates(u)
 	return res.RowsAffected, res.Error
 }
 
@@ -235,33 +235,43 @@ func UpdateActiveSIPCampaignStatusForTenant(db *gorm.DB, id uint, tenantID uint,
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ? AND is_deleted = ?", id, tenantID, SoftDeleteStatusActive).Updates(u)
+	res := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u)
 	return res.RowsAffected, res.Error
 }
 
 // SoftDeleteSIPCampaignByID soft-deletes a campaign row by id (caller should enforce not-running).
 func SoftDeleteSIPCampaignByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{"is_deleted": SoftDeleteStatusDeleted}
+	u := map[string]any{}
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&SIPCampaign{}).Where("id = ?", id).Updates(u)
+	if len(u) > 0 {
+		if err := db.Model(&SIPCampaign{}).Where("id = ?", id).Updates(u).Error; err != nil {
+			return 0, err
+		}
+	}
+	res := db.Where("id = ?", id).Delete(&SIPCampaign{})
 	return res.RowsAffected, res.Error
 }
 
 // SoftDeleteSIPCampaignForTenant soft-deletes within tenant scope.
 func SoftDeleteSIPCampaignForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
-	u := map[string]any{"is_deleted": SoftDeleteStatusDeleted}
+	u := map[string]any{}
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u)
+	if len(u) > 0 {
+		if err := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u).Error; err != nil {
+			return 0, err
+		}
+	}
+	res := db.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&SIPCampaign{})
 	return res.RowsAffected, res.Error
 }
 
 // ActiveSIPCampaignContacts scopes contacts for one campaign.
 func ActiveSIPCampaignContacts(db *gorm.DB, campaignID uint) *gorm.DB {
-	return db.Model(&SIPCampaignContact{}).Where("campaign_id = ? AND is_deleted = ?", campaignID, SoftDeleteStatusActive)
+	return db.Model(&SIPCampaignContact{}).Where("campaign_id = ?", campaignID)
 }
 
 // ListSIPCampaignContactsPage lists active contacts for a campaign.
@@ -288,7 +298,7 @@ func ResetSuppressedSIPCampaignContacts(db *gorm.DB, campaignID uint, now time.T
 		"last_dial_at":   nil,
 	}
 	res := db.Model(&SIPCampaignContact{}).
-		Where("campaign_id = ? AND status = ? AND is_deleted = ?", campaignID, SIPCampaignContactSuppressed, SoftDeleteStatusActive).
+		Where("campaign_id = ? AND status = ?", campaignID, SIPCampaignContactSuppressed).
 		Updates(updates)
 	return res.RowsAffected, res.Error
 }
@@ -343,7 +353,7 @@ func CountAllSIPCallAttemptsForTenant(db *gorm.DB, tenantID uint) (int64, error)
 	at := SIPCallAttempt{}.TableName()
 	err := db.Table(at+" AS a").
 		Joins("INNER JOIN "+ct+" AS c ON c.id = a.campaign_id").
-		Where("c.tenant_id = ? AND c.is_deleted = ?", tenantID, SoftDeleteStatusActive).
+		Where("c.tenant_id = ? AND c.deleted_at IS NULL", tenantID).
 		Count(&n).Error
 	return n, err
 }
@@ -361,7 +371,7 @@ func CountSIPCampaignContactsWithStatusForTenant(db *gorm.DB, tenantID uint, sta
 	camp := SIPCampaign{}.TableName()
 	err := db.Table(cont+" AS ct").
 		Joins("INNER JOIN "+camp+" AS cp ON cp.id = ct.campaign_id").
-		Where("cp.tenant_id = ? AND cp.is_deleted = ? AND ct.is_deleted = ?", tenantID, SoftDeleteStatusActive, SoftDeleteStatusActive).
+		Where("cp.tenant_id = ? AND cp.deleted_at IS NULL AND ct.deleted_at IS NULL", tenantID).
 		Where("ct.status = ?", status).
 		Count(&n).Error
 	return n, err
@@ -379,7 +389,7 @@ func CountSIPCampaignContactsWithStatusesForTenant(db *gorm.DB, tenantID uint, s
 	camp := SIPCampaign{}.TableName()
 	err := db.Table(cont+" AS ct").
 		Joins("INNER JOIN "+camp+" AS cp ON cp.id = ct.campaign_id").
-		Where("cp.tenant_id = ? AND cp.is_deleted = ? AND ct.is_deleted = ?", tenantID, SoftDeleteStatusActive, SoftDeleteStatusActive).
+		Where("cp.tenant_id = ? AND cp.deleted_at IS NULL AND ct.deleted_at IS NULL", tenantID).
 		Where("ct.status IN ?", statuses).
 		Count(&n).Error
 	return n, err

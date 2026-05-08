@@ -14,7 +14,6 @@ import (
 // Tenant is one SaaS customer organization (multi-tenant root).
 type Tenant struct {
 	BaseModel
-
 	Name        string `json:"name" gorm:"size:128;index;not null"`
 	Slug        string `json:"slug" gorm:"size:64;uniqueIndex;not null"`
 	Description string `json:"description,omitempty" gorm:"size:512"`
@@ -33,27 +32,27 @@ func CreateTenant(db *gorm.DB, t *Tenant) error {
 // GetTenantBySlug returns an active (non-deleted) tenant by slug.
 func GetTenantBySlug(db *gorm.DB, slug string) (Tenant, error) {
 	var row Tenant
-	err := db.Where("slug = ? AND is_deleted = ?", slug, SoftDeleteStatusActive).First(&row).Error
+	err := db.Where("slug = ?", slug).First(&row).Error
 	return row, err
 }
 
 // GetActiveTenantByID returns an active tenant by primary key.
 func GetActiveTenantByID(db *gorm.DB, id uint) (Tenant, error) {
 	var row Tenant
-	err := db.Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).First(&row).Error
+	err := db.Where("id = ?", id).First(&row).Error
 	return row, err
 }
 
 // TenantSlugTaken reports whether slug is already used by an active tenant.
 func TenantSlugTaken(db *gorm.DB, slug string) (bool, error) {
 	var n int64
-	err := db.Model(&Tenant{}).Where("slug = ? AND is_deleted = ?", slug, SoftDeleteStatusActive).Count(&n).Error
+	err := db.Model(&Tenant{}).Where("slug = ?", slug).Count(&n).Error
 	return n > 0, err
 }
 
 // ListTenantsPage lists active tenants (platform admin).
 func ListTenantsPage(db *gorm.DB, page, size int, search string) ([]Tenant, int64, error) {
-	q := db.Model(&Tenant{}).Where("is_deleted = ?", SoftDeleteStatusActive)
+	q := db.Model(&Tenant{})
 	if s := strings.TrimSpace(search); s != "" {
 		like := "%" + s + "%"
 		q = q.Where("name LIKE ? OR slug LIKE ?", like, like)
@@ -101,17 +100,20 @@ func UpdateActiveTenant(db *gorm.DB, id uint, name, description, status, updateB
 		return nil
 	}
 	return db.Model(&Tenant{}).
-		Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).
+		Where("id = ?", id).
 		Updates(updates).Error
 }
 
 // SoftDeleteTenant soft-deletes one tenant row (platform ops).
 func SoftDeleteTenant(db *gorm.DB, id uint, updateBy string) error {
-	return db.Model(&Tenant{}).
-		Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).
-		Updates(map[string]any{
-			"is_deleted": SoftDeleteStatusDeleted,
-			"update_by":  updateBy,
-			"updated_at": time.Now(),
-		}).Error
+	updates := map[string]any{
+		"updated_at": time.Now(),
+	}
+	if updateBy != "" {
+		updates["update_by"] = updateBy
+	}
+	if err := db.Model(&Tenant{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return err
+	}
+	return db.Where("id = ?", id).Delete(&Tenant{}).Error
 }

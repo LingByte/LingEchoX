@@ -6,18 +6,14 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	SoftDeleteStatusActive  int8 = 0 // Not deleted
-	SoftDeleteStatusDeleted int8 = 1 // Deleted
-)
-
 type BaseModel struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	CreatedAt time.Time `json:"createdAt" gorm:"autoCreateTime;comment:Creation time"`
-	UpdatedAt time.Time `json:"updatedAt,omitempty" gorm:"autoUpdateTime;comment:Update time"`
-	IsDeleted int8      `json:"isDeleted,omitempty" gorm:"default:0;index;comment:Soft delete flag (0:not deleted, 1:deleted)"`
-	CreateBy  string    `json:"createBy,omitempty" gorm:"size:128;index;comment:Creator"`
-	UpdateBy  string    `json:"updateBy,omitempty" gorm:"size:128;index;comment:Updater"`
+	ID        uint           `json:"id,string" gorm:"primaryKey;autoIncrement:false"`
+	CreatedAt time.Time      `json:"createdAt" gorm:"autoCreateTime;comment:Creation time"`
+	UpdatedAt time.Time      `json:"updatedAt,omitempty" gorm:"autoUpdateTime;comment:Update time"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+	CreateBy  string         `json:"createBy,omitempty" gorm:"size:128;comment:Creator"`
+	UpdateBy  string         `json:"updateBy,omitempty" gorm:"size:128;comment:Updater"`
+	Remark    string         `json:"remark,omitempty" gorm:"size:128;comment:Remark"`
 }
 
 // BeforeCreate GORM hook: automatically set creation time before creating
@@ -28,9 +24,6 @@ func (m *BaseModel) BeforeCreate(tx *gorm.DB) error {
 	}
 	if m.UpdatedAt.IsZero() {
 		m.UpdatedAt = now
-	}
-	if m.IsDeleted == 0 {
-		m.IsDeleted = SoftDeleteStatusActive
 	}
 	return nil
 }
@@ -43,19 +36,19 @@ func (m *BaseModel) BeforeUpdate(tx *gorm.DB) error {
 
 // IsSoftDeleted checks if the record is soft deleted
 func (m *BaseModel) IsSoftDeleted() bool {
-	return m.IsDeleted == SoftDeleteStatusDeleted
+	return !m.DeletedAt.Time.IsZero()
 }
 
 // SoftDelete performs soft deletion
 func (m *BaseModel) SoftDelete(operator string) {
-	m.IsDeleted = SoftDeleteStatusDeleted
+	m.DeletedAt = gorm.DeletedAt{Time: time.Now(), Valid: true}
 	m.UpdateBy = operator
 	m.UpdatedAt = time.Now()
 }
 
 // Restore restores a soft deleted record
 func (m *BaseModel) Restore(operator string) {
-	m.IsDeleted = SoftDeleteStatusActive
+	m.DeletedAt = gorm.DeletedAt{}
 	m.UpdateBy = operator
 	m.UpdatedAt = time.Now()
 }

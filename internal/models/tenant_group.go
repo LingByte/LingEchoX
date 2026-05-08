@@ -41,8 +41,8 @@ func FirstTenantGroupForUser(db *gorm.DB, tenantUserID uint) (TenantGroup, error
 	tg := constants.TENANT_GROUP_TABLE_NAME
 	tugTbl := constants.TENANT_USER_GROUP_TABLE_NAME
 	err := db.Model(&TenantGroup{}).
-		Joins("INNER JOIN "+tugTbl+" AS tug ON tug.group_id = "+tg+".id AND tug.is_deleted = ?", SoftDeleteStatusActive).
-		Where("tug.tenant_user_id = ? AND "+tg+".is_deleted = ?", tenantUserID, SoftDeleteStatusActive).
+		Joins("INNER JOIN "+tugTbl+" AS tug ON tug.group_id = "+tg+".id AND tug.deleted_at IS NULL").
+		Where("tug.tenant_user_id = ? AND "+tg+".deleted_at IS NULL", tenantUserID).
 		Order(tg + ".name ASC").
 		First(&g).Error
 	return g, err
@@ -51,7 +51,7 @@ func FirstTenantGroupForUser(db *gorm.DB, tenantUserID uint) (TenantGroup, error
 // ListTenantGroupsForTenant lists departments for a tenant.
 func ListTenantGroupsForTenant(db *gorm.DB, tenantID uint) ([]TenantGroup, error) {
 	var rows []TenantGroup
-	err := db.Where("tenant_id = ? AND is_deleted = ?", tenantID, SoftDeleteStatusActive).
+	err := db.Where("tenant_id = ?", tenantID).
 		Order("name ASC").
 		Find(&rows).Error
 	return rows, err
@@ -63,8 +63,8 @@ func ListTenantGroupsForUser(db *gorm.DB, tenantUserID uint) ([]TenantGroup, err
 	tugTbl := constants.TENANT_USER_GROUP_TABLE_NAME
 	var rows []TenantGroup
 	err := db.Model(&TenantGroup{}).
-		Joins("INNER JOIN "+tugTbl+" AS tug ON tug.group_id = "+tg+".id AND tug.is_deleted = ?", SoftDeleteStatusActive).
-		Where("tug.tenant_user_id = ? AND "+tg+".is_deleted = ?", tenantUserID, SoftDeleteStatusActive).
+		Joins("INNER JOIN "+tugTbl+" AS tug ON tug.group_id = "+tg+".id AND tug.deleted_at IS NULL").
+		Where("tug.tenant_user_id = ? AND "+tg+".deleted_at IS NULL", tenantUserID).
 		Order(tg + ".name ASC").
 		Find(&rows).Error
 	return rows, err
@@ -82,7 +82,7 @@ func ReplaceTenantUserGroups(db *gorm.DB, tenantID, tenantUserID uint, groupIDs 
 		if len(groupIDs) > 0 {
 			var n int64
 			if err := tx.Model(&TenantGroup{}).
-				Where("tenant_id = ? AND id IN ? AND is_deleted = ?", tenantID, groupIDs, SoftDeleteStatusActive).
+				Where("tenant_id = ? AND id IN ?", tenantID, groupIDs).
 				Count(&n).Error; err != nil {
 				return err
 			}
@@ -108,20 +108,25 @@ func ReplaceTenantUserGroups(db *gorm.DB, tenantID, tenantUserID uint, groupIDs 
 func SoftDeleteTenantGroup(db *gorm.DB, tenantID, groupID uint, updateBy string) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var g TenantGroup
-		if err := tx.Where("id = ? AND tenant_id = ? AND is_deleted = ?", groupID, tenantID, SoftDeleteStatusActive).
+		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).
 			First(&g).Error; err != nil {
 			return err
 		}
 		now := time.Now()
 		if err := tx.Model(&TenantUserGroup{}).
 			Where("group_id = ?", groupID).
-			Updates(map[string]any{"is_deleted": SoftDeleteStatusDeleted, "updated_at": now, "update_by": updateBy}).Error; err != nil {
+			Updates(map[string]any{"updated_at": now, "update_by": updateBy}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&TenantGroup{}).Where("id = ?", groupID).Updates(map[string]any{
-			"is_deleted": SoftDeleteStatusDeleted,
+		if err := tx.Model(&TenantGroup{}).Where("id = ?", groupID).Updates(map[string]any{
 			"updated_at": now,
 			"update_by":  updateBy,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("group_id = ?", groupID).Delete(&TenantUserGroup{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", groupID).Delete(&TenantGroup{}).Error
 	})
 }

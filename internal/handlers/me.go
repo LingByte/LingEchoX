@@ -40,7 +40,7 @@ func (h *Handlers) currentTenantUser(c *gin.Context) (models.TenantUser, bool) {
 func (h *Handlers) getMe(c *gin.Context) {
 	if aid := middleware.AuthPlatformAdminID(c); aid > 0 {
 		var row models.PlatformAdmin
-		if err := h.db.Where("id = ? AND is_deleted = ?", aid, models.SoftDeleteStatusActive).First(&row).Error; err != nil {
+		if err := h.db.Where("id = ?", aid).First(&row).Error; err != nil {
 			response.Fail(c, "not found", nil)
 			return
 		}
@@ -56,16 +56,16 @@ func (h *Handlers) getMe(c *gin.Context) {
 		return
 	}
 	var tenant models.Tenant
-	if err := h.db.Where("id = ? AND is_deleted = ?", u.TenantID, models.SoftDeleteStatusActive).First(&tenant).Error; err != nil {
+	if err := h.db.Where("id = ?", u.TenantID).First(&tenant).Error; err != nil {
 		response.Fail(c, "tenant not found", nil)
 		return
 	}
 	codes, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, u.ID)
 	response.Success(c, "success", gin.H{
-		"principal":        "tenant",
-		"user":             h.tenantUserPublic(u),
-		"tenant":           tenantPublic(tenant),
-		"permissionCodes":  codes,
+		"principal":       "tenant",
+		"user":            h.tenantUserPublic(u),
+		"tenant":          tenantPublic(tenant),
+		"permissionCodes": codes,
 	})
 }
 
@@ -86,7 +86,7 @@ func (h *Handlers) updateMe(c *gin.Context) {
 			return
 		}
 		if err := h.db.Model(&models.PlatformAdmin{}).
-			Where("id = ? AND is_deleted = ?", aid, models.SoftDeleteStatusActive).
+			Where("id = ?", aid).
 			Updates(updates).Error; err != nil {
 			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 			return
@@ -155,7 +155,7 @@ func (h *Handlers) updateMyPassword(c *gin.Context) {
 			return
 		}
 		var row models.PlatformAdmin
-		if err := h.db.Where("id = ? AND is_deleted = ?", aid, models.SoftDeleteStatusActive).First(&row).Error; err != nil {
+		if err := h.db.Where("id = ?", aid).First(&row).Error; err != nil {
 			response.Fail(c, "not found", nil)
 			return
 		}

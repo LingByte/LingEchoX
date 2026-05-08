@@ -39,7 +39,7 @@ func (Credential) TableName() string {
 // CredentialMatchesPermissionCodes checks AK/SK permission JSON against required route codes (requireAll = AND).
 func CredentialMatchesPermissionCodes(db *gorm.DB, credID uint, required []string, requireAll bool) (bool, error) {
 	var row Credential
-	if err := db.Where("id = ? AND is_deleted = ?", credID, SoftDeleteStatusActive).First(&row).Error; err != nil {
+	if err := db.Where("id = ?", credID).First(&row).Error; err != nil {
 		return false, err
 	}
 	raw := strings.TrimSpace(row.PermissionCodes)
@@ -78,7 +78,7 @@ func CredentialMatchesPermissionCodes(db *gorm.DB, credID uint, required []strin
 func GetActiveCredentialByAccessKey(db *gorm.DB, ak string) (Credential, error) {
 	var row Credential
 	err := db.Model(&Credential{}).
-		Where("access_key = ? AND is_deleted = ?", ak, SoftDeleteStatusActive).
+		Where("access_key = ?", ak).
 		First(&row).Error
 	return row, err
 }

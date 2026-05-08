@@ -21,15 +21,15 @@ import (
 )
 
 type credentialCreateReq struct {
-	Name              string   `json:"name"`
-	AllowIP           string   `json:"allowIp"` // 逗号分隔，可为空表示不限制
-	PermissionCodes   []string `json:"permissionCodes"`
+	Name            string   `json:"name"`
+	AllowIP         string   `json:"allowIp"` // 逗号分隔，可为空表示不限制
+	PermissionCodes []string `json:"permissionCodes"`
 }
 
 type credentialUpdateReq struct {
-	Name              *string  `json:"name"`
-	AllowIP           *string  `json:"allowIp"`
-	PermissionCodes   []string `json:"permissionCodes"`
+	Name            *string  `json:"name"`
+	AllowIP         *string  `json:"allowIp"`
+	PermissionCodes []string `json:"permissionCodes"`
 }
 
 func marshalCredentialPermissionCodes(codes []string) (string, error) {
@@ -67,7 +67,7 @@ func (h *Handlers) findCredentialForTenant(c *gin.Context, tenantID uint) (*mode
 		return nil, false
 	}
 	var row models.Credential
-	if err := h.db.Where("id = ? AND tenant_id = ? AND is_deleted = ?", id, tenantID, models.SoftDeleteStatusActive).
+	if err := h.db.Where("id = ? AND tenant_id = ?", id, tenantID).
 		First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.Fail(c, "not found", nil)
@@ -128,16 +128,16 @@ func (h *Handlers) createCredential(c *gin.Context) {
 	var pc []string
 	_ = json.Unmarshal([]byte(row.PermissionCodes), &pc)
 	response.Success(c, "success", gin.H{
-		"id":               row.ID,
-		"tenantId":         row.TenantID,
-		"name":             row.Name,
-		"accessKey":        row.AccessKey,
-		"secretKey":        secretKey, // 仅本次响应返回，后续不再可读
-		"allowIp":          row.AllowIP,
-		"permissionCodes":  pc,
-		"status":           row.Status,
-		"createdAt":        row.CreatedAt,
-		"notice":           "secretKey is shown once; store it safely",
+		"id":              row.ID,
+		"tenantId":        row.TenantID,
+		"name":            row.Name,
+		"accessKey":       row.AccessKey,
+		"secretKey":       secretKey, // 仅本次响应返回，后续不再可读
+		"allowIp":         row.AllowIP,
+		"permissionCodes": pc,
+		"status":          row.Status,
+		"createdAt":       row.CreatedAt,
+		"notice":          "secretKey is shown once; store it safely",
 	})
 }
 
@@ -162,7 +162,7 @@ func (h *Handlers) listCredentials(c *gin.Context) {
 	nameFilter := strings.TrimSpace(c.Query("name"))
 
 	q := h.db.Model(&models.Credential{}).
-		Where("tenant_id = ? AND is_deleted = ?", tenantID, models.SoftDeleteStatusActive)
+		Where("tenant_id = ?", tenantID)
 	if statusFilter == models.CredentialStatusActive || statusFilter == models.CredentialStatusDisabled {
 		q = q.Where("status = ?", statusFilter)
 	}
@@ -299,7 +299,7 @@ func (h *Handlers) enableCredential(c *gin.Context) {
 	h.setCredentialStatus(c, models.CredentialStatusActive)
 }
 
-// deleteCredential 软删除：is_deleted = 1，AKSK 中间件用 is_deleted=0 过滤，所以删除后立即吊销。
+// deleteCredential 软删除：deleted_at 非空后，AKSK 查询自然不可见，删除后立即吊销。
 func (h *Handlers) deleteCredential(c *gin.Context) {
 	tenantID, ok := requireTenantUser(c)
 	if !ok {
@@ -312,10 +312,13 @@ func (h *Handlers) deleteCredential(c *gin.Context) {
 	if err := h.db.Model(&models.Credential{}).
 		Where("id = ?", row.ID).
 		Updates(map[string]any{
-			"is_deleted": models.SoftDeleteStatusDeleted,
-			"status":     models.CredentialStatusDisabled,
-			"update_by":  middleware.AuthEmail(c),
+			"status":    models.CredentialStatusDisabled,
+			"update_by": middleware.AuthEmail(c),
 		}).Error; err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	if err := h.db.Where("id = ?", row.ID).Delete(&models.Credential{}).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}

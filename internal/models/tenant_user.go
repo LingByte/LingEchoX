@@ -24,14 +24,14 @@ const (
 type TenantUser struct {
 	BaseModel
 
-	TenantID     uint   `json:"tenantId" gorm:"index;not null"`
-	Email        string `json:"email" gorm:"size:256;uniqueIndex:idx_global_tenant_user_email;not null"`
-	Phone        string `json:"phone" gorm:"size:32"`
-	Username     string `json:"username" gorm:"size:128"`
-	PasswordHash string `json:"-" gorm:"size:256"`
-	DisplayName  string `json:"displayName" gorm:"size:128"`
-	AvatarURL    string `json:"avatarUrl" gorm:"size:512"`
-	Status       string `json:"status" gorm:"size:32;index;not null;default:active"` // active | disabled | pending
+	TenantID     uint       `json:"tenantId" gorm:"index;not null"`
+	Email        string     `json:"email" gorm:"size:256;uniqueIndex:idx_global_tenant_user_email;not null"`
+	Phone        string     `json:"phone" gorm:"size:32"`
+	Username     string     `json:"username" gorm:"size:128"`
+	PasswordHash string     `json:"-" gorm:"size:256"`
+	DisplayName  string     `json:"displayName" gorm:"size:128"`
+	AvatarURL    string     `json:"avatarUrl" gorm:"size:512"`
+	Status       string     `json:"status" gorm:"size:32;index;not null;default:active"` // active | disabled | pending
 	LastLogin    *time.Time `json:"lastLogin,omitempty" gorm:"column:last_login_at"`
 	LastLoginIP  string     `json:"-" gorm:"size:128;column:last_login_ip"`
 	Source       string     `json:"source" gorm:"size:64;index;default:register"`
@@ -46,7 +46,7 @@ func (TenantUser) TableName() string {
 
 // ActiveTenantUsers is the non-deleted tenant user scope.
 func ActiveTenantUsers(db *gorm.DB) *gorm.DB {
-	return db.Model(&TenantUser{}).Where("is_deleted = ?", SoftDeleteStatusActive)
+	return db.Model(&TenantUser{})
 }
 
 // ByTenantID scopes to a specific tenant.
@@ -138,7 +138,7 @@ func UpdateTenantUser(db *gorm.DB, id uint, updates map[string]any, updateBy str
 	if updateBy != "" {
 		updates["update_by"] = updateBy
 	}
-	res := db.Model(&TenantUser{}).Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).Updates(updates)
+	res := db.Model(&TenantUser{}).Where("id = ?", id).Updates(updates)
 	return res.RowsAffected, res.Error
 }
 
@@ -148,7 +148,7 @@ func UpdateTenantUserStatus(db *gorm.DB, id uint, status, updateBy string) (int6
 	if updateBy != "" {
 		updates["update_by"] = updateBy
 	}
-	res := db.Model(&TenantUser{}).Where("id = ? AND is_deleted = ?", id, SoftDeleteStatusActive).Updates(updates)
+	res := db.Model(&TenantUser{}).Where("id = ?", id).Updates(updates)
 	return res.RowsAffected, res.Error
 }
 
@@ -168,21 +168,26 @@ func RecordTenantUserLogin(db *gorm.DB, id uint, ip string) error {
 
 // SoftDeleteTenantUserByID soft-deletes a tenant user by ID.
 func SoftDeleteTenantUserByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{"is_deleted": SoftDeleteStatusDeleted}
+	u := map[string]any{}
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&TenantUser{}).Where("id = ?", id).Updates(u)
+	if len(u) > 0 {
+		if err := db.Model(&TenantUser{}).Where("id = ?", id).Updates(u).Error; err != nil {
+			return 0, err
+		}
+	}
+	res := db.Where("id = ?", id).Delete(&TenantUser{})
 	return res.RowsAffected, res.Error
 }
 
 // RestoreTenantUser restores a soft-deleted tenant user.
 func RestoreTenantUser(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{"is_deleted": SoftDeleteStatusActive}
+	u := map[string]any{"deleted_at": nil}
 	if updateBy != "" {
 		u["update_by"] = updateBy
 	}
-	res := db.Model(&TenantUser{}).Where("id = ?", id).Updates(u)
+	res := db.Unscoped().Model(&TenantUser{}).Where("id = ?", id).Updates(u)
 	return res.RowsAffected, res.Error
 }
 

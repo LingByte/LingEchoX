@@ -21,10 +21,10 @@ type Permission struct {
 	Name        string `json:"name" gorm:"size:256;not null"`
 	Description string `json:"description,omitempty" gorm:"size:512"`
 	// Kind: module | menu | button | api | data（模块折叠树 / 菜单 / 按钮 / 接口 / 数据范围）
-	Kind        string `json:"kind" gorm:"size:32;index;not null;default:menu"`
-	ParentCode  string `json:"parentCode,omitempty" gorm:"size:128;index"`
-	Resource    string `json:"resource,omitempty" gorm:"size:128;index"`
-	Action      string `json:"action,omitempty" gorm:"size:64;index"`
+	Kind       string `json:"kind" gorm:"size:32;index;not null;default:menu"`
+	ParentCode string `json:"parentCode,omitempty" gorm:"size:128;index"`
+	Resource   string `json:"resource,omitempty" gorm:"size:128;index"`
+	Action     string `json:"action,omitempty" gorm:"size:64;index"`
 }
 
 func (Permission) TableName() string {
@@ -46,7 +46,7 @@ func (TenantRolePermission) TableName() string {
 // ListAllPermissions returns the global permission catalog (active rows).
 func ListAllPermissions(db *gorm.DB) ([]Permission, error) {
 	var rows []Permission
-	err := db.Where("is_deleted = ?", SoftDeleteStatusActive).
+	err := db.
 		Order(`CASE kind 
 			WHEN '` + PermissionKindModule + `' THEN 0 
 			WHEN '` + PermissionKindMenu + `' THEN 1 
@@ -62,7 +62,7 @@ func ListAllPermissions(db *gorm.DB) ([]Permission, error) {
 func ListPermissionIDsForRole(db *gorm.DB, roleID uint) ([]uint, error) {
 	var ids []uint
 	err := db.Model(&TenantRolePermission{}).
-		Where("role_id = ? AND is_deleted = ?", roleID, SoftDeleteStatusActive).
+		Where("role_id = ?", roleID).
 		Pluck("permission_id", &ids).Error
 	return ids, err
 }
@@ -73,7 +73,7 @@ func ReplaceTenantRolePermissions(db *gorm.DB, roleID uint, permissionIDs []uint
 		if len(permissionIDs) > 0 {
 			var n int64
 			if err := tx.Model(&Permission{}).
-				Where("id IN ? AND is_deleted = ?", permissionIDs, SoftDeleteStatusActive).
+				Where("id IN ?", permissionIDs).
 				Count(&n).Error; err != nil {
 				return err
 			}
@@ -98,7 +98,7 @@ func ReplaceTenantRolePermissions(db *gorm.DB, roleID uint, permissionIDs []uint
 // AttachAllPermissionsToRole binds every active catalog permission to the role (tenant admin bootstrap).
 func AttachAllPermissionsToRole(tx *gorm.DB, roleID uint, operator string) error {
 	var ids []uint
-	if err := tx.Model(&Permission{}).Where("is_deleted = ?", SoftDeleteStatusActive).Pluck("id", &ids).Error; err != nil {
+	if err := tx.Model(&Permission{}).Pluck("id", &ids).Error; err != nil {
 		return err
 	}
 	for _, pid := range ids {

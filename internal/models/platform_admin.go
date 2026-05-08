@@ -37,7 +37,7 @@ func GetActivePlatformAdminByEmail(db *gorm.DB, email string) (PlatformAdmin, er
 }
 
 func ActivePlatformAdmins(db *gorm.DB) *gorm.DB {
-	return db.Model(&PlatformAdmin{}).Where("is_deleted = ?", SoftDeleteStatusActive)
+	return db.Model(&PlatformAdmin{})
 }
 
 func CountPlatformAdmins(db *gorm.DB) (int64, error) {

@@ -22,8 +22,8 @@ var (
 
 func minKeysToProvision() int {
 	n := config.GlobalConfig.JWT.KeepOldKeys
-	if n < 2 {
-		return 2
+	if n < 3 {
+		return 3
 	}
 	return n
 }
