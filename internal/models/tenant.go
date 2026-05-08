@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -14,10 +15,12 @@ import (
 // Tenant is one SaaS customer organization (multi-tenant root).
 type Tenant struct {
 	BaseModel
-	Name        string `json:"name" gorm:"size:128;index;not null"`
-	Slug        string `json:"slug" gorm:"size:64;uniqueIndex;not null"`
-	Description string `json:"description,omitempty" gorm:"size:512"`
-	Status      string `json:"status" gorm:"size:24;index;not null;default:active"` // active | suspended
+	Name         string `json:"name" gorm:"size:128;index;not null"`
+	Slug         string `json:"slug" gorm:"size:64;uniqueIndex;not null"`
+	Description  string `json:"description,omitempty" gorm:"size:512"`
+	Status       string `json:"status" gorm:"size:24;index;not null;default:active"` // active | suspended
+	ContactEmail string `json:"contactEmail" gorm:"size:128;index"`
+	MaxUserCount int    `json:"maxUserCount" gorm:"default:5"`
 }
 
 func (Tenant) TableName() string {
@@ -27,13 +30,6 @@ func (Tenant) TableName() string {
 // CreateTenant inserts a tenant row.
 func CreateTenant(db *gorm.DB, t *Tenant) error {
 	return db.Create(t).Error
-}
-
-// GetTenantBySlug returns an active (non-deleted) tenant by slug.
-func GetTenantBySlug(db *gorm.DB, slug string) (Tenant, error) {
-	var row Tenant
-	err := db.Where("slug = ?", slug).First(&row).Error
-	return row, err
 }
 
 // GetActiveTenantByID returns an active tenant by primary key.
@@ -79,22 +75,30 @@ func ListTenantsPage(db *gorm.DB, page, size int, search string) ([]Tenant, int6
 }
 
 // UpdateActiveTenant patches name / description / status for an active tenant.
-func UpdateActiveTenant(db *gorm.DB, id uint, name, description, status, updateBy string) error {
+func UpdateActiveTenant(db *gorm.DB, id uint, name, description, status, contactEmail string, maxUserCount int, updateBy string) error {
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
 	updates := map[string]any{
 		"updated_at": time.Now(),
 	}
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
-	if strings.TrimSpace(name) != "" {
+	if !utils.IsEmpty(name) {
 		updates["name"] = strings.TrimSpace(name)
 	}
 	if description != "" {
 		updates["description"] = strings.TrimSpace(description)
 	}
-	st := strings.TrimSpace(status)
-	if st != "" {
-		updates["status"] = st
+	status = utils.Trim(status)
+	if status != "" {
+		updates["status"] = status
+	}
+	if contactEmail != "" {
+		updates["contact_email"] = strings.TrimSpace(contactEmail)
+	}
+	if maxUserCount > 0 {
+		updates["max_user_count"] = maxUserCount
 	}
 	if len(updates) <= 2 { // only UpdatedAt / update_by
 		return nil
@@ -106,14 +110,14 @@ func UpdateActiveTenant(db *gorm.DB, id uint, name, description, status, updateB
 
 // SoftDeleteTenant soft-deletes one tenant row (platform ops).
 func SoftDeleteTenant(db *gorm.DB, id uint, updateBy string) error {
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
 	updates := map[string]any{
-		"updated_at": time.Now(),
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
-	if err := db.Model(&Tenant{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-		return err
-	}
-	return db.Where("id = ?", id).Delete(&Tenant{}).Error
+	return db.Model(&Tenant{}).Where("id = ?", id).Updates(updates).Error
 }

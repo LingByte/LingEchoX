@@ -7,25 +7,16 @@ import (
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
 // listTenants returns tenant organizations for platform admin (e.g. assign trunk numbers).
 func (h *Handlers) listTenants(c *gin.Context) {
-	if _, ok := requirePlatformAdmin(c); !ok {
-		return
-	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 500 {
-		size = 500
-	}
+	// Platform admin only (enforced by route middleware).
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 500)
 	list, total, err := models.ListTenantsPage(h.db, page, size, strings.TrimSpace(c.Query("search")))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

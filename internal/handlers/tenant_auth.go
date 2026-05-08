@@ -10,6 +10,7 @@ import (
 	"github.com/LingByte/SoulNexus/cmd/bootstrap"
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/LingByte/SoulNexus/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -36,13 +37,13 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 		return
 	}
 
-	email := strings.TrimSpace(strings.ToLower(req.Email))
+	email := utils.TrimLower(req.Email)
 	user, err := models.GetActiveTenantUserByEmailGlobal(h.db, email)
 	if err == nil {
 		h.finishTenantLogin(c, req.Password, req.TotpCode, user)
 		return
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		response.AbortWithStatusJSON(c, 500, err)
 		return
 	}
@@ -50,10 +51,6 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 	adm, err := models.GetActivePlatformAdminByEmail(h.db, email)
 	if err != nil {
 		response.Fail(c, "邮箱或密码错误", nil)
-		return
-	}
-	if adm.Status != "" && adm.Status != models.PlatformAdminStatusActive {
-		response.Fail(c, "账号不可用", nil)
 		return
 	}
 	if !access.CheckPassword(adm.PasswordHash, req.Password) {

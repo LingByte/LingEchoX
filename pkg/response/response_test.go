@@ -151,14 +151,13 @@ func TestAbortWithStatusJSON(t *testing.T) {
 
 	var got map[string]any
 	readJSON(t, rr, &got)
-	// 检查新的响应格式
-	if got["msg"] != "nope" {
-		t.Fatalf("msg field=%v, want 'nope'", got["msg"])
+	if got["msg"] != "internal error" {
+		t.Fatalf("msg field=%v, want 'internal error'", got["msg"])
 	}
-	if got["error"] != "UNKNOWN_ERROR" {
-		t.Fatalf("error field=%v, want 'UNKNOWN_ERROR'", got["error"])
+	if got["error"] != "INTERNAL_ERROR" {
+		t.Fatalf("error field=%v, want 'INTERNAL_ERROR'", got["error"])
 	}
-	if got["code"] != float64(403) { // JSON 数字会被解析为 float64
+	if got["code"] != float64(403) {
 		t.Fatalf("code field=%v, want 403", got["code"])
 	}
 	if rr.Header().Get("X-After") != "" {

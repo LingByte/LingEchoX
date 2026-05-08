@@ -4,6 +4,7 @@ package middleware
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/utils/access"
@@ -50,4 +51,15 @@ func AuthPlatformAdminID(c *gin.Context) uint {
 		}
 	}
 	return 0
+}
+
+// RequirePlatformAdmin rejects requests that are not authenticated as a platform admin.
+func RequirePlatformAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if AuthPlatformAdminID(c) == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": "forbidden", "data": nil})
+			return
+		}
+		c.Next()
+	}
 }

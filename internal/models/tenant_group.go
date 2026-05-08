@@ -1,8 +1,6 @@
 package models
 
 import (
-	"time"
-
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"gorm.io/gorm"
 )
@@ -112,21 +110,24 @@ func SoftDeleteTenantGroup(db *gorm.DB, tenantID, groupID uint, updateBy string)
 			First(&g).Error; err != nil {
 			return err
 		}
-		now := time.Now()
+		meta := BaseModel{}
+		meta.SoftDelete(updateBy)
 		if err := tx.Model(&TenantUserGroup{}).
 			Where("group_id = ?", groupID).
-			Updates(map[string]any{"updated_at": now, "update_by": updateBy}).Error; err != nil {
+			Updates(map[string]any{
+				"updated_at": meta.UpdatedAt,
+				"update_by":  meta.UpdateBy,
+				"deleted_at": meta.DeletedAt,
+			}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&TenantGroup{}).Where("id = ?", groupID).Updates(map[string]any{
-			"updated_at": now,
-			"update_by":  updateBy,
+			"updated_at": meta.UpdatedAt,
+			"update_by":  meta.UpdateBy,
+			"deleted_at": meta.DeletedAt,
 		}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("group_id = ?", groupID).Delete(&TenantUserGroup{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("id = ?", groupID).Delete(&TenantGroup{}).Error
+		return nil
 	})
 }

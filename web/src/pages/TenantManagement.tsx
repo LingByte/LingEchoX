@@ -104,6 +104,8 @@ export default function TenantManagement() {
               { title: 'ID', dataIndex: 'id', width: 72 },
               { title: '企业名称', dataIndex: 'name' },
               { title: '标识 slug', dataIndex: 'slug', render: (v: string) => <Typography.Text copyable>{v}</Typography.Text> },
+              { title: '联系邮箱', dataIndex: 'contactEmail', width: 180, render: (v: string) => v || '—' },
+              { title: '人数上限', dataIndex: 'maxUserCount', width: 100, render: (v: number) => (v && v > 0 ? v : 5) },
               {
                 title: '状态',
                 dataIndex: 'status',
@@ -124,6 +126,8 @@ export default function TenantManagement() {
                           name: row.name,
                           description: row.description || '',
                           status: row.status || 'active',
+                          contactEmail: row.contactEmail || '',
+                          maxUserCount: row.maxUserCount || 5,
                         })
                         setEditOpen(true)
                       }}
@@ -174,6 +178,7 @@ export default function TenantManagement() {
               adminPassword: String(v.adminPassword || ''),
               adminDisplayName: String(v.adminDisplayName || '').trim(),
               tenantDescription: String(v.tenantDescription || '').trim(),
+              maxUserCount: Number(v.maxUserCount) || 5,
             })
             if (r.code !== 200) {
               Message.error(r.msg || '创建失败')
@@ -203,6 +208,9 @@ export default function TenantManagement() {
           <FormItem label="租户备注" field="tenantDescription">
             <Input.TextArea placeholder="可选" autoSize={{ minRows: 2 }} />
           </FormItem>
+          <FormItem label="用户上限" field="maxUserCount" initialValue={5}>
+            <Input type="number" min={1} />
+          </FormItem>
         </Form>
       </Modal>
 
@@ -219,6 +227,8 @@ export default function TenantManagement() {
               name: String(v.name || '').trim(),
               description: String(v.description || '').trim(),
               status: String(v.status || 'active'),
+              contactEmail: String(v.contactEmail || '').trim(),
+              maxUserCount: Number(v.maxUserCount) || 5,
             })
             if (r.code !== 200) {
               Message.error(r.msg || '保存失败')
@@ -246,6 +256,12 @@ export default function TenantManagement() {
                 { value: 'suspended', label: '暂停' },
               ]}
             />
+          </FormItem>
+          <FormItem label="官方联系邮箱" field="contactEmail">
+            <Input />
+          </FormItem>
+          <FormItem label="用户上限" field="maxUserCount">
+            <Input type="number" min={1} />
           </FormItem>
         </Form>
       </Modal>

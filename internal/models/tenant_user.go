@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -110,7 +111,7 @@ func GetActiveTenantUserByEmail(db *gorm.DB, tenantID uint, email string) (Tenan
 // GetActiveTenantUserByEmailGlobal returns a non-deleted tenant user by email (unique across the system).
 func GetActiveTenantUserByEmailGlobal(db *gorm.DB, email string) (TenantUser, error) {
 	var row TenantUser
-	err := ActiveTenantUsers(db).Where("email = ?", strings.TrimSpace(strings.ToLower(email))).First(&row).Error
+	err := ActiveTenantUsers(db).Where("email = ?", utils.TrimLower(email)).First(&row).Error
 	return row, err
 }
 
@@ -135,8 +136,10 @@ func CreateTenantUser(db *gorm.DB, user *TenantUser) error {
 
 // UpdateTenantUser updates a tenant user by ID.
 func UpdateTenantUser(db *gorm.DB, id uint, updates map[string]any, updateBy string) (int64, error) {
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
 	res := db.Model(&TenantUser{}).Where("id = ?", id).Updates(updates)
 	return res.RowsAffected, res.Error
@@ -145,8 +148,10 @@ func UpdateTenantUser(db *gorm.DB, id uint, updates map[string]any, updateBy str
 // UpdateTenantUserStatus updates the status of a tenant user.
 func UpdateTenantUserStatus(db *gorm.DB, id uint, status, updateBy string) (int64, error) {
 	updates := map[string]any{"status": status}
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
 	res := db.Model(&TenantUser{}).Where("id = ?", id).Updates(updates)
 	return res.RowsAffected, res.Error
@@ -168,24 +173,29 @@ func RecordTenantUserLogin(db *gorm.DB, id uint, ip string) error {
 
 // SoftDeleteTenantUserByID soft-deletes a tenant user by ID.
 func SoftDeleteTenantUserByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{}
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	u := map[string]any{
+		"deleted_at": meta.DeletedAt,
+		"updated_at": meta.UpdatedAt,
 	}
-	if len(u) > 0 {
-		if err := db.Model(&TenantUser{}).Where("id = ?", id).Updates(u).Error; err != nil {
-			return 0, err
-		}
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
-	res := db.Where("id = ?", id).Delete(&TenantUser{})
+	res := db.Model(&TenantUser{}).Where("id = ?", id).Updates(u)
 	return res.RowsAffected, res.Error
 }
 
 // RestoreTenantUser restores a soft-deleted tenant user.
 func RestoreTenantUser(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{"deleted_at": nil}
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.Restore(updateBy)
+	u := map[string]any{
+		"deleted_at": nil,
+		"updated_at": meta.UpdatedAt,
+	}
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
 	res := db.Unscoped().Model(&TenantUser{}).Where("id = ?", id).Updates(u)
 	return res.RowsAffected, res.Error
@@ -215,7 +225,7 @@ func CountTenantUsersByStatus(db *gorm.DB, tenantID uint, status string) (int64,
 
 // CheckTenantUserEmailExists checks if email is already used by an active user (globally unique).
 func CheckTenantUserEmailExists(db *gorm.DB, _ uint, email string, excludeID uint) (bool, error) {
-	email = strings.TrimSpace(strings.ToLower(email))
+	email = utils.TrimLower(email)
 	q := ActiveTenantUsers(db).Where("email = ?", email)
 	if excludeID > 0 {
 		q = q.Where("id != ?", excludeID)

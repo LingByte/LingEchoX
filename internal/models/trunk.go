@@ -228,15 +228,9 @@ func SoftDeleteTrunkNumberByID(db *gorm.DB, id uint) error {
 	return db.Delete(&TrunkNumber{}, id).Error
 }
 
-// NormalizeDialDigits keeps decimal digits only for DID matching.
+// NormalizeDialDigits keeps decimal digits only and strips country code "86" for DID matching.
 func NormalizeDialDigits(s string) string {
-	var b strings.Builder
-	for _, r := range strings.TrimSpace(s) {
-		if unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
+	out := dialDigitsOnly(s)
 	// Strip country code "86" for external DID matching.
 	// Use len>10 to also support +86 prefixed service numbers like 400-xxxx-xxx (10 digits local, 12 with 86).
 	if strings.HasPrefix(out, "86") && len(out) > 10 {
@@ -297,8 +291,7 @@ func FindTrunkNumberByInboundDID(db *gorm.DB, calledRaw string) (TrunkNumber, bo
 	}
 	rawDigits := dialDigitsOnly(raw)
 	calledNo86 := ""
-	rawTrim := strings.TrimSpace(raw)
-	if strings.HasPrefix(rawTrim, "+86") && len(rawDigits) > 10 && strings.HasPrefix(rawDigits, "86") {
+	if strings.HasPrefix(raw, "+86") && len(rawDigits) > 10 && strings.HasPrefix(rawDigits, "86") {
 		calledNo86 = rawDigits[2:]
 	}
 	rawHasOnlyDigits := isLikelyDialUser(raw)

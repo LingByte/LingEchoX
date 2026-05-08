@@ -76,6 +76,22 @@ func AuthUserID(c *gin.Context) uint {
 	return 0
 }
 
+// CurrentTenantID is an alias for AuthTenantID for use in handlers
+// where middleware has already guaranteed a non-zero tenant context.
+func CurrentTenantID(c *gin.Context) uint { return AuthTenantID(c) }
+
+// RequireHumanJWTUser rejects requests that lack a human user ID (i.e. AKSK-only callers).
+// Use on routes where only logged-in humans should operate (e.g. credential management).
+func RequireHumanJWTUser() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if AuthUserID(c) == 0 || AuthTenantID(c) == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": "forbidden", "data": nil})
+			return
+		}
+		c.Next()
+	}
+}
+
 func AuthEmail(c *gin.Context) string {
 	if v, ok := c.Get(CtxAuthEmail); ok {
 		if s, ok := v.(string); ok {

@@ -7,6 +7,8 @@ export interface TenantRow {
   slug: string
   description?: string
   status?: string
+  contactEmail?: string
+  maxUserCount?: number
   createdAt?: string
 }
 
@@ -30,13 +32,14 @@ export async function createTenantPlatform(body: {
   adminPassword: string
   adminDisplayName?: string
   tenantDescription?: string
+  maxUserCount?: number
 }): Promise<ApiResponse<{ tenant: TenantRow; adminUser: Record<string, unknown>; roleId: number }>> {
   return post('/tenants', body)
 }
 
 export async function updateTenantPlatform(
   id: number,
-  body: { name?: string; description?: string; status?: string },
+  body: { name?: string; description?: string; status?: string; contactEmail?: string; maxUserCount?: number },
 ): Promise<ApiResponse<{ tenant: TenantRow }>> {
   return put(`/tenants/${id}`, body)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -64,21 +65,10 @@ type acdPoolTargetListItem struct {
 }
 
 func (h *Handlers) listACDPoolTargets(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 100 {
-		size = 100
-	}
+	tid := middleware.CurrentTenantID(c)
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 100)
 	var trunkNumID uint
 	if s := strings.TrimSpace(c.Query("trunkNumberId")); s != "" {
 		if v, perr := strconv.ParseUint(s, 10, 32); perr == nil {
@@ -106,10 +96,7 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 
 // getACDDispatchMode returns current dispatch mode for one trunkNumberId (tenant-owned).
 func (h *Handlers) getACDDispatchMode(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
+	tid := middleware.CurrentTenantID(c)
 	var trunkNumID uint
 	if s := strings.TrimSpace(c.Query("trunkNumberId")); s != "" {
 		if v, err := strconv.ParseUint(s, 10, 32); err == nil {
@@ -138,10 +125,7 @@ type acdDispatchModeReq struct {
 
 // updateACDDispatchMode updates sip_trunk_numbers.acd_dispatch_mode for the current tenant.
 func (h *Handlers) updateACDDispatchMode(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
+	tid := middleware.CurrentTenantID(c)
 	var req acdDispatchModeReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.TrunkNumberID == 0 {
 		response.Fail(c, "invalid body: need trunkNumberId", nil)
@@ -161,16 +145,13 @@ func (h *Handlers) updateACDDispatchMode(c *gin.Context) {
 }
 
 func (h *Handlers) getACDPoolTarget(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	tid := middleware.CurrentTenantID(c)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetActiveACDPoolTargetByID(h.db, uint(id))
+	row, err := models.GetActiveACDPoolTargetByID(h.db, id)
 	if err != nil || !tenantOwns(row.TenantID, tid) {
 		response.Fail(c, "not found", nil)
 		return
@@ -186,10 +167,7 @@ func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 }
 
 func (h *Handlers) createACDPoolTarget(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
+	tid := middleware.CurrentTenantID(c)
 	var req acdPoolTargetWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -281,11 +259,8 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 }
 
 func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	tid := middleware.CurrentTenantID(c)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
@@ -307,7 +282,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 	if !h.validateTrunkNumberOwnedByTenant(c, req.TrunkNumberID, tid) {
 		return
 	}
-	row, err := models.GetActiveACDPoolTargetByID(h.db, uint(id))
+	row, err := models.GetActiveACDPoolTargetByID(h.db, id)
 	if err != nil || !tenantOwns(row.TenantID, tid) {
 		response.Fail(c, "not found", nil)
 		return
@@ -337,23 +312,20 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		return
 	}
 	if rt == models.ACDPoolRouteTypeWeb && ws == models.ACDWorkStateOffline {
-		_ = models.ClearACDPoolTargetWebSeatLastSeen(h.db, uint(id))
+		_ = models.ClearACDPoolTargetWebSeatLastSeen(h.db, id)
 	}
-	row, _ = models.ReloadACDPoolTargetByID(h.db, uint(id))
+	row, _ = models.ReloadACDPoolTargetByID(h.db, id)
 	response.Success(c, "success", row)
 }
 
 func (h *Handlers) deleteACDPoolTarget(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	tid := middleware.CurrentTenantID(c)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	n, err := models.SoftDeleteACDPoolTargetByIDForTenant(h.db, uint(id), tid, acdOperator(c))
+	n, err := models.SoftDeleteACDPoolTargetByIDForTenant(h.db, id, tid, acdOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -371,10 +343,7 @@ type webSeatACDHeartbeatReq struct {
 
 // webSeatACDHeartbeat refreshes web_seat_last_seen_at for the anchored browser row (keepalive).
 func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
+	tid := middleware.CurrentTenantID(c)
 	var req webSeatACDHeartbeatReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.TargetID == 0 {
 		response.Fail(c, "invalid body: need targetId", nil)

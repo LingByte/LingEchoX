@@ -1,8 +1,6 @@
 package models
 
 import (
-	"time"
-
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"gorm.io/gorm"
 )
@@ -153,14 +151,19 @@ func ReplaceTenantUserRoles(db *gorm.DB, tenantID, tenantUserID uint, roleIDs []
 
 // SoftDeleteTenantRole soft-deletes a custom tenant role (system roles are protected in the handler).
 func SoftDeleteTenantRole(db *gorm.DB, tenantID, roleID uint, updateBy string) error {
-	updates := map[string]any{"updated_at": time.Now()}
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	updates := map[string]any{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
+	}
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
 	if err := db.Model(&TenantRole{}).
 		Where("id = ? AND tenant_id = ? AND is_system = ?", roleID, tenantID, false).
 		Updates(updates).Error; err != nil {
 		return err
 	}
-	return db.Where("id = ? AND tenant_id = ? AND is_system = ?", roleID, tenantID, false).Delete(&TenantRole{}).Error
+	return nil
 }

@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/LingByte/SoulNexus/internal/models"
+	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,21 +22,10 @@ type sipScriptTemplateWriteReq struct {
 }
 
 func (h *Handlers) listSIPScriptTemplates(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 100 {
-		size = 100
-	}
+	tid := middleware.CurrentTenantID(c)
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 100)
 	list, total, err := models.ListSIPScriptTemplatesPage(h.db, tid, page, size, c.Query("scriptId"), c.Query("name"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -44,16 +35,13 @@ func (h *Handlers) listSIPScriptTemplates(c *gin.Context) {
 }
 
 func (h *Handlers) getSIPScriptTemplate(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	tid := middleware.CurrentTenantID(c)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, uint(id), tid)
+	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, id, tid)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -62,10 +50,7 @@ func (h *Handlers) getSIPScriptTemplate(c *gin.Context) {
 }
 
 func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
+	tid := middleware.CurrentTenantID(c)
 	var req sipScriptTemplateWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -109,11 +94,8 @@ func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
 }
 
 func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	tid := middleware.CurrentTenantID(c)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
@@ -123,7 +105,7 @@ func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 		response.Fail(c, "invalid body", err.Error())
 		return
 	}
-	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, uint(id), tid)
+	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, id, tid)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -147,21 +129,18 @@ func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	row, _ = models.ReloadSIPScriptTemplateByID(h.db, uint(id))
+	row, _ = models.ReloadSIPScriptTemplateByID(h.db, id)
 	response.Success(c, "success", row)
 }
 
 func (h *Handlers) deleteSIPScriptTemplate(c *gin.Context) {
-	tid, ok := requireTenant(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	tid := middleware.CurrentTenantID(c)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	n, err := models.SoftDeleteSIPScriptTemplateByIDForTenant(h.db, uint(id), tid, acdOperator(c))
+	n, err := models.SoftDeleteSIPScriptTemplateByIDForTenant(h.db, id, tid, acdOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return

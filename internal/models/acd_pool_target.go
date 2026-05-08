@@ -205,27 +205,31 @@ func ReloadACDPoolTargetByID(db *gorm.DB, id uint) (ACDPoolTarget, error) {
 
 // SoftDeleteACDPoolTargetByID soft-deletes an active row.
 func SoftDeleteACDPoolTargetByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{"updated_at": time.Now()}
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	u := map[string]any{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if err := db.Model(&ACDPoolTarget{}).Where("id = ?", id).Updates(u).Error; err != nil {
-		return 0, err
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
-	res := db.Where("id = ?", id).Delete(&ACDPoolTarget{})
+	res := db.Model(&ACDPoolTarget{}).Where("id = ?", id).Updates(u)
 	return res.RowsAffected, res.Error
 }
 
 // SoftDeleteACDPoolTargetByIDForTenant deletes within tenant scope.
 func SoftDeleteACDPoolTargetByIDForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
-	u := map[string]any{"updated_at": time.Now()}
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	u := map[string]any{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if err := db.Model(&ACDPoolTarget{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u).Error; err != nil {
-		return 0, err
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
-	res := db.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&ACDPoolTarget{})
+	res := db.Model(&ACDPoolTarget{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u)
 	return res.RowsAffected, res.Error
 }
 
@@ -297,8 +301,10 @@ func BuildACDPoolTargetUpdateMap(
 	if routeType == ACDPoolRouteTypeWeb && workState == ACDWorkStateAvailable {
 		u["web_seat_last_seen_at"] = now
 	}
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
 	return u
 }
@@ -314,7 +320,11 @@ func UpdateACDPoolTargetWebSeatHeartbeat(db *gorm.DB, id uint, operator string, 
 	u := map[string]any{
 		"web_seat_last_seen_at": now,
 		"updated_at":            now,
-		"update_by":             strings.TrimSpace(operator),
+	}
+	meta := BaseModel{}
+	meta.SetUpdateInfo(operator)
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
 	return db.Model(&ACDPoolTarget{}).Where("id = ?", id).Updates(u).Error
 }
@@ -331,8 +341,10 @@ func UpdateACDPoolTargetWorkState(ctx context.Context, db *gorm.DB, id uint, wor
 		"work_state_at": now,
 		"updated_at":    now,
 	}
-	if s := strings.TrimSpace(updateBy); s != "" {
-		u["update_by"] = s
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
 	return ActiveACDPoolTargets(db.WithContext(ctx)).Where("id = ?", id).Updates(u).Error
 }
@@ -538,14 +550,16 @@ func SoftDeleteACDPoolTargetsByIDs(ctx context.Context, db *gorm.DB, ids []uint,
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	u := map[string]any{"updated_at": time.Now()}
-	if s := strings.TrimSpace(updateBy); s != "" {
-		u["update_by"] = s
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	u := map[string]any{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if err := db.WithContext(ctx).Model(&ACDPoolTarget{}).Where("id IN ?", ids).Updates(u).Error; err != nil {
-		return 0, err
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
-	res := db.WithContext(ctx).Where("id IN ?", ids).Delete(&ACDPoolTarget{})
+	res := db.WithContext(ctx).Model(&ACDPoolTarget{}).Where("id IN ?", ids).Updates(u)
 	return res.RowsAffected, res.Error
 }
 

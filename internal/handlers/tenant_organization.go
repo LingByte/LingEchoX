@@ -3,12 +3,12 @@ package handlers
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -127,7 +127,7 @@ func (h *Handlers) updateOrgGroup(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
@@ -138,14 +138,14 @@ func (h *Handlers) updateOrgGroup(c *gin.Context) {
 		return
 	}
 	var row models.TenantGroup
-	if err := h.db.Where("id = ? AND tenant_id = ?", uint(id64), tid).
+	if err := h.db.Where("id = ? AND tenant_id = ?", id, tid).
 		First(&row).Error; err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	op := acdOperator(c)
-	err = h.db.Transaction(func(tx *gorm.DB) error {
+	txErr := h.db.Transaction(func(tx *gorm.DB) error {
 		if req.IsDefault {
 			if err := tx.Model(&models.TenantGroup{}).
 				Where("tenant_id = ?", tid).
@@ -156,12 +156,16 @@ func (h *Handlers) updateOrgGroup(c *gin.Context) {
 		u := map[string]any{
 			"name":       name,
 			"is_default": req.IsDefault,
-			"update_by":  op,
+		}
+		meta := models.BaseModel{}
+		meta.SetUpdateInfo(op)
+		if meta.UpdateBy != "" {
+			u["update_by"] = meta.UpdateBy
 		}
 		return tx.Model(&models.TenantGroup{}).Where("id = ?", row.ID).Updates(u).Error
 	})
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if txErr != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, txErr)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": row.ID, "name": name, "isDefault": req.IsDefault})
@@ -173,12 +177,12 @@ func (h *Handlers) deleteOrgGroup(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	if err := models.SoftDeleteTenantGroup(h.db, tid, uint(id64), acdOperator(c)); err != nil {
+	if err := models.SoftDeleteTenantGroup(h.db, tid, id, acdOperator(c)); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.Fail(c, "not found", nil)
 			return
@@ -186,7 +190,7 @@ func (h *Handlers) deleteOrgGroup(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"id": uint(id64)})
+	response.Success(c, "success", gin.H{"id": id})
 }
 
 func (h *Handlers) listOrgRoles(c *gin.Context) {
@@ -218,12 +222,12 @@ func (h *Handlers) getOrgRole(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	r, err := models.GetTenantRoleScoped(h.db, tid, uint(id64))
+	r, err := models.GetTenantRoleScoped(h.db, tid, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -283,7 +287,7 @@ func (h *Handlers) updateOrgRole(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
@@ -293,7 +297,7 @@ func (h *Handlers) updateOrgRole(c *gin.Context) {
 		response.Fail(c, "invalid body", err.Error())
 		return
 	}
-	r, err := models.GetTenantRoleScoped(h.db, tid, uint(id64))
+	r, err := models.GetTenantRoleScoped(h.db, tid, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -306,7 +310,11 @@ func (h *Handlers) updateOrgRole(c *gin.Context) {
 	u := map[string]any{
 		"name":        strings.TrimSpace(req.Name),
 		"description": strings.TrimSpace(req.Description),
-		"update_by":   op,
+	}
+	meta := models.BaseModel{}
+	meta.SetUpdateInfo(op)
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
 	if err := h.db.Model(&models.TenantRole{}).Where("id = ?", r.ID).Updates(u).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -321,12 +329,12 @@ func (h *Handlers) deleteOrgRole(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	r, err := models.GetTenantRoleScoped(h.db, tid, uint(id64))
+	r, err := models.GetTenantRoleScoped(h.db, tid, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -352,12 +360,12 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	r, err := models.GetTenantRoleScoped(h.db, tid, uint(id64))
+	r, err := models.GetTenantRoleScoped(h.db, tid, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -371,7 +379,7 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 		response.Fail(c, "invalid body", err.Error())
 		return
 	}
-	if err := models.ReplaceTenantRolePermissions(h.db, uint(id64), req.PermissionIDs, acdOperator(c)); err != nil {
+	if err := models.ReplaceTenantRolePermissions(h.db, id, req.PermissionIDs, acdOperator(c)); err != nil {
 		if errors.Is(err, models.ErrInvalidOrgReference) {
 			response.Fail(c, "无效的权限 id", nil)
 			return
@@ -379,7 +387,7 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"roleId": uint(id64)})
+	response.Success(c, "success", gin.H{"roleId": id})
 }
 
 type orgUserRolesReq struct {
@@ -392,12 +400,12 @@ func (h *Handlers) putOrgTenantUserRoles(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	uid64, err := strconv.ParseUint(c.Param("userId"), 10, 32)
-	if err != nil {
-		response.Fail(c, "invalid user id", nil)
+	uid, uidErr := utils.ParseID(c.Param("userId"))
+	if uidErr != nil {
+		response.Fail(c, "invalid userId", nil)
 		return
 	}
-	u, err := models.GetActiveTenantUserByID(h.db, uint(uid64))
+	u, err := models.GetActiveTenantUserByID(h.db, uid)
 	if err != nil || u.TenantID != tid {
 		response.Fail(c, "not found", nil)
 		return
@@ -415,6 +423,7 @@ func (h *Handlers) putOrgTenantUserRoles(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
+	middleware.InvalidatePermissionCache(u.ID)
 	next, err := models.GetActiveTenantUserByID(h.db, u.ID)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -433,12 +442,12 @@ func (h *Handlers) putOrgTenantUserGroups(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	uid64, err := strconv.ParseUint(c.Param("userId"), 10, 32)
-	if err != nil {
-		response.Fail(c, "invalid user id", nil)
+	uid, uidErr := utils.ParseID(c.Param("userId"))
+	if uidErr != nil {
+		response.Fail(c, "invalid userId", nil)
 		return
 	}
-	u, err := models.GetActiveTenantUserByID(h.db, uint(uid64))
+	u, err := models.GetActiveTenantUserByID(h.db, uid)
 	if err != nil || u.TenantID != tid {
 		response.Fail(c, "not found", nil)
 		return

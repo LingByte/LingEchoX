@@ -12,21 +12,14 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/LingByte/SoulNexus/pkg/sip/persist"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
 func (h *Handlers) listSIPUsers(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 100 {
-		size = 100
-	}
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 100)
 	list, total, err := persist.ListSIPUsersPage(h.db, page, size)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -36,12 +29,12 @@ func (h *Handlers) listSIPUsers(c *gin.Context) {
 }
 
 func (h *Handlers) getSIPUser(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := persist.GetActiveSIPUserByID(h.db, uint(id))
+	row, err := persist.GetActiveSIPUserByID(h.db, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -50,12 +43,12 @@ func (h *Handlers) getSIPUser(c *gin.Context) {
 }
 
 func (h *Handlers) deleteSIPUser(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	rows, err := persist.SoftDeleteSIPUserByID(h.db, uint(id))
+	rows, err := persist.SoftDeleteSIPUserByID(h.db, id)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -73,17 +66,9 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 //   - 入局话单的 tenant_id / inbound_trunk_number_id 由被叫 DID 在 sip_trunk_numbers 的解析结果写入（与限并发、号码池作用域一致）。
 //     未匹配 DID 且未开启 SIP_INBOUND_ALLOW_UNKNOWN_DID 的呼叫不会落库为租户数据。
 func (h *Handlers) listSIPCalls(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 100 {
-		size = 100
-	}
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 100)
 
 	var (
 		list  []persist.SIPCall
@@ -100,10 +85,7 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 		}
 		list, total, err = persist.ListAllSIPCallsPage(h.db, tenantFilter, page, size, c.Query("callId"), c.Query("state"))
 	} else {
-		tid, ok := requireTenant(c)
-		if !ok {
-			return
-		}
+		tid := middleware.CurrentTenantID(c)
 		list, total, err = persist.ListSIPCallsPage(h.db, tid, page, size, c.Query("callId"), c.Query("state"))
 	}
 	if err != nil {
@@ -154,21 +136,21 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 }
 
 func (h *Handlers) getSIPCall(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
+	id, idErr := utils.ParseID(c.Param("id"))
+	if idErr != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
 
-	var row persist.SIPCall
+	var (
+		row persist.SIPCall
+		err error
+	)
 	if middleware.AuthPlatformAdminID(c) > 0 {
-		row, err = persist.GetActiveSIPCallByID(h.db, uint(id))
+		row, err = persist.GetActiveSIPCallByID(h.db, id)
 	} else {
-		tid, ok := requireTenant(c)
-		if !ok {
-			return
-		}
-		row, err = persist.GetActiveSIPCallForTenant(h.db, uint(id), tid)
+		tid := middleware.CurrentTenantID(c)
+		row, err = persist.GetActiveSIPCallForTenant(h.db, id, tid)
 	}
 	if err != nil {
 		response.Fail(c, "not found", nil)

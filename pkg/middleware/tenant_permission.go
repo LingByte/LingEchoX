@@ -4,12 +4,23 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// permCache caches user permission codes for 30s to avoid DB hit per request.
+var permCache = utils.NewExpiredLRUCache[uint, []string](2048, 30*time.Second)
+
+// InvalidatePermissionCache removes a user's cached permission codes.
+// Call this after role/permission assignment changes.
+func InvalidatePermissionCache(userID uint) {
+	permCache.Remove(userID)
+}
 
 func dbFromContext(c *gin.Context) (*gorm.DB, bool) {
 	raw, ok := c.Get(constants.DbField)
@@ -62,7 +73,7 @@ func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 					abortForbiddenPermission(c, "访问密钥无效")
 					return
 				}
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error(), "data": nil})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "internal error", "data": nil})
 				return
 			}
 			if !okPerm {
@@ -86,11 +97,7 @@ func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		userCodes, err := models.ListEffectivePermissionCodesForTenantUser(db, uid)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error(), "data": nil})
-			return
-		}
+		userCodes := cachedPermissionCodes(db, uid)
 		for _, req := range codes {
 			if !slices.Contains(userCodes, req) {
 				abortForbiddenPermission(c, "权限不足："+req)
@@ -128,7 +135,7 @@ func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 					abortForbiddenPermission(c, "访问密钥无效")
 					return
 				}
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error(), "data": nil})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "internal error", "data": nil})
 				return
 			}
 			if !okPerm {
@@ -152,11 +159,7 @@ func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		userCodes, err := models.ListEffectivePermissionCodesForTenantUser(db, uid)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error(), "data": nil})
-			return
-		}
+		userCodes := cachedPermissionCodes(db, uid)
 		for _, req := range codes {
 			if slices.Contains(userCodes, req) {
 				c.Next()
@@ -165,4 +168,14 @@ func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 		}
 		abortForbiddenPermission(c, "权限不足")
 	}
+}
+
+// cachedPermissionCodes returns permission codes from cache or DB.
+func cachedPermissionCodes(db *gorm.DB, uid uint) []string {
+	if codes, ok := permCache.Get(uid); ok {
+		return codes
+	}
+	codes, _ := models.ListEffectivePermissionCodesForTenantUser(db, uid)
+	permCache.Add(uid, codes)
+	return codes
 }

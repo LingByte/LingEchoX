@@ -45,9 +45,6 @@ func RandNumberText(n int) string {
 	return randRunes(n, numberRunes)
 }
 
-func RandString(n int) string {
-	return randRunes(n, letterRunes)
-}
 
 func SafeCall(f func() error, failHandle func(error)) error {
 	defer func() {

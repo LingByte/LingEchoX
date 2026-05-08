@@ -221,8 +221,10 @@ func UpdateSIPCampaignStatusByID(ctx context.Context, db *gorm.DB, id uint, stat
 func UpdateActiveSIPCampaignStatus(db *gorm.DB, id uint, status, updateBy string) (int64, error) {
 	now := time.Now()
 	u := SIPCampaignStatusUpdates(status, now)
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
 	res := db.Model(&SIPCampaign{}).Where("id = ?", id).Updates(u)
 	return res.RowsAffected, res.Error
@@ -232,8 +234,10 @@ func UpdateActiveSIPCampaignStatus(db *gorm.DB, id uint, status, updateBy string
 func UpdateActiveSIPCampaignStatusForTenant(db *gorm.DB, id uint, tenantID uint, status, updateBy string) (int64, error) {
 	now := time.Now()
 	u := SIPCampaignStatusUpdates(status, now)
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
 	res := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u)
 	return res.RowsAffected, res.Error
@@ -241,31 +245,31 @@ func UpdateActiveSIPCampaignStatusForTenant(db *gorm.DB, id uint, tenantID uint,
 
 // SoftDeleteSIPCampaignByID soft-deletes a campaign row by id (caller should enforce not-running).
 func SoftDeleteSIPCampaignByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	u := map[string]any{}
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	u := map[string]any{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if len(u) > 0 {
-		if err := db.Model(&SIPCampaign{}).Where("id = ?", id).Updates(u).Error; err != nil {
-			return 0, err
-		}
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
-	res := db.Where("id = ?", id).Delete(&SIPCampaign{})
+	res := db.Model(&SIPCampaign{}).Where("id = ?", id).Updates(u)
 	return res.RowsAffected, res.Error
 }
 
 // SoftDeleteSIPCampaignForTenant soft-deletes within tenant scope.
 func SoftDeleteSIPCampaignForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
-	u := map[string]any{}
-	if updateBy != "" {
-		u["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	u := map[string]any{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if len(u) > 0 {
-		if err := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u).Error; err != nil {
-			return 0, err
-		}
+	if meta.UpdateBy != "" {
+		u["update_by"] = meta.UpdateBy
 	}
-	res := db.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&SIPCampaign{})
+	res := db.Model(&SIPCampaign{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(u)
 	return res.RowsAffected, res.Error
 }
 

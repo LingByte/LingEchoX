@@ -74,16 +74,16 @@ func GetActiveSIPScriptTemplateForTenant(db *gorm.DB, id uint, tenantID uint) (S
 
 // SoftDeleteSIPScriptTemplateByIDForTenant soft-deletes for tenant scope.
 func SoftDeleteSIPScriptTemplateByIDForTenant(db *gorm.DB, id uint, tenantID uint, updateBy string) (int64, error) {
-	updates := map[string]interface{}{}
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	updates := map[string]interface{}{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if len(updates) > 0 {
-		if err := db.Model(&SIPScriptTemplate{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(updates).Error; err != nil {
-			return 0, err
-		}
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
-	res := db.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&SIPScriptTemplate{})
+	res := db.Model(&SIPScriptTemplate{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(updates)
 	return res.RowsAffected, res.Error
 }
 
@@ -146,24 +146,26 @@ func BuildSIPScriptTemplateUpdates(existing SIPScriptTemplate, name, scriptID, v
 		}
 		updates["script_spec"] = spec
 	}
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
 	return updates, nil
 }
 
 // SoftDeleteSIPScriptTemplateByID soft-deletes an active template; returns rows affected.
 func SoftDeleteSIPScriptTemplateByID(db *gorm.DB, id uint, updateBy string) (int64, error) {
-	updates := map[string]interface{}{}
-	if updateBy != "" {
-		updates["update_by"] = updateBy
+	meta := BaseModel{}
+	meta.SoftDelete(updateBy)
+	updates := map[string]interface{}{
+		"updated_at": meta.UpdatedAt,
+		"deleted_at": meta.DeletedAt,
 	}
-	if len(updates) > 0 {
-		if err := db.Model(&SIPScriptTemplate{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return 0, err
-		}
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
 	}
-	res := db.Where("id = ?", id).Delete(&SIPScriptTemplate{})
+	res := db.Model(&SIPScriptTemplate{}).Where("id = ?", id).Updates(updates)
 	return res.RowsAffected, res.Error
 }
 

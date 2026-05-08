@@ -11,19 +11,19 @@ import (
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/LingByte/SoulNexus/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 )
 
 type tenantUserCreateReq struct {
-	Email        string `json:"email" binding:"required,email"`
-	Phone        string `json:"phone"`
-	Username     string `json:"username"`
-	Password     string `json:"password"` // plain text; hashed server-side when PasswordHash empty
-	PasswordHash string `json:"passwordHash"`
-	DisplayName  string `json:"displayName"`
-	Status       string `json:"status"` // active | disabled | pending
-	Source       string `json:"source"`
+	Email       string `json:"email" binding:"required,email"`
+	Phone       string `json:"phone"`
+	Username    string `json:"username"`
+	Password    string `json:"password"` // plain text; always hashed server-side
+	DisplayName string `json:"displayName"`
+	Status      string `json:"status"` // active | disabled | pending
+	Source      string `json:"source"`
 }
 
 type tenantUserUpdateReq struct {
@@ -44,17 +44,9 @@ func (h *Handlers) listTenantUsers(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 100 {
-		size = 100
-	}
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 100)
 
 	list, total, err := models.ListTenantUsersPage(h.db, tenantID, page, size, c.Query("status"), c.Query("search"))
 	if err != nil {
@@ -74,12 +66,12 @@ func (h *Handlers) getTenantUser(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetActiveTenantUserByID(h.db, uint(id))
+	row, err := models.GetActiveTenantUserByID(h.db, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -103,7 +95,7 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		return
 	}
 
-	email := strings.TrimSpace(strings.ToLower(req.Email))
+	email := utils.TrimLower(req.Email)
 	if email == "" {
 		response.Fail(c, "email required", nil)
 		return
@@ -130,19 +122,15 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		}
 	}
 
-	hash := strings.TrimSpace(req.PasswordHash)
-	if hash == "" {
-		pw := strings.TrimSpace(req.Password)
-		if len(pw) < 8 {
-			response.Fail(c, "password required (min 8 chars) or provide passwordHash", nil)
-			return
-		}
-		hv, err := access.HashPassword(pw)
-		if err != nil {
-			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-			return
-		}
-		hash = hv
+	pw := strings.TrimSpace(req.Password)
+	if len(pw) < 8 {
+		response.Fail(c, "password required (min 8 chars)", nil)
+		return
+	}
+	hash, err := access.HashPassword(pw)
+	if err != nil {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
 	}
 
 	status := strings.TrimSpace(req.Status)
@@ -181,7 +169,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
@@ -194,7 +182,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 	}
 
 	// Get existing user to check tenant
-	existing, err := models.GetActiveTenantUserByID(h.db, uint(id))
+	existing, err := models.GetActiveTenantUserByID(h.db, id)
 	if err != nil {
 		response.Fail(c, "user not found", nil)
 		return
@@ -206,7 +194,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 
 	updates := make(map[string]any)
 	if req.Email != "" {
-		email := strings.TrimSpace(strings.ToLower(req.Email))
+		email := utils.TrimLower(req.Email)
 		exists, _ := models.CheckTenantUserEmailExists(h.db, existing.TenantID, email, uint(id))
 		if exists {
 			response.Fail(c, "email already exists", nil)
@@ -262,13 +250,13 @@ func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
 
-	existing, err := models.GetActiveTenantUserByID(h.db, uint(id))
+	existing, err := models.GetActiveTenantUserByID(h.db, id)
 	if err != nil || existing.TenantID != tenantID {
 		response.Fail(c, "user not found", nil)
 		return
@@ -286,7 +274,7 @@ func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
 		return
 	}
 
-	n, err := models.UpdateTenantUserStatus(h.db, uint(id), status, acdOperator(c))
+	n, err := models.UpdateTenantUserStatus(h.db, id, status, acdOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -304,19 +292,19 @@ func (h *Handlers) deleteTenantUser(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
 
-	existing, getErr := models.GetActiveTenantUserByID(h.db, uint(id))
+	existing, getErr := models.GetActiveTenantUserByID(h.db, id)
 	if getErr != nil || existing.TenantID != tenantID {
 		response.Fail(c, "not found", nil)
 		return
 	}
 
-	rows, err := models.SoftDeleteTenantUserByID(h.db, uint(id), acdOperator(c))
+	rows, err := models.SoftDeleteTenantUserByID(h.db, id, acdOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -334,19 +322,19 @@ func (h *Handlers) restoreTenantUser(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
 
-	existing, getErr := models.GetTenantUserByID(h.db, uint(id))
+	existing, getErr := models.GetTenantUserByID(h.db, id)
 	if getErr != nil || existing.TenantID != tenantID {
 		response.Fail(c, "not found", nil)
 		return
 	}
 
-	rows, err := models.RestoreTenantUser(h.db, uint(id), acdOperator(c))
+	rows, err := models.RestoreTenantUser(h.db, id, acdOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return

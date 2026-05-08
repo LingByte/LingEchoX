@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -17,6 +16,7 @@ import (
 	"github.com/LingByte/SoulNexus/cmd/bootstrap"
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/LingByte/SoulNexus/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 	pinyinLib "github.com/mozillazg/go-pinyin"
@@ -35,6 +35,7 @@ type tenantRegisterReq struct {
 	AdminPassword     string `json:"adminPassword" binding:"required,min=8,max=128"`
 	AdminDisplayName  string `json:"adminDisplayName"`
 	TenantDescription string `json:"tenantDescription"`
+	MaxUserCount      int    `json:"maxUserCount"`
 }
 
 func baseSlugFromCompanyName(name string) string {
@@ -101,9 +102,6 @@ func normalizeTenantSlug(s string) string {
 	prevDash := false
 	for _, r := range s {
 		switch {
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r - 'A' + 'a')
-			prevDash = false
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
 			b.WriteRune(r)
 			prevDash = false
@@ -114,12 +112,7 @@ func normalizeTenantSlug(s string) string {
 			}
 		}
 	}
-	out := strings.Trim(b.String(), "-")
-	out = strings.TrimSuffix(strings.TrimPrefix(out, "-"), "-")
-	for strings.Contains(out, "--") {
-		out = strings.ReplaceAll(out, "--", "-")
-	}
-	return out
+	return strings.Trim(b.String(), "-")
 }
 
 func validTenantSlug(slug string) bool {
@@ -204,18 +197,20 @@ func (h *Handlers) tenantUserPublic(u models.TenantUser) gin.H {
 
 func tenantPublic(t models.Tenant) gin.H {
 	return gin.H{
-		"id":          t.ID,
-		"name":        t.Name,
-		"slug":        t.Slug,
-		"description": t.Description,
-		"status":      t.Status,
-		"createdAt":   t.CreatedAt,
+		"id":           t.ID,
+		"name":         t.Name,
+		"slug":         t.Slug,
+		"description":  t.Description,
+		"status":       t.Status,
+		"contactEmail": t.ContactEmail,
+		"maxUserCount": t.MaxUserCount,
+		"createdAt":    t.CreatedAt,
 	}
 }
 
 // provisionTenantWithAdmin creates tenant, system「管理员」role with full catalog permissions, first admin user, and role binding.
 func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash string, attachTag string) (tenant models.Tenant, user models.TenantUser, role models.TenantRole, err error) {
-	email := strings.TrimSpace(strings.ToLower(req.AdminEmail))
+	email := utils.TrimLower(req.AdminEmail)
 	display := strings.TrimSpace(req.AdminDisplayName)
 	if display == "" {
 		display = strings.Split(email, "@")[0]
@@ -227,10 +222,19 @@ func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash s
 			return e
 		}
 		t := &models.Tenant{
-			Name:        strings.TrimSpace(req.CompanyName),
-			Slug:        slug,
-			Description: strings.TrimSpace(req.TenantDescription),
-			Status:      "active",
+			Name:         strings.TrimSpace(req.CompanyName),
+			Slug:         slug,
+			Description:  strings.TrimSpace(req.TenantDescription),
+			Status:       "active",
+			ContactEmail: email,
+			MaxUserCount: req.MaxUserCount,
+		}
+		t.SetCreateInfo(attachTag)
+		if t.MaxUserCount <= 0 {
+			t.MaxUserCount = 5
+		}
+		if !utils.IsEmail(t.ContactEmail) {
+			return errors.New("invalid contact email")
 		}
 		if e := models.CreateTenant(tx, t); e != nil {
 			return e
@@ -243,6 +247,7 @@ func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash s
 			Description: "组织管理员，注册时自动创建",
 			IsSystem:    true,
 		}
+		roleRow.SetCreateInfo(attachTag)
 		if e := models.CreateTenantRole(tx, roleRow); e != nil {
 			return e
 		}
@@ -256,6 +261,7 @@ func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash s
 			Status:       models.TenantUserStatusActive,
 			Source:       models.TenantUserSourceRegister,
 		}
+		u.SetCreateInfo(attachTag)
 		if e := models.CreateTenantUser(tx, u); e != nil {
 			return e
 		}
@@ -265,6 +271,7 @@ func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash s
 			TenantUserID: user.ID,
 			RoleID:       role.ID,
 		}
+		tur.SetCreateInfo(attachTag)
 		if e := models.CreateTenantUserRole(tx, tur); e != nil {
 			return e
 		}
@@ -292,7 +299,7 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 
-	email := strings.TrimSpace(strings.ToLower(req.AdminEmail))
+	email := utils.TrimLower(req.AdminEmail)
 
 	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, 0, email, 0)
 	if mailErr != nil {
@@ -320,33 +327,33 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 
 	pc, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, user.ID)
 	response.Success(c, "success", gin.H{
-		"principal":        "tenant",
-		"token":            token,
-		"expiresIn":        int(tenantAccessTokenTTL.Seconds()),
-		"tenant":           tenantPublic(tenant),
-		"user":             h.tenantUserPublic(user),
-		"permissionCodes":  pc,
-		"roleCreated":      models.TenantAdminRoleName,
-		"roleId":           role.ID,
+		"principal":       "tenant",
+		"token":           token,
+		"expiresIn":       int(tenantAccessTokenTTL.Seconds()),
+		"tenant":          tenantPublic(tenant),
+		"user":            h.tenantUserPublic(user),
+		"permissionCodes": pc,
+		"roleCreated":     models.TenantAdminRoleName,
+		"roleId":          role.ID,
 	})
 }
 
 type tenantPlatformUpdateReq struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Status      string `json:"status"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Status       string `json:"status"`
+	ContactEmail string `json:"contactEmail"`
+	MaxUserCount int    `json:"maxUserCount"`
 }
 
 func (h *Handlers) getTenant(c *gin.Context) {
-	if _, ok := requirePlatformAdmin(c); !ok {
-		return
-	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	t, err := models.GetActiveTenantByID(h.db, uint(id64))
+	t, err := models.GetActiveTenantByID(h.db, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -356,9 +363,7 @@ func (h *Handlers) getTenant(c *gin.Context) {
 
 // createTenantPlatform provisions a tenant (platform console); same payload as public register but returns JSON without issuing tenant JWT.
 func (h *Handlers) createTenantPlatform(c *gin.Context) {
-	if _, ok := requirePlatformAdmin(c); !ok {
-		return
-	}
+	// Platform admin only (enforced by route middleware).
 	var req tenantRegisterReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "请求参数无效", err.Error())
@@ -369,7 +374,7 @@ func (h *Handlers) createTenantPlatform(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	email := strings.TrimSpace(strings.ToLower(req.AdminEmail))
+	email := utils.TrimLower(req.AdminEmail)
 	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, 0, email, 0)
 	if mailErr != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, mailErr)
@@ -392,15 +397,13 @@ func (h *Handlers) createTenantPlatform(c *gin.Context) {
 }
 
 func (h *Handlers) updateTenantPlatform(c *gin.Context) {
-	if _, ok := requirePlatformAdmin(c); !ok {
-		return
-	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	if _, err := models.GetActiveTenantByID(h.db, uint(id64)); err != nil {
+	if _, err := models.GetActiveTenantByID(h.db, id); err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -414,12 +417,25 @@ func (h *Handlers) updateTenantPlatform(c *gin.Context) {
 		response.Fail(c, "invalid status", nil)
 		return
 	}
-	op := fmt.Sprintf("platform")
-	if err := models.UpdateActiveTenant(h.db, uint(id64), strings.TrimSpace(req.Name), req.Description, st, op); err != nil {
+	if req.ContactEmail != "" && !utils.IsEmail(req.ContactEmail) {
+		response.Fail(c, "invalid contactEmail", nil)
+		return
+	}
+	op := "platform"
+	if err := models.UpdateActiveTenant(
+		h.db,
+		id,
+		strings.TrimSpace(req.Name),
+		req.Description,
+		st,
+		req.ContactEmail,
+		req.MaxUserCount,
+		op,
+	); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	t, err := models.GetActiveTenantByID(h.db, uint(id64))
+	t, err := models.GetActiveTenantByID(h.db, id)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -428,21 +444,19 @@ func (h *Handlers) updateTenantPlatform(c *gin.Context) {
 }
 
 func (h *Handlers) deleteTenantPlatform(c *gin.Context) {
-	if _, ok := requirePlatformAdmin(c); !ok {
-		return
-	}
-	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	if _, err := models.GetActiveTenantByID(h.db, uint(id64)); err != nil {
+	if _, err := models.GetActiveTenantByID(h.db, id); err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	if err := models.SoftDeleteTenant(h.db, uint(id64), "platform"); err != nil {
+	if err := models.SoftDeleteTenant(h.db, id, "platform"); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"id": uint(id64)})
+	response.Success(c, "success", gin.H{"id": id})
 }

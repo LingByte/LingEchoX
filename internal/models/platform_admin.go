@@ -4,9 +4,8 @@ package models
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"strings"
-
 	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -30,14 +29,14 @@ func (PlatformAdmin) TableName() string {
 }
 
 func GetActivePlatformAdminByEmail(db *gorm.DB, email string) (PlatformAdmin, error) {
-	email = strings.TrimSpace(strings.ToLower(email))
+	email = utils.TrimLower(email)
 	var row PlatformAdmin
 	err := ActivePlatformAdmins(db).Where("email = ?", email).First(&row).Error
 	return row, err
 }
 
 func ActivePlatformAdmins(db *gorm.DB) *gorm.DB {
-	return db.Model(&PlatformAdmin{})
+	return db.Model(&PlatformAdmin{}).Where("status = ?", PlatformAdminStatusActive)
 }
 
 func CountPlatformAdmins(db *gorm.DB) (int64, error) {

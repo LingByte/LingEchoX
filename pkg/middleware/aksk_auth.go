@@ -79,7 +79,7 @@ func tryAttachCredentialAKSK(c *gin.Context, db *gorm.DB) (attempted, ok bool) {
 		return true, false
 	}
 	now := time.Now().Unix()
-	if labs(now-tsUnix) > akskSkew {
+	if abs(now-tsUnix) > akskSkew {
 		abortAuthJSON(c, http.StatusUnauthorized, 401, "request expired or excessive clock skew")
 		return true, false
 	}
@@ -87,10 +87,6 @@ func tryAttachCredentialAKSK(c *gin.Context, db *gorm.DB) (attempted, ok bool) {
 	cred, err := models.GetActiveCredentialByAccessKey(db, ak)
 	if err != nil {
 		abortAuthJSON(c, http.StatusUnauthorized, 401, "unknown or revoked access key")
-		return true, false
-	}
-	if strings.TrimSpace(cred.Status) != models.CredentialStatusActive {
-		abortAuthJSON(c, http.StatusUnauthorized, 401, "credential disabled")
 		return true, false
 	}
 
@@ -142,9 +138,3 @@ func abortAuthJSON(c *gin.Context, httpStatus, code int, msg string) {
 	c.AbortWithStatusJSON(httpStatus, gin.H{"code": code, "msg": msg, "data": nil})
 }
 
-func labs(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}

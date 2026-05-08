@@ -78,7 +78,7 @@ func CredentialMatchesPermissionCodes(db *gorm.DB, credID uint, required []strin
 func GetActiveCredentialByAccessKey(db *gorm.DB, ak string) (Credential, error) {
 	var row Credential
 	err := db.Model(&Credential{}).
-		Where("access_key = ?", ak).
+		Where("access_key = ? AND status = ?", ak, CredentialStatusActive).
 		First(&row).Error
 	return row, err
 }

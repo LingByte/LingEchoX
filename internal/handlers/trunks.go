@@ -14,6 +14,7 @@ import (
 	"github.com/LingByte/SoulNexus/internal/models"
 	"github.com/LingByte/SoulNexus/pkg/middleware"
 	"github.com/LingByte/SoulNexus/pkg/response"
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -73,21 +74,10 @@ func parseOptionalRFC3339(s *string) (*time.Time, error) {
 }
 
 func (h *Handlers) listTrunks(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 100 {
-		size = 100
-	}
+	// Platform admin only (enforced by route middleware).
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 100)
 	list, total, err := models.ListTrunksPage(h.db, 0, page, size, c.Query("name"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -97,10 +87,7 @@ func (h *Handlers) listTrunks(c *gin.Context) {
 }
 
 func (h *Handlers) createTrunk(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
+	// Platform admin only (enforced by route middleware).
 	var req trunkWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -126,16 +113,13 @@ func (h *Handlers) createTrunk(c *gin.Context) {
 }
 
 func (h *Handlers) getTrunk(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetTrunkByID(h.db, uint(id))
+	row, err := models.GetTrunkByID(h.db, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -144,11 +128,8 @@ func (h *Handlers) getTrunk(c *gin.Context) {
 }
 
 func (h *Handlers) updateTrunk(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
@@ -163,7 +144,7 @@ func (h *Handlers) updateTrunk(c *gin.Context) {
 		response.Fail(c, "name required", nil)
 		return
 	}
-	if _, err := models.GetTrunkByIDBare(h.db, uint(id)); err != nil {
+	if _, err := models.GetTrunkByIDBare(h.db, id); err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -177,25 +158,22 @@ func (h *Handlers) updateTrunk(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	row, _ := models.GetTrunkByID(h.db, uint(id))
+	row, _ := models.GetTrunkByID(h.db, id)
 	response.Success(c, "success", row)
 }
 
 func (h *Handlers) deleteTrunk(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	if _, err := models.GetTrunkByIDBare(h.db, uint(id)); err != nil {
+	if _, err := models.GetTrunkByIDBare(h.db, id); err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	if err := models.SoftDeleteTrunkCascade(h.db, uint(id)); err != nil {
+	if err := models.SoftDeleteTrunkCascade(h.db, id); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -203,17 +181,9 @@ func (h *Handlers) deleteTrunk(c *gin.Context) {
 }
 
 func (h *Handlers) listTrunkNumbers(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 100 {
-		size = 100
-	}
+	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	page, size := utils.NormalizePage(p, s, 100)
 	var trunkID uint
 	if s := strings.TrimSpace(c.Query("trunkId")); s != "" {
 		v, err := strconv.ParseUint(s, 10, 32)
@@ -225,9 +195,6 @@ func (h *Handlers) listTrunkNumbers(c *gin.Context) {
 	}
 
 	if middleware.AuthPlatformAdminID(c) > 0 {
-		if _, ok := requirePlatformAdmin(c); !ok {
-			return
-		}
 		if trunkID > 0 {
 			if _, err := models.GetTrunkByIDBare(h.db, trunkID); err != nil {
 				response.Fail(c, "trunk not found", nil)
@@ -249,11 +216,7 @@ func (h *Handlers) listTrunkNumbers(c *gin.Context) {
 		return
 	}
 
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "forbidden", nil)
-		return
-	}
+	tid := middleware.CurrentTenantID(c)
 	list, total, err := models.ListTrunkNumbersForTenant(h.db, tid, page, size, c.Query("number"))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -263,10 +226,7 @@ func (h *Handlers) listTrunkNumbers(c *gin.Context) {
 }
 
 func (h *Handlers) createTrunkNumber(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
+	// Platform admin only (enforced by route middleware).
 	var req trunkNumberWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "invalid body", err.Error())
@@ -320,16 +280,13 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 }
 
 func (h *Handlers) getTrunkNumber(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	row, err := models.GetTrunkNumberByID(h.db, uint(id))
+	row, err := models.GetTrunkNumberByID(h.db, id)
 	if err != nil {
 		response.Fail(c, "not found", nil)
 		return
@@ -338,11 +295,8 @@ func (h *Handlers) getTrunkNumber(c *gin.Context) {
 }
 
 func (h *Handlers) updateTrunkNumber(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
@@ -357,7 +311,7 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 		response.Fail(c, "trunkId and number required", nil)
 		return
 	}
-	if _, err := models.GetTrunkNumberByID(h.db, uint(id)); err != nil {
+	if _, err := models.GetTrunkNumberByID(h.db, id); err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -400,25 +354,22 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	row, _ := models.GetTrunkNumberByID(h.db, uint(id))
+	row, _ := models.GetTrunkNumberByID(h.db, id)
 	response.Success(c, "success", row)
 }
 
 func (h *Handlers) deleteTrunkNumber(c *gin.Context) {
-	_, ok := requirePlatformAdmin(c)
-	if !ok {
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	// Platform admin only (enforced by route middleware).
+	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	if _, err := models.GetTrunkNumberByID(h.db, uint(id)); err != nil {
+	if _, err := models.GetTrunkNumberByID(h.db, id); err != nil {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	if err := models.SoftDeleteTrunkNumberByID(h.db, uint(id)); err != nil {
+	if err := models.SoftDeleteTrunkNumberByID(h.db, id); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}

@@ -65,13 +65,13 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 	g := r.Group("sip-center")
 
 	sipUsersRead := g.Group("")
-	sipUsersRead.Use(middleware.RequireTenantPermissionAll("api.sip.users.read"))
+	sipUsersRead.Use(middleware.RequirePlatformAdmin())
 	{
 		sipUsersRead.GET("/users", h.listSIPUsers)
 		sipUsersRead.GET("/users/:id", h.getSIPUser)
 	}
 	sipUsersWrite := g.Group("")
-	sipUsersWrite.Use(middleware.RequireTenantPermissionAll("api.sip.users.write"))
+	sipUsersWrite.Use(middleware.RequirePlatformAdmin())
 	{
 		sipUsersWrite.DELETE("/users/:id", h.deleteSIPUser)
 	}
@@ -140,23 +140,25 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		campWrite.DELETE("/campaigns/:id", h.deleteSIPCampaign)
 	}
 
+	// Trunk-numbers read: dual-mode (platform admin sees all, tenant user sees own).
 	numRead := g.Group("")
 	numRead.Use(middleware.RequireTenantPermissionAll("api.sip.numbers.read"))
 	{
-		numRead.GET("/trunks", h.listTrunks)
-		numRead.GET("/trunks/:id", h.getTrunk)
 		numRead.GET("/trunk-numbers", h.listTrunkNumbers)
-		numRead.GET("/trunk-numbers/:id", h.getTrunkNumber)
 	}
-	numWrite := g.Group("")
-	numWrite.Use(middleware.RequireTenantPermissionAll("api.sip.numbers.write"))
+	// Trunks CRUD + trunk-number detail/write: platform admin only.
+	numAdmin := g.Group("")
+	numAdmin.Use(middleware.RequirePlatformAdmin())
 	{
-		numWrite.POST("/trunks", h.createTrunk)
-		numWrite.PUT("/trunks/:id", h.updateTrunk)
-		numWrite.DELETE("/trunks/:id", h.deleteTrunk)
-		numWrite.POST("/trunk-numbers", h.createTrunkNumber)
-		numWrite.PUT("/trunk-numbers/:id", h.updateTrunkNumber)
-		numWrite.DELETE("/trunk-numbers/:id", h.deleteTrunkNumber)
+		numAdmin.GET("/trunks", h.listTrunks)
+		numAdmin.GET("/trunks/:id", h.getTrunk)
+		numAdmin.POST("/trunks", h.createTrunk)
+		numAdmin.PUT("/trunks/:id", h.updateTrunk)
+		numAdmin.DELETE("/trunks/:id", h.deleteTrunk)
+		numAdmin.GET("/trunk-numbers/:id", h.getTrunkNumber)
+		numAdmin.POST("/trunk-numbers", h.createTrunkNumber)
+		numAdmin.PUT("/trunk-numbers/:id", h.updateTrunkNumber)
+		numAdmin.DELETE("/trunk-numbers/:id", h.deleteTrunkNumber)
 	}
 
 	h.registerTenantOrgRoutes(g)
@@ -179,8 +181,6 @@ func (h *Handlers) registerVoiceDialogRoutes(r *gin.RouterGroup) {
 }
 
 func (h *Handlers) registerTenantPublicRoutes(r *gin.RouterGroup) {
-	r.POST("/tenants/register", h.registerTenant)
-	r.POST("/auth/tenant-login", h.tenantLogin)
 	r.POST("/register", h.registerTenant)
 	r.POST("/login", h.tenantLogin)
 }
@@ -203,11 +203,15 @@ func (h *Handlers) registerTenantUserRoutes(r *gin.RouterGroup) {
 		tuWrite.DELETE("/:id", h.deleteTenantUser)
 		tuWrite.POST("/:id/restore", h.restoreTenantUser)
 	}
-	r.GET("/tenants", h.listTenants)
-	r.GET("/tenants/:id", h.getTenant)
-	r.POST("/tenants", h.createTenantPlatform)
-	r.PUT("/tenants/:id", h.updateTenantPlatform)
-	r.DELETE("/tenants/:id", h.deleteTenantPlatform)
+	tenantAdmin := r.Group("tenants")
+	tenantAdmin.Use(middleware.RequirePlatformAdmin())
+	{
+		tenantAdmin.GET("", h.listTenants)
+		tenantAdmin.GET("/:id", h.getTenant)
+		tenantAdmin.POST("", h.createTenantPlatform)
+		tenantAdmin.PUT("/:id", h.updateTenantPlatform)
+		tenantAdmin.DELETE("/:id", h.deleteTenantPlatform)
+	}
 	r.GET("/me", h.getMe)
 	// 个人资料：任意已登录租户用户 / 平台管理员均可修改，不纳入租户 RBAC 分配项。
 	r.PUT("/me", h.updateMe)
@@ -220,12 +224,14 @@ func (h *Handlers) registerTenantUserRoutes(r *gin.RouterGroup) {
 }
 
 func (h *Handlers) registerCredentialRoutes(r *gin.RouterGroup) {
-	crRead := r.Group("credentials")
+	cr := r.Group("credentials")
+	cr.Use(middleware.RequireHumanJWTUser())
+	crRead := cr.Group("")
 	crRead.Use(middleware.RequireTenantPermissionAll("api.credentials.read"))
 	{
 		crRead.GET("", h.listCredentials)
 	}
-	crWrite := r.Group("credentials")
+	crWrite := cr.Group("")
 	crWrite.Use(middleware.RequireTenantPermissionAll("api.credentials.write"))
 	{
 		crWrite.POST("", h.createCredential)

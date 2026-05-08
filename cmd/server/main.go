@@ -47,8 +47,8 @@ func (app *LingEchoApp) RegisterRoutes(r *gin.Engine) {
 }
 
 func main() {
-	// 1. Parse Command Line Parameters
-	init := flag.Bool("init", false, "deprecated: ignored; schema migration always runs at startup")
+	// 1. Parse command-line parameters
+	init := flag.Bool("init", false, "run database schema migration at startup (default: true)")
 	seed := flag.Bool("seed", false, "seed database")
 	mode := flag.String("mode", "", "running environment (development, test, production)")
 	initSQL := flag.String("init-sql", "", "path to database init .sql script (optional)")
@@ -57,30 +57,30 @@ func main() {
 	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "Advertised IP for SDP c= AND for SIP Via/Contact when -sip-host is 0.0.0.0 (must be reachable by LAN phones for outbound/campaign; avoid 127.0.0.1)")
 	flag.Parse()
 
-	// 2. Set Environment Variables
+	// 2. Set environment variables
 	if *mode != "" {
 		os.Setenv("MODE", *mode)
 	}
 
-	// 3. Load Global Configuration
+	// 3. Load global configuration
 	if err := config.Load(); err != nil {
 		panic("config load failed: " + err.Error())
 	}
 
-	// 4. Print Banner
+	// 4. Print banner
 	if err := bootstrap.PrintBannerFromFile("banner.txt", config.GlobalConfig.Server.Name); err != nil {
 		log.Fatalf("unload banner: %v", err)
 	}
 
-	// 5. Load Log Configuration
+	// 5. Initialize logger
 	err := logger.Init(&config.GlobalConfig.Log, config.GlobalConfig.Server.Mode)
 	if err != nil {
 		panic(err)
 	}
 
-	// 6. Print Configuration
+	// 6. Log configuration
 	bootstrap.LogConfigInfo()
-	// 7. Load Data Source
+	// 7. Setup database
 	db, err := bootstrap.SetupDatabase(os.Stdout, &bootstrap.Options{
 		InitSQLPath: *initSQL,
 		AutoMigrate: *init,
@@ -97,25 +97,12 @@ func main() {
 		return
 	}
 
-	// 8. Load Base Configs
+	// 8. Resolve listen address
 	var addr = config.GlobalConfig.Server.Addr
 	if addr == "" {
 		addr = ":8082"
 	}
-
-	var DBDriver = config.GlobalConfig.Database.Driver
-	if DBDriver == "" {
-		DBDriver = "sqlite"
-	}
-
-	var DSN = config.GlobalConfig.Database.DSN
-	if DSN == "" {
-		DSN = "file::memory:?cache=shared"
-	}
-	flag.StringVar(&addr, "addr", addr, "HTTP Serve address")
-	flag.StringVar(&DBDriver, "db-driver", DBDriver, "database driver")
-	flag.StringVar(&DSN, "dsn", DSN, "database source name")
-	//// 11. New App
+	// 9. Create application
 	app := NewLingEchoApp(db)
 	sipUserCleaner := tasks.NewSIPUserOnlineCleaner(db, time.Duration(utils.GetIntEnv("SIP_USER_ONLINE_SWEEP_SECONDS"))*time.Second)
 	sipUserCleaner.Start()
@@ -123,7 +110,7 @@ func main() {
 		backup.StartBackupScheduler(db)
 	}
 
-	// 15. Initialize Gin Routing
+	// 10. Initialize Gin engine
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()        // Use gin.New() instead of gin.Default() to avoid automatic redirects
 	r.Use(gin.Recovery()) // Manually add Recovery middleware
@@ -149,13 +136,14 @@ func main() {
 	// Logger Handle Middleware
 	r.Use(middleware.LoggerMiddleware(zap.L()))
 
-	// 18. Register Routes
+	// 11. Register routes
 	app.RegisterRoutes(r)
-	// 19. Initialize System Listener
+	// 12. Initialize system listeners
 	listeners.InitSystemListeners()
-	// 21. Emit system initialization signal
+	// 13. Emit system initialization signal
 	utils.Sig().Emit(constants.SigInitSystemConfig, nil)
 
+	// 14. Start embedded SIP stack
 	var sipEmbedded *sipserver.Embedded
 	se, err := sipserver.Start(sipserver.Config{
 		Host:    *sipHost,
@@ -172,7 +160,8 @@ func main() {
 		zap.String("sip_host", *sipHost),
 		zap.Int("sip_port", *sipPort),
 		zap.String("sip_local_ip", *sipLocalIP))
-	// 22. Start HTTP/HTTPS Server
+
+	// 15. Start HTTP/HTTPS server
 	const httpLongRun = 45 * time.Minute
 	httpServer := &http.Server{
 		Addr:           addr,
