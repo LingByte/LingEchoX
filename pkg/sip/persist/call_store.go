@@ -223,6 +223,7 @@ func (s *CallStore) SaveConversationTurn(ctx context.Context, callID string, t c
 		LLMWallMs:    t.LLMWallMs,
 		TTSMs:        t.TTSMs,
 		PipelineMs:   t.PipelineMs,
+		TurnGroupID:  t.TurnGroupID,
 	}
 
 	row, err := FindActiveSIPCallByCallID(ctx, s.db, callID)

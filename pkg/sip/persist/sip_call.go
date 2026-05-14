@@ -58,6 +58,9 @@ type SIPCallDialogTurn struct {
 	LLMWallMs    int       `json:"llmWallMs,omitempty"`
 	TTSMs        int       `json:"ttsMs,omitempty"`
 	PipelineMs   int       `json:"pipelineMs,omitempty"`
+	// TurnGroupID 让流式分段的 LLM 回复在持久化时折叠成一条记录。
+	// 同一逻辑轮次的所有段共用同一非空 ID（见 conversation.DialogTurn 注释）。
+	TurnGroupID string `json:"turnGroupId,omitempty"`
 }
 
 // SIPCall records one SIP call lifecycle (sip_calls).
@@ -262,7 +265,37 @@ func SIPCallAppendTurnUpdateMap(row SIPCall, newTurn SIPCallDialogTurn, now time
 	if err != nil {
 		return nil, 0, err
 	}
-	turnList = append(turnList, newTurn)
+	// 流式分段折叠：当 newTurn.TurnGroupID 非空且与最后一条相同，
+	// 不新建条目，而是在最后一条上追加 LLMText、累加 TTSMs/PipelineMs。
+	// LLMFirstMs/LLMWallMs 取首段（首段是 LLM 实际首字延迟），后续段一般为 0；
+	// At 沿用首段（用户感知的轮次开始时间）。
+	merged := false
+	if newTurn.TurnGroupID != "" && len(turnList) > 0 {
+		last := &turnList[len(turnList)-1]
+		if last.TurnGroupID == newTurn.TurnGroupID {
+			if newTurn.LLMText != "" {
+				last.LLMText = strings.TrimRight(last.LLMText, " ") + newTurn.LLMText
+			}
+			last.TTSMs += newTurn.TTSMs
+			last.PipelineMs += newTurn.PipelineMs
+			if last.LLMFirstMs == 0 {
+				last.LLMFirstMs = newTurn.LLMFirstMs
+			}
+			if last.LLMWallMs == 0 {
+				last.LLMWallMs = newTurn.LLMWallMs
+			}
+			if last.TTSProvider == "" {
+				last.TTSProvider = newTurn.TTSProvider
+			}
+			if last.LLMModel == "" {
+				last.LLMModel = newTurn.LLMModel
+			}
+			merged = true
+		}
+	}
+	if !merged {
+		turnList = append(turnList, newTurn)
+	}
 	turnsBytes, err := MarshalSIPCallTurns(turnList)
 	if err != nil {
 		return nil, 0, err

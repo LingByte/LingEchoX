@@ -415,7 +415,8 @@ drainLoop:
 				}
 			default:
 				if firstFrameSent && silenceFrames < maxSilenceFrames {
-					if !emitFrame(make([]byte, bytesPerFrame)) {
+					// 用 sample-and-hold 兜底而非零静音，避免阶跃跳变 → 无点击音。
+					if !emitFrame(makeHoldFrame()) {
 						break drainLoop
 					}
 					silenceFrames++
@@ -498,6 +499,8 @@ drainLoop:
 		asrProv = "qcloud_asr"
 	}
 	llmModel, llmWall := sess.takePendingLLMMeta()
+	// 同一轮次的所有 TTS 段共用 parent utterance ID（loopback.go 生成的 "loopback-<nanos>-sN"
+	// 格式，去掉 "-sN" 后缀得到父级 ID），传给持久化层让它折叠成一条对话记录。
 	go conversation.RecordDialogTurn(context.Background(), callID, conversation.DialogTurn{
 		ASRText:     asrSnap,
 		LLMText:     job.text,
@@ -508,5 +511,29 @@ drainLoop:
 		LLMWallMs:   llmWall,
 		TTSMs:       ttsMs,
 		PipelineMs:  int(time.Since(pipelineT0).Milliseconds()),
+		TurnGroupID: parentUtteranceID(job.utteranceID),
 	})
+}
+
+// parentUtteranceID 把 voicedialog loopback 生成的 "loopback-<nanos>-s<N>" 段级 ID
+// 还原成轮次级父 ID："loopback-<nanos>"。无 "-s<N>" 后缀时原样返回（兼容外部 utterance）。
+func parentUtteranceID(uid string) string {
+	uid = strings.TrimSpace(uid)
+	if uid == "" {
+		return ""
+	}
+	idx := strings.LastIndex(uid, "-s")
+	if idx <= 0 {
+		return uid
+	}
+	tail := uid[idx+2:]
+	if tail == "" {
+		return uid
+	}
+	for _, r := range tail {
+		if r < '0' || r > '9' {
+			return uid
+		}
+	}
+	return uid[:idx]
 }
