@@ -80,10 +80,11 @@ func attachGatewayMedia(sess *dialogSession) error {
 	ttsSecretKey := utils.GetEnv("TTS_SECRET_KEY")
 	ttsVoiceType, _ := strconv.ParseInt(utils.GetEnv("TTS_VOICE_TYPE"), 10, 64)
 	ttsSpeed, _ := strconv.ParseInt(utils.GetEnv("TTS_SPEED"), 10, 64)
+	// TTS_SAMPLE_RATE 显式指定时按用户配置走（一般 8000/16000/24000）。
+	// **未设置时不再写死 16000**，而是 0 → 走 gatewayTTSCloudSR 的 fallback：
+	// 跟 SIP 协商出的 pcmBridgeSR 对齐，避免下游 ResamplePCM 跨 chunk 重采样
+	// 造成的相位累积错位（块边界周期性电流音）。
 	ttsSampleRate, _ := strconv.Atoi(utils.GetEnv("TTS_SAMPLE_RATE"))
-	if ttsSampleRate <= 0 {
-		ttsSampleRate = 16000
-	}
 	if asrAppID == "" || asrSecretID == "" || asrSecretKey == "" {
 		return fmt.Errorf("voicedialog gateway: missing ASR credentials (ASR_APPID, ASR_SECRET_ID, ASR_SECRET_KEY)")
 	}

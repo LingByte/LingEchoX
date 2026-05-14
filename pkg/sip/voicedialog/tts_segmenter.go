@@ -325,9 +325,21 @@ func (sess *dialogSession) playSegment(
 		aborted         bool
 		pcmChClosed     bool // 上游 prefetch 已经 close(pcmCh)，buffer 里剩余字节就是全部
 		firstFrameSent  bool // 用于 jitter prebuffer：首帧未出门前累积到 prebufferBytes 再发
-		silenceFrames   int  // 连续静音兜底帧数，达到 maxSilenceFrames 即停止补静音回退到阻塞等待
+		silenceFrames   int  // 连续兜底帧数，达到 maxSilenceFrames 即停止补帧回退到阻塞等待
 		emittedAnyAudio bool // 仅 firstAudioHook 触发用
+		lastSampleLo    byte // 最近一帧末尾样本，underrun 时用作 sample-and-hold 兜底
+		lastSampleHi    byte
 	)
+	// 生成 underrun 兜底帧：持续最后一个样本（DC hold），比 0 静音更安静
+	// 且不会产生波形阶跃 → 不会出现"咔哒"点击音。
+	makeHoldFrame := func() []byte {
+		f := make([]byte, bytesPerFrame)
+		for i := 0; i+1 < bytesPerFrame; i += 2 {
+			f[i] = lastSampleLo
+			f[i+1] = lastSampleHi
+		}
+		return f
+	}
 
 	emitFrame := func(payload []byte) bool {
 		if job.gen != 0 && job.gen <= sess.ttsGenInvalidBefore.Load() {
@@ -346,6 +358,11 @@ func (sess *dialogSession) playSegment(
 			Payload:       payload,
 			IsSynthesized: true,
 		})
+		// 记录最后一个样本（little-endian 16-bit），供 underrun 兜底使用。
+		if n := len(payload); n >= 2 {
+			lastSampleLo = payload[n-2]
+			lastSampleHi = payload[n-1]
+		}
 		select {
 		case <-segCtx.Done():
 			aborted = true
@@ -446,12 +463,10 @@ drainLoop:
 		}
 	}
 
-	// Flush trailing partial frame on clean drain (zero-pad to bytesPerFrame).
-	if drainedClean && !aborted && len(buffer) > 0 {
-		padded := make([]byte, bytesPerFrame)
-		copy(padded, buffer)
-		_ = emitFrame(padded)
-	}
+	// 段尾不足一帧的残余字节直接丢弃（<20ms）。
+	// 旧实现 zero-pad 到 bytesPerFrame 会在波形末尾插入从最后一个真实样本到 0
+	// 的阶跃跳变，跟下一段首样本拼起来 → 段边界"咔哒"点击音。损失 <20ms 听感
+	// 无差，避免点击更值得。
 
 	ttsMs := int(time.Since(ttsT0).Milliseconds())
 	prefetchErr := job.getPrefetchErr()
