@@ -44,6 +44,16 @@ type QCloudASROption struct {
 	ModelType   string    `json:"modelType" yaml:"model_type" env:"QCLOUD_MODEL_TYPE" default:"16k_zh"`
 	ReqChanSize int       `json:"reqChanSize" yaml:"req_chan_size" default:"128"`
 	HotWords    []HotWord `json:"hotWords" yaml:"hot_words"`
+	// VadSilenceTime 单位 ms，腾讯云 ASR 触发 sentence-end 的静默阈值。
+	// SDK 不显式设置时走云端默认（约 800~1000ms）。降到 400ms 可显著缩短
+	// 用户停顿到 asr.final 的间隔；过低（<300ms）容易把语气词当切句。
+	// 取值范围：240~2000。0 表示走 SDK 默认。
+	VadSilenceTime int `json:"vadSilenceTime" yaml:"vad_silence_time" default:"400"`
+	// FilterDirty=1 过滤脏词；FilterModal=2 过滤强语气词；NeedVad=1 启用 vad 切句
+	// （腾讯云 vad_silence_time 必须配合 needvad=1 才生效）。
+	FilterDirty int `json:"filterDirty" yaml:"filter_dirty" default:"0"`
+	FilterModal int `json:"filterModal" yaml:"filter_modal" default:"0"`
+	NeedVad     int `json:"needVad" yaml:"need_vad" default:"1"`
 	// SentenceNotify is invoked on each Tencent OnSentenceEnd (fragment = 本句增量, cumulative = 当前累计).
 	// Optional; used by offline streaming consumers (e.g. call analysis WebSocket).
 	SentenceNotify func(fragment string, cumulative string) `json:"-" yaml:"-"`
@@ -67,6 +77,7 @@ func WithQCloudASR(opt QCloudASROption) media.MediaHandlerFunc {
 	asq := &QCloudASR{opt: opt}
 	recognizer := asr.NewSpeechRecognizer(opt.AppID, credential, opt.ModelType, asq)
 	recognizer.VoiceFormat = opt.Format
+	applyQCloudASRTuning(recognizer, opt)
 
 	executor.ConcurrentMode = false // QCloud ASR write is not blocking so we need to set this to false
 	executor.RequestBuilder = func(h media.MediaHandler, packet media.MediaPacket) (*media.PacketRequest[[]byte], error) {
@@ -283,11 +294,33 @@ func (asq *QCloudASR) Vendor() string {
 	return "qcloud"
 }
 
+// applyQCloudASRTuning 把 LingEchoX 暴露的 QCloudASROption 翻译成腾讯云
+// SpeechRecognizer 的查询参数。所有字段都是可选；为 0 时走 SDK 默认。
+func applyQCloudASRTuning(r *asr.SpeechRecognizer, opt QCloudASROption) {
+	if r == nil {
+		return
+	}
+	if opt.VadSilenceTime > 0 {
+		// 腾讯云协议要求 240~2000，超出范围就交给云端拒绝。
+		r.VadSilenceTime = opt.VadSilenceTime
+	}
+	if opt.NeedVad > 0 {
+		r.NeedVad = opt.NeedVad
+	}
+	if opt.FilterDirty > 0 {
+		r.FilterDirty = opt.FilterDirty
+	}
+	if opt.FilterModal > 0 {
+		r.FilterModal = opt.FilterModal
+	}
+}
+
 func (asq *QCloudASR) ConnAndReceive(dialogID string) error {
 	asq.dialogID = dialogID
 	credential := common.NewCredential(asq.opt.SecretID, asq.opt.SecretKey)
 	recognizer := asr.NewSpeechRecognizer(asq.opt.AppID, credential, asq.opt.ModelType, asq)
 	recognizer.VoiceFormat = asq.opt.Format
+	applyQCloudASRTuning(recognizer, asq.opt)
 	hotWords := asq.opt.HotWords
 
 	var hotWordsStr string

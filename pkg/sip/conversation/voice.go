@@ -16,7 +16,6 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/llm"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/recognizer"
 	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
@@ -1039,42 +1038,14 @@ func (q *qcloudTTSStream) SynthesizeStream(ctx context.Context, text string, cal
 	if q == nil || q.svc == nil {
 		return fmt.Errorf("sip conversation: nil tts")
 	}
-	// QCloud Synthesize blocks until Wait(); tie it to ctx so barge-in Stop() returns quickly.
-	// Background avoids canceling the SDK mid-handshake; OnMessage uses ctx to drop audio after cancel.
-	done := make(chan error, 1)
-	go func() {
-		h := &ttsStreamHandler{callback: callback, ctx: ctx}
-		done <- q.svc.Synthesize(context.Background(), h, text)
-	}()
-	select {
-	case <-ctx.Done():
-		return context.Canceled
-	case err := <-done:
-		return err
-	}
+	// 走 WS 路径，首字节比 HTTPS 低 50~150ms。barge-in 通过 ctx 取消触发 SDK CloseConn。
+	return q.svc.SynthesizeStream(ctx, text, func(pcm []byte) error {
+		if len(pcm) == 0 {
+			return nil
+		}
+		return callback(pcm)
+	})
 }
-
-type ttsStreamHandler struct {
-	ctx        context.Context
-	callback   func([]byte) error
-	firstChunk bool
-}
-
-func (h *ttsStreamHandler) OnMessage(data []byte) {
-	if h == nil || len(data) == 0 {
-		return
-	}
-	if h.ctx != nil && h.ctx.Err() != nil {
-		return
-	}
-	if !h.firstChunk {
-		h.firstChunk = true
-		data = encoder.StripWavHeader(data)
-	}
-	_ = h.callback(data)
-}
-
-func (h *ttsStreamHandler) OnTimestamp(_ synthesizer.SentenceTimestamp) {}
 
 // isFillerOnlyUtterance filters hesitation sounds that real-time ASR often emits on noisy or low-volume audio.
 func isFillerOnlyUtterance(text string) bool {

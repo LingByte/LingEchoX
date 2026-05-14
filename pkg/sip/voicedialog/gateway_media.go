@@ -12,7 +12,6 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/config"
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/media/encoder"
 	"github.com/LingByte/SoulNexus/pkg/recognizer"
 	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
 	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
@@ -20,7 +19,6 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/synthesizer"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	sipasr "github.com/LingByte/SoulNexus/pkg/voice/asr"
-	siptts "github.com/LingByte/SoulNexus/pkg/voice/tts"
 	"go.uber.org/zap"
 )
 
@@ -45,7 +43,12 @@ func gatewayTTSCloudSR(ttsSampleRate int, pcmBridge int) int {
 	return 16000
 }
 
-// gatewayQcloudTTSStream adapts synthesizer.QCloudService to siptts.Service (streaming PCM chunks).
+// gatewayQcloudTTSStream adapts synthesizer.QCloudService to a streaming PCM callback
+// signature consumed by tts_segmenter.go.
+//
+// 走 WebSocket 路径（QCloudService.SynthesizeStream），每段一条 WS 连接但首字节
+// 比 HTTPS 路径低 50~150ms（PCM 直接 binary frame 推送，无 HTTP chunk 编码开销）。
+// 段间的 WS 握手开销由 tts_segmenter.go 的 prefetch 并行化继续 hide。
 type gatewayQcloudTTSStream struct {
 	svc *synthesizer.QCloudService
 }
@@ -54,40 +57,14 @@ func (q *gatewayQcloudTTSStream) SynthesizeStream(ctx context.Context, text stri
 	if q == nil || q.svc == nil {
 		return fmt.Errorf("voicedialog gateway: nil tts")
 	}
-	done := make(chan error, 1)
-	go func() {
-		h := &gatewayTTSStreamHandler{callback: callback, ctx: ctx}
-		done <- q.svc.Synthesize(context.Background(), h, text)
-	}()
-	select {
-	case <-ctx.Done():
-		return context.Canceled
-	case err := <-done:
-		return err
-	}
+	// WS path: PCM frames arrive directly via callback; no WAV header to strip.
+	return q.svc.SynthesizeStream(ctx, text, func(pcm []byte) error {
+		if len(pcm) == 0 {
+			return nil
+		}
+		return callback(pcm)
+	})
 }
-
-type gatewayTTSStreamHandler struct {
-	ctx        context.Context
-	callback   func([]byte) error
-	firstChunk bool
-}
-
-func (h *gatewayTTSStreamHandler) OnMessage(data []byte) {
-	if h == nil || len(data) == 0 {
-		return
-	}
-	if h.ctx != nil && h.ctx.Err() != nil {
-		return
-	}
-	if !h.firstChunk {
-		h.firstChunk = true
-		data = encoder.StripWavHeader(data)
-	}
-	_ = h.callback(data)
-}
-
-func (h *gatewayTTSStreamHandler) OnTimestamp(_ synthesizer.SentenceTimestamp) {}
 
 // attachGatewayMedia wires ASR→WebSocket events and WebSocket tts.speak→TTS→RTP on the SIP leg.
 func attachGatewayMedia(sess *dialogSession) error {
@@ -160,37 +137,16 @@ func attachGatewayMedia(sess *dialogSession) error {
 	qcTTS := synthesizer.NewQCloudService(ttsCfg)
 	ttsStream := &gatewayQcloudTTSStream{svc: qcTTS}
 
-	ttsPipe, err := siptts.New(siptts.Config{
-		Service:       ttsStream,
-		SampleRate:    ttsCloudSR,
-		Channels:      1,
-		FrameDuration: 20 * time.Millisecond,
-		PaceRealtime:  true,
-		SendPCMFrame: func(frame []byte) error {
-			if len(frame) == 0 {
-				return nil
-			}
-			pcmOut := frame
-			if ttsCloudSR != pcmBridgeSR && len(frame) >= 2 {
-				if out, err := media.ResamplePCM(frame, ttsCloudSR, pcmBridgeSR); err == nil && len(out) > 0 {
-					pcmOut = out
-				}
-			}
-			ms.SendToOutput("voice-gateway-tts", &media.AudioPacket{
-				Payload:       pcmOut,
-				IsSynthesized: true,
-			})
-			return nil
-		},
-		Logger: zlg,
-	})
-	if err != nil {
-		return fmt.Errorf("voicedialog gateway: tts pipeline: %w", err)
-	}
-
+	// Wire the new pipelined TTS player. Each tts.speak segment kicks off its own SDK
+	// call in parallel (prefetch); a single player goroutine drains segments serially
+	// and frames PCM to the call leg, eliminating the per-segment WS handshake gap.
 	sess.gatewayMu.Lock()
-	sess.ttsPipe = ttsPipe
+	sess.ttsService = ttsStream
+	sess.ttsCloudSR = ttsCloudSR
+	sess.ttsBridgeSR = pcmBridgeSR
 	sess.gatewayMu.Unlock()
+	sess.startTTSPlayer()
+	_ = zlg // logger captured by player loop directly via the global logger.Lg
 
 	var ttsPlaying atomic.Bool
 	var ttsStartedAtNS atomic.Int64
@@ -249,6 +205,12 @@ func attachGatewayMedia(sess *dialogSession) error {
 			if !ok || ap == nil || len(ap.Payload) == 0 || ap.IsSynthesized {
 				return nil
 			}
+			// During transfer (ringing / loading / agent talking), drop caller PCM so the
+			// ASR cloud session does not emit further partial / final events that would
+			// (a) feed the LLM and (b) trigger redundant tts.speak segments.
+			if conversation.IsTransferInProgress(callID) {
+				return nil
+			}
 			pcm16 := ap.Payload
 			pcmASR := pcm16
 			if asrOutRate != asrInRate {
@@ -266,17 +228,16 @@ func attachGatewayMedia(sess *dialogSession) error {
 			}
 			if allowBargeIn && vadDet != nil && ttsPlaying.Load() && vadDet.CheckBargeIn(pcm16, true) {
 				logger.Info("voicedialog gateway interrupt (VAD barge-in)", zap.String(KeyCallID, callID))
+				// Invalidate every tts.speak that has been queued so far so the queued
+				// chain of segments is dropped, not just the currently-playing one. The
+				// player goroutine sees the new ttsGenInvalidBefore watermark on the next
+				// frame check and exits the in-flight segment.
+				sess.invalidateQueuedTTS()
+				sess.cancelCurrentTTSSegment()
 				sess.emitGateway(event(EvInterrupt, callID, map[string]any{
 					KeyOrigin: OriginGateway,
 					KeyCause:  CauseBargeIn,
 				}))
-				sess.gatewayMu.Lock()
-				tp := sess.ttsPipe
-				sess.gatewayMu.Unlock()
-				if tp != nil {
-					tp.Stop()
-					tp.Start(ms.GetContext())
-				}
 				ttsPlaying.Store(false)
 				ttsStartedAtNS.Store(0)
 			}
@@ -320,30 +281,25 @@ func (sess *dialogSession) attachTTSLifecycle(playing *atomic.Bool, startedAt *a
 
 func (sess *dialogSession) gatewayShutdown() {
 	sess.stopTransferLoadingPlayback()
+	// Tear down the segment player goroutine and any in-flight prefetches before
+	// we let the rest of the session GC.
+	if sess.ttsSegmentCh != nil {
+		sess.stopTTSPlayer()
+	}
 	sess.gatewayMu.Lock()
 	defer sess.gatewayMu.Unlock()
-	if sess.ttsPipe != nil {
-		sess.ttsPipe.Stop()
-		sess.ttsPipe = nil
-	}
+	sess.ttsService = nil
 	sess.ttsPlayingPtr = nil
 	sess.ttsStartedNS = nil
 	sess.mediaSession = nil
 }
 
 func (sess *dialogSession) stopGatewayTTSPlayback() {
-	ms := sess.cs.MediaSession()
-	if ms == nil {
-		return
-	}
-	sess.gatewayMu.Lock()
-	pipe := sess.ttsPipe
-	sess.gatewayMu.Unlock()
-	if pipe == nil {
-		return
-	}
-	pipe.Stop()
-	pipe.Start(ms.GetContext())
+	// Modern (segmenter-driven) shutdown: invalidate the queue + cancel the
+	// in-flight segment ctx. The player will emit tts.ended ok=false for the
+	// preempted segment and immediately move to the next (which is also stale).
+	sess.invalidateQueuedTTS()
+	sess.cancelCurrentTTSSegment()
 	if sess.ttsPlayingPtr != nil {
 		sess.ttsPlayingPtr.Store(false)
 	}
@@ -394,114 +350,175 @@ func (sess *dialogSession) consumeTransferAfterNextTTS() bool {
 	return sess.transferAfterNextTTS.Swap(false)
 }
 
-func (sess *dialogSession) handleTTSSpeak(text, utteranceID string) {
-	sess.ttsSpeakMu.Lock()
-	defer sess.ttsSpeakMu.Unlock()
+// handleTTSSpeak is the entrypoint invoked by hub.go on every CmdTTSSpeak. With the
+// pipelined player (tts_segmenter.go), this function only:
+//  1. validates the segment (gen / transfer / empty text),
+//  2. kicks off prefetch (parallel SDK call), and
+//  3. enqueues the segment job onto the player channel.
+//
+// The actual synthesis & RTP framing happen on the player goroutine; counter
+// decrement (endPendingTTS) is also done by the player so transfer-after-last-segment
+// timing is correct even when the loopback queues many segments faster than they play.
+func (sess *dialogSession) handleTTSSpeak(text, utteranceID string, gen uint64) {
+	dropEnd := func(reason string) {
+		logger.Info("voicedialog gateway tts speak dropped",
+			zap.String(KeyCallID, sess.meta.CallID),
+			zap.String(KeyUtteranceID, utteranceID),
+			zap.Uint64("gen", gen),
+			zap.String("reason", reason),
+		)
+		sess.emitGateway(event(EvTTSEnded, sess.meta.CallID, map[string]any{
+			KeyUtteranceID: utteranceID,
+			KeyOK:          false,
+		}))
+		sess.endPendingTTS()
+	}
 
-	pipelineT0 := time.Now()
-
+	if gen != 0 && gen <= sess.ttsGenInvalidBefore.Load() {
+		dropEnd("stale_generation")
+		return
+	}
+	if conversation.IsTransferInProgress(sess.meta.CallID) {
+		dropEnd("transfer_in_progress")
+		return
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
+		dropEnd("empty_text")
 		return
 	}
-	ms := sess.cs.MediaSession()
-	if ms == nil {
-		return
-	}
-	sess.gatewayMu.Lock()
-	pipe := sess.ttsPipe
-	sess.gatewayMu.Unlock()
-	if pipe == nil {
+	if sess.cs == nil || sess.cs.MediaSession() == nil {
+		dropEnd("no_media_session")
 		return
 	}
 
-	logger.Info("voicedialog gateway tts speak start",
-		zap.String(KeyCallID, sess.meta.CallID),
-		zap.String(KeyUtteranceID, utteranceID),
-		zap.Int("text_len", len([]rune(text))),
-		zap.String("text_preview", truncateRunes(text, 120)),
-	)
-
-	sess.emitGateway(event(EvTTSStarted, sess.meta.CallID, map[string]any{
-		KeyUtteranceID: utteranceID,
-		KeyTextPreview: truncateRunes(text, 160),
-	}))
-
-	if sess.ttsPlayingPtr != nil {
-		sess.ttsPlayingPtr.Store(true)
+	job := &ttsSegmentJob{
+		text:        text,
+		utteranceID: utteranceID,
+		gen:         gen,
+		enqueueT0:   time.Now(),
 	}
-	if sess.ttsStartedNS != nil {
-		sess.ttsStartedNS.Store(time.Now().UnixNano())
-	}
-
-	pipe.Start(ms.GetContext())
-	ttsT0 := time.Now()
-	err := pipe.Speak(text)
-	ttsMs := int(time.Since(ttsT0).Milliseconds())
-	pipe.Stop()
-
-	if sess.ttsPlayingPtr != nil {
-		sess.ttsPlayingPtr.Store(false)
-	}
-	if sess.ttsStartedNS != nil {
-		sess.ttsStartedNS.Store(0)
-	}
-
-	sess.emitGateway(event(EvTTSEnded, sess.meta.CallID, map[string]any{
-		KeyUtteranceID: utteranceID,
-		KeyOK:          err == nil,
-	}))
-
-	if err != nil {
-		logger.Warn("voicedialog gateway tts speak error",
-			zap.String(KeyCallID, sess.meta.CallID),
-			zap.String(KeyUtteranceID, utteranceID),
-			zap.Error(err),
-		)
-	} else {
-		logger.Info("voicedialog gateway tts speak done",
-			zap.String(KeyCallID, sess.meta.CallID),
-			zap.String(KeyUtteranceID, utteranceID),
-		)
-		asrSnap := sess.lastASRFinalSnapshot()
-		asrProv := strings.TrimSpace(sess.voicedialogASRProv)
-		if asrProv == "" {
-			asrProv = "qcloud_asr"
+	// Start prefetch BEFORE enqueueing so the SDK call begins while the player may still
+	// be playing the previous segment. This is the core mechanism that hides the per-segment
+	// SDK handshake (~200~400ms) behind the previous segment's playback wall-clock.
+	sess.startSegmentPrefetch(job)
+	if !sess.enqueueTTSSegment(job) {
+		// queue full / closed → cancel prefetch, account counter, signal end.
+		if job.prefetchCancel != nil {
+			job.prefetchCancel()
 		}
-		llmModel, llmWall := sess.takePendingLLMMeta()
-		go conversation.RecordDialogTurn(context.Background(), sess.meta.CallID, conversation.DialogTurn{
-			ASRText:     asrSnap,
-			LLMText:     text,
-			ASRProvider: asrProv,
-			TTSProvider: "qcloud_tts",
-			LLMModel:    llmModel,
-			Trigger:     "final",
-			LLMWallMs:   llmWall,
-			TTSMs:       ttsMs,
-			PipelineMs:  int(time.Since(pipelineT0).Milliseconds()),
-		})
-		if sess.consumeTransferAfterNextTTS() {
-			logger.Info("voicedialog: transfer after assistant TTS finished",
-				zap.String(KeyCallID, sess.meta.CallID),
-			)
-			go conversation.TriggerTransferToAgent(context.Background(), sess.meta.CallID, logger.Lg)
+		dropEnd("queue_full")
+		return
+	}
+}
+
+// --- pending TTS counter (drives transfer-after-last-segment) ----------------
+
+func (sess *dialogSession) beginPendingTTS() {
+	if sess == nil {
+		return
+	}
+	sess.pendingTTSCount.Add(1)
+}
+
+// endPendingTTS decrements counter; if counter reaches 0 AND transferAfterNextTTS flag
+// is set, consume it and trigger transfer.
+func (sess *dialogSession) endPendingTTS() {
+	if sess == nil {
+		return
+	}
+	n := sess.pendingTTSCount.Add(-1)
+	if n < 0 {
+		// underflow guard (e.g. tts.speak from an external client we never counted)
+		sess.pendingTTSCount.Store(0)
+		return
+	}
+	if n == 0 && sess.consumeTransferAfterNextTTS() {
+		logger.Info("voicedialog: transfer after assistant TTS finished",
+			zap.String(KeyCallID, sess.meta.CallID),
+		)
+		go conversation.TriggerTransferToAgent(context.Background(), sess.meta.CallID, logger.Lg)
+	}
+}
+
+// endPendingTTSWithoutTransfer rolls back a beginPendingTTS that did not actually result
+// in a queued tts.speak (e.g. write failed). Never fires transfer.
+func (sess *dialogSession) endPendingTTSWithoutTransfer() {
+	if sess == nil {
+		return
+	}
+	if n := sess.pendingTTSCount.Add(-1); n < 0 {
+		sess.pendingTTSCount.Store(0)
+	}
+}
+
+func (sess *dialogSession) pendingTTSEmpty() bool {
+	if sess == nil {
+		return true
+	}
+	return sess.pendingTTSCount.Load() <= 0
+}
+
+// --- first-audio hook --------------------------------------------------------
+
+func (sess *dialogSession) armFirstAudioHook(fn func()) {
+	if sess == nil {
+		return
+	}
+	sess.firstAudioMu.Lock()
+	sess.firstAudioHook = fn
+	sess.firstAudioMu.Unlock()
+}
+
+func (sess *dialogSession) fireAndClearFirstAudioHook() {
+	if sess == nil {
+		return
+	}
+	sess.firstAudioMu.Lock()
+	fn := sess.firstAudioHook
+	sess.firstAudioHook = nil
+	sess.firstAudioMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// invalidateQueuedTTS bumps the invalid-before watermark to the latest issued generation,
+// causing every queued segment job (sitting in ttsSegmentCh or partway through prefetch)
+// to drop on its next gen check inside the player loop. The currently-playing segment
+// is preempted separately by the caller via cancelCurrentTTSSegment() (or via
+// stopGatewayTTSPlayback which calls both).
+func (sess *dialogSession) invalidateQueuedTTS() {
+	if sess == nil {
+		return
+	}
+	cur := sess.ttsGenSeq.Load()
+	for {
+		prev := sess.ttsGenInvalidBefore.Load()
+		if cur <= prev {
+			return
+		}
+		if sess.ttsGenInvalidBefore.CompareAndSwap(prev, cur) {
+			return
 		}
 	}
 }
 
 func (sess *dialogSession) handleTTSCancel() {
-	sess.ttsSpeakMu.Lock()
-	defer sess.ttsSpeakMu.Unlock()
+	// Publish the invalidation watermark FIRST (lock-free) so any queued segment in
+	// ttsSegmentCh / mid-prefetch sees a stale generation when the player picks it
+	// up. stopGatewayTTSPlayback also cancels the in-flight segment ctx.
+	sess.invalidateQueuedTTS()
 	sess.stopGatewayTTSPlayback()
 	sess.emitGateway(event(EvTTSCancelled, sess.meta.CallID, nil))
-	logger.Info("voicedialog gateway tts.cancel handled",
+	logger.Info("voicedialog gateway tts.cancel handled (queue invalidated)",
 		zap.String(KeyCallID, sess.meta.CallID),
+		zap.Uint64("invalid_before", sess.ttsGenInvalidBefore.Load()),
 	)
 }
 
 func (sess *dialogSession) handleInterruptFromWS(clientReason string) {
-	sess.ttsSpeakMu.Lock()
-	defer sess.ttsSpeakMu.Unlock()
+	sess.invalidateQueuedTTS()
 	sess.stopGatewayTTSPlayback()
 	clientReason = strings.TrimSpace(clientReason)
 	sess.emitGateway(event(EvInterrupt, sess.meta.CallID, map[string]any{
@@ -509,8 +526,9 @@ func (sess *dialogSession) handleInterruptFromWS(clientReason string) {
 		KeyCause:  CauseApplied,
 		KeyReason: clientReason,
 	}))
-	logger.Info("voicedialog gateway interrupt handled",
+	logger.Info("voicedialog gateway interrupt handled (queue invalidated)",
 		zap.String(KeyCallID, sess.meta.CallID),
 		zap.String(KeyReason, clientReason),
+		zap.Uint64("invalid_before", sess.ttsGenInvalidBefore.Load()),
 	)
 }

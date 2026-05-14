@@ -374,7 +374,16 @@ func (h *Hub) runCallSocket(callID string, conn *websocket.Conn) {
 			if strings.TrimSpace(uid) == "" {
 				uid = fmt.Sprintf("u-%d", time.Now().UnixNano())
 			}
-			go sess.handleTTSSpeak(text, uid)
+			gen := sess.ttsGenSeq.Add(1)
+			// NOTE: must be synchronous. handleTTSSpeak only validates + spawns
+			// the per-segment prefetch goroutine + does a non-blocking channel
+			// send into ttsSegmentCh. Running it in `go` lets multiple concurrent
+			// CmdTTSSpeak (e.g. when the LLM emits 3+ sentences within the same
+			// SSE chunk) race on enqueueTTSSegment, which produced out-of-order
+			// playback (segment N+1 played before N). The reader loop is the
+			// single producer of WS commands, so calling synchronously preserves
+			// arrival order through the queue.
+			sess.handleTTSSpeak(text, uid, gen)
 		case CmdTTSCancel:
 			sess.handleTTSCancel()
 		case CmdInterrupt:

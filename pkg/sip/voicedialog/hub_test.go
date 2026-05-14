@@ -22,7 +22,7 @@ func TestWsTokenOK(t *testing.T) {
 		t.Setenv("VOICE_DIALOG_WS_TOKEN", "")
 		defaultHub = nil
 		r := httptest.NewRequest("GET", "/?token=nothing", nil)
-		if !wsTokenOK(r) {
+		if !WebSocketTokenOK(r) {
 			t.Fatal()
 		}
 	})
@@ -31,7 +31,7 @@ func TestWsTokenOK(t *testing.T) {
 		t.Setenv("VOICE_DIALOG_WS_TOKEN", "secret-token")
 		InitDefault(Config{})
 		r := httptest.NewRequest("GET", "/?token=secret-token", nil)
-		if !wsTokenOK(r) {
+		if !WebSocketTokenOK(r) {
 			t.Fatal()
 		}
 	})
@@ -40,7 +40,7 @@ func TestWsTokenOK(t *testing.T) {
 		t.Setenv("VOICE_DIALOG_WS_TOKEN", "secret-token")
 		InitDefault(Config{})
 		r := httptest.NewRequest("GET", "/?token=wrong", nil)
-		if wsTokenOK(r) {
+		if WebSocketTokenOK(r) {
 			t.Fatal()
 		}
 	})
@@ -49,7 +49,7 @@ func TestWsTokenOK(t *testing.T) {
 		t.Setenv("VOICE_DIALOG_WS_TOKEN", "aaaaaaaaaa")
 		InitDefault(Config{})
 		r := httptest.NewRequest("GET", "/?token=bbbbbbbbbb", nil)
-		if wsTokenOK(r) {
+		if WebSocketTokenOK(r) {
 			t.Fatal()
 		}
 	})

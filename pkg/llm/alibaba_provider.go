@@ -290,48 +290,74 @@ func (p *AlibabaProvider) QueryWithOptions(text string, options QueryOptions) (s
 	return finalResponse, nil
 }
 
-// QueryStream 执行流式查询
+// QueryStream 执行流式查询。
+//
+// 阿里百炼 App 模式的流式响应是按 JSON 包装格式返回的（`{"action":...,"message":"..."}`），
+// 早期实现在每个 SSE chunk 上做整体 JSON parse —— JSON 完整闭合前 callback 无法拿到任何
+// 文本，相当于退化成非流式，首响延迟被 LLM 端到端时长拖累。
+//
+// 现在统一走渐进式提取：维护一个累积的原始文本缓冲，每个 chunk 进来后从 `"message":"...`
+// 处把已写出的字符串字段抽取成 rune，相对上一次 emitted 的尾部增量回调出去。这样首响
+// 一旦 LLM 写完 `"message":"<首字>` 即可下发。
+//
+// callback(segment, isComplete) 的语义变为：segment 为 message 字段的「新增 rune 文本」，
+// isComplete=true 仅在流末尾被调用一次（segment="")。这与 OpenAI/Coze 等的 delta 语义对齐。
 func (p *AlibabaProvider) QueryStream(text string, options QueryOptions, callback func(segment string, isComplete bool) error) (string, error) {
+	return p.queryStreamProgressive(p.ctx, text, options, callback)
+}
+
+// queryStreamProgressive 是 QueryStream 的实际实现。
+//
+// 注意：本算法（cumulative buffer + 渐进式抽取 message 字段）只适用于「外层包了一层 JSON
+// 契约」的 provider。当前只有阿里百炼 App 接口会强制返回 `{"action":...,"message":"..."}`
+// 这样的格式，所以这套逻辑放在 alibaba_provider.go 内即可，OpenAI / Coze / Ollama 的
+// SSE 本身就直接 yield delta 文本，不需要这一层处理。
+func (p *AlibabaProvider) queryStreamProgressive(
+	ctx context.Context,
+	text string,
+	options QueryOptions,
+	onDelta func(segment string, isComplete bool) error,
+) (string, error) {
 	startTime := time.Now()
 
 	p.mutex.Lock()
-	// 添加用户消息到历史
-	p.messages = append(p.messages, Message{
-		Role:    "user",
-		Content: text,
-	})
+	p.messages = append(p.messages, Message{Role: "user", Content: text})
 	p.mutex.Unlock()
 
-	ctx, cancel := context.WithTimeout(p.ctx, p.config.Timeout)
+	if ctx == nil {
+		ctx = p.ctx
+	}
+	cctx, cancel := context.WithTimeout(ctx, p.config.Timeout)
 	defer cancel()
 
-	// 构建请求
 	reqBody := map[string]interface{}{
 		"input": map[string]string{
 			"prompt":     p.composePrompt(text),
 			"session_id": options.SessionID,
 		},
-		"parameters": map[string]interface{}{},
+		"parameters": map[string]interface{}{
+			"incremental_output": true,
+		},
 	}
-
 	bodyJSON, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/v1/apps/%s/completion", p.config.Endpoint, p.config.AppID)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
+	req, err := http.NewRequestWithContext(cctx, "POST", url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
-
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.config.APIKey))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-DashScope-SSE", "enable")
+	req.Header.Set("Accept", "text/event-stream")
 
 	logger.Debug("Alibaba AI stream request started",
 		zap.String("url", url),
-		zap.String("prompt", text))
+		zap.String("prompt", text),
+	)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -342,171 +368,175 @@ func (p *AlibabaProvider) QueryStream(text string, options QueryOptions, callbac
 		zap.Int("status_code", resp.StatusCode),
 		zap.String("url", url),
 	)
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	// 处理流式响应
-	fullResponse, err := p.processStreamResponse(ctx, resp.Body, callback)
-	if err != nil {
-		return fullResponse, err
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1<<20)
+
+	var (
+		cumulativeRaw  strings.Builder
+		prevRaw        string
+		emittedRunes   int
+		firstChunkAt   time.Time
+		lineCh         = make(chan string, 1)
+		errCh          = make(chan error, 1)
+		scannerStarted bool
+	)
+
+	startScanner := func() {
+		if scannerStarted {
+			return
+		}
+		scannerStarted = true
+		go func() {
+			for scanner.Scan() {
+				lineCh <- scanner.Text()
+			}
+			if serr := scanner.Err(); serr != nil {
+				errCh <- serr
+				return
+			}
+			close(lineCh)
+		}()
+	}
+	startScanner()
+
+	firstByteTimer := time.NewTimer(p.config.FirstByte)
+	defer firstByteTimer.Stop()
+
+	emitDelta := func(currentMsg string) error {
+		curRunes := []rune(currentMsg)
+		if len(curRunes) <= emittedRunes {
+			return nil
+		}
+		delta := string(curRunes[emittedRunes:])
+		emittedRunes = len(curRunes)
+		if onDelta != nil && delta != "" {
+			return onDelta(delta, false)
+		}
+		return nil
 	}
 
-	// 更新消息历史
+LOOP:
+	for {
+		select {
+		case <-cctx.Done():
+			return cumulativeRaw.String(), cctx.Err()
+		case <-p.interruptCh:
+			return cumulativeRaw.String(), fmt.Errorf("interrupted")
+		case <-p.hangupChan:
+			return cumulativeRaw.String(), fmt.Errorf("hangup")
+		case <-firstByteTimer.C:
+			if firstChunkAt.IsZero() {
+				logger.Warn("Alibaba AI: First byte timeout",
+					zap.Duration("timeout", p.config.FirstByte))
+				const fallback = "您好,非常抱歉,您的这个问题我暂时无法解答,建议您提交工单申请处理。"
+				if onDelta != nil {
+					_ = onDelta(fallback, false)
+					_ = onDelta("", true)
+				}
+				return fallback, nil
+			}
+		case serr := <-errCh:
+			return cumulativeRaw.String(), fmt.Errorf("scan error: %w", serr)
+		case line, ok := <-lineCh:
+			if !ok {
+				break LOOP
+			}
+			line = strings.TrimSpace(line)
+			if line == "" || !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "" || data == "[DONE]" {
+				continue
+			}
+			var chunk struct {
+				Output struct {
+					Text         string `json:"text"`
+					FinishReason string `json:"finish_reason"`
+				} `json:"output"`
+			}
+			if jerr := json.Unmarshal([]byte(data), &chunk); jerr != nil {
+				continue
+			}
+			if chunk.Output.Text == "" {
+				continue
+			}
+			if firstChunkAt.IsZero() {
+				firstChunkAt = time.Now()
+				logger.Info("Alibaba AI first SSE chunk",
+					zap.Duration("elapsed", time.Since(startTime)),
+				)
+			}
+			// 自动判别 cumulative vs delta：若新文本以已有 prevRaw 为前缀，说明是
+			// cumulative 模式 → 用新文本整体替换；否则视为 delta → 直接拼接。
+			newText := chunk.Output.Text
+			if prevRaw != "" && strings.HasPrefix(newText, prevRaw) {
+				cumulativeRaw.Reset()
+				cumulativeRaw.WriteString(newText)
+			} else {
+				cumulativeRaw.WriteString(newText)
+			}
+			prevRaw = cumulativeRaw.String()
+
+			// 渐进式抽取 message 字段并发出增量。
+			if currentMsg, _ := extractJSONStringField(prevRaw, "message"); currentMsg != "" {
+				if cberr := emitDelta(currentMsg); cberr != nil {
+					return currentMsg, cberr
+				}
+			}
+		}
+	}
+
+	finalRaw := cumulativeRaw.String()
+	finalMsg := finalRaw
+	if msgResp, ok := parseAlibabaPayload(finalRaw); ok {
+		logger.Info("Alibaba AI stream json parsed",
+			zap.String("action", strings.TrimSpace(msgResp.Action)),
+			zap.Int("needperson", msgResp.NeedPerson),
+			zap.Int("needhangup", msgResp.NeedHangup),
+			zap.String("message_preview", previewText(msgResp.Message, 120)),
+		)
+		finalMsg = msgResp.Message
+		_ = p.maybeInvokeActions(msgResp)
+	} else if firstChunkAt.IsZero() {
+		// 完全没收到任何 chunk
+		return "", fmt.Errorf("no data received")
+	} else {
+		logger.Warn("Alibaba AI stream json parse failed (returning raw cumulative text)",
+			zap.String("raw_preview", previewText(finalRaw, 240)),
+		)
+	}
+
+	// flush 任何未发出的尾部（罕见：JSON 收尾后才 parse 成功，但 progressive 抽取因
+	// 转义不完整提前停下）。
+	finalRunes := []rune(finalMsg)
+	if len(finalRunes) > emittedRunes && onDelta != nil {
+		delta := string(finalRunes[emittedRunes:])
+		if delta != "" {
+			if cberr := onDelta(delta, false); cberr != nil {
+				return finalMsg, cberr
+			}
+		}
+		emittedRunes = len(finalRunes)
+	}
+	if onDelta != nil {
+		_ = onDelta("", true)
+	}
+
 	p.mutex.Lock()
-	p.messages = append(p.messages, Message{
-		Role:    "assistant",
-		Content: fullResponse,
-	})
+	p.messages = append(p.messages, Message{Role: "assistant", Content: finalMsg})
 	p.mutex.Unlock()
 
 	logger.Info("Alibaba AI stream request completed",
 		zap.Duration("duration", time.Since(startTime)),
-		zap.Int("response_length", len(fullResponse)))
-
-	return fullResponse, nil
-}
-
-// processStreamResponse 处理流式响应
-func (p *AlibabaProvider) processStreamResponse(ctx context.Context, body io.Reader, callback func(text string, isComplete bool) error) (string, error) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-
-	// 首字节超时检测
-	firstByteTimer := time.NewTimer(p.config.FirstByte)
-	defer firstByteTimer.Stop()
-
-	firstByteChan := make(chan bool, 1)
-	go func() {
-		if scanner.Scan() {
-			firstByteChan <- true
-		} else {
-			firstByteChan <- false
-		}
-	}()
-
-	// 等待首字节或超时
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case <-firstByteTimer.C:
-		// 超时，返回默认消息
-		logger.Warn("Alibaba AI: First byte timeout", zap.Duration("timeout", p.config.FirstByte))
-		if callback != nil {
-			callback("您好,非常抱歉,您的这个问题我暂时无法解答,建议您提交工单申请处理。", true)
-		}
-		return "您好,非常抱歉,您的这个问题我暂时无法解答,建议您提交工单申请处理。", nil
-	case success := <-firstByteChan:
-		if !success {
-			if err := scanner.Err(); err != nil {
-				return "", fmt.Errorf("read first line: %w", err)
-			}
-			return "", fmt.Errorf("no data received")
-		}
-	}
-
-	var fullResponse string
-
-	// 处理第一条数据
-	if err := p.processSSELine(scanner.Text(), &fullResponse, callback); err != nil {
-		logger.Warn("Alibaba AI: Process first line error", zap.Error(err))
-	}
-
-	// 继续处理后续数据
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return fullResponse, ctx.Err()
-		case <-p.interruptCh:
-			return fullResponse, fmt.Errorf("interrupted")
-		case <-p.hangupChan:
-			return fullResponse, fmt.Errorf("hangup")
-		default:
-		}
-
-		if err := p.processSSELine(scanner.Text(), &fullResponse, callback); err != nil {
-			logger.Warn("Alibaba AI: Process line error", zap.Error(err))
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fullResponse, fmt.Errorf("scan error: %w", err)
-	}
-
-	// 发送完成信号
-	if callback != nil {
-		callback("", true)
-	}
-
-	return fullResponse, nil
-}
-
-// processSSELine 处理 SSE 行
-func (p *AlibabaProvider) processSSELine(line string, fullResponse *string, callback func(text string, isComplete bool) error) error {
-	line = strings.TrimSpace(line)
-	if line == "" || !strings.HasPrefix(line, "data:") {
-		return nil
-	}
-
-	// 移除 "data:" 前缀
-	data := strings.TrimPrefix(line, "data:")
-	data = strings.TrimSpace(data)
-
-	// 检查是否是流结束标记
-	if data == "[DONE]" {
-		logger.Debug("Alibaba AI: Stream completed")
-		return nil
-	}
-
-	// 解析JSON
-	var resp struct {
-		Output struct {
-			Text         string `json:"text"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"output"`
-	}
-
-	if err := json.Unmarshal([]byte(data), &resp); err != nil {
-		return fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	// 提取文本内容
-	if resp.Output.Text != "" {
-		if msgResp, ok := parseAlibabaPayload(resp.Output.Text); ok && strings.TrimSpace(msgResp.Message) != "" {
-			logger.Info("Alibaba AI stream json parsed",
-				zap.String("action", strings.TrimSpace(msgResp.Action)),
-				zap.Int("needperson", msgResp.NeedPerson),
-				zap.Int("needhangup", msgResp.NeedHangup),
-				zap.String("message_preview", previewText(msgResp.Message, 120)),
-			)
-			*fullResponse += msgResp.Message
-			_ = p.maybeInvokeActions(msgResp)
-			if callback != nil {
-				if err := callback(msgResp.Message, resp.Output.FinishReason == "stop"); err != nil {
-					return err
-				}
-			}
-		} else {
-			logger.Warn("Alibaba AI stream json parse failed (using raw text)",
-				zap.String("output_preview", previewText(resp.Output.Text, 240)),
-			)
-			// Avoid speaking raw JSON payloads to callers.
-			raw := strings.TrimSpace(resp.Output.Text)
-			if strings.HasPrefix(raw, "{") && strings.HasSuffix(raw, "}") {
-				return nil
-			}
-			*fullResponse += resp.Output.Text
-			if callback != nil {
-				if err := callback(resp.Output.Text, resp.Output.FinishReason == "stop"); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	return nil
+		zap.Int("response_runes", len([]rune(finalMsg))),
+	)
+	return finalMsg, nil
 }
 
 func (p *AlibabaProvider) maybeInvokeActions(msg alibabaMessagePayload) error {
@@ -623,4 +653,85 @@ func (p *AlibabaProvider) Interrupt() {
 // Hangup 挂断（清理资源）
 func (p *AlibabaProvider) Hangup() {
 	close(p.hangupChan)
+}
+
+// extractJSONStringField 在可能不完整的 JSON 文本 raw 中渐进式抽取指定字符串字段的当前值。
+// 只要找到 `"key":"...` 的起始引号即可开始返回，遇到收尾引号或缓冲尾部停下；
+// done=true 表示已读到完整收尾引号。处理常见 JSON 转义（\n \t \r \" \\ \uXXXX）。
+//
+// 仅供阿里百炼应用接口（外包 JSON 契约）流式输出时按 message 字段做渐进式抽取使用。
+func extractJSONStringField(raw, key string) (string, bool) {
+	if raw == "" || key == "" {
+		return "", false
+	}
+	needle := "\"" + key + "\""
+	idx := strings.Index(raw, needle)
+	if idx < 0 {
+		return "", false
+	}
+	rest := raw[idx+len(needle):]
+	i := 0
+	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\n' || rest[i] == '\r') {
+		i++
+	}
+	if i >= len(rest) || rest[i] != ':' {
+		return "", false
+	}
+	i++
+	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\n' || rest[i] == '\r') {
+		i++
+	}
+	if i >= len(rest) || rest[i] != '"' {
+		return "", false
+	}
+	i++
+	var b strings.Builder
+	closed := false
+	for i < len(rest) {
+		c := rest[i]
+		if c == '\\' && i+1 < len(rest) {
+			nc := rest[i+1]
+			switch nc {
+			case 'n':
+				b.WriteByte('\n')
+				i += 2
+			case 't':
+				b.WriteByte('\t')
+				i += 2
+			case 'r':
+				b.WriteByte('\r')
+				i += 2
+			case '"':
+				b.WriteByte('"')
+				i += 2
+			case '\\':
+				b.WriteByte('\\')
+				i += 2
+			case '/':
+				b.WriteByte('/')
+				i += 2
+			case 'u':
+				if i+5 < len(rest) {
+					hex := rest[i+2 : i+6]
+					if r, err := strconv.ParseUint(hex, 16, 32); err == nil {
+						b.WriteRune(rune(r))
+					}
+					i += 6
+				} else {
+					return b.String(), false
+				}
+			default:
+				b.WriteByte(nc)
+				i += 2
+			}
+			continue
+		}
+		if c == '"' {
+			closed = true
+			break
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String(), closed
 }

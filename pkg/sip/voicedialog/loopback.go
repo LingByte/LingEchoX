@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LingByte/SoulNexus/pkg/constants"
 	"github.com/LingByte/SoulNexus/pkg/llm"
@@ -17,6 +20,53 @@ import (
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
+
+// loopbackSoftCutMinRunes returns the minimum rune count required before allowing a soft
+// punctuation (comma / colon / 顿号 / ：) to act as a sentence boundary inside the streaming
+// LLM → TTS segmenter. Tunable via VOICEDIALOG_SOFT_CUT_MIN_RUNES (default 6). Values <2
+// are clamped to 2 to avoid speaking "您，" as its own utterance.
+func loopbackSoftCutMinRunes() int {
+	const defaultVal = 6
+	const minVal = 2
+	s := strings.TrimSpace(os.Getenv("VOICEDIALOG_SOFT_CUT_MIN_RUNES"))
+	if s == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < minVal {
+		return defaultVal
+	}
+	return n
+}
+
+// findSentenceCut returns the byte index AFTER the first sentence-end punctuation in s,
+// or 0 if none found. Threshold runeMin avoids splitting on ultra-short fragments.
+//
+// Strong terminators (always cut): 。 ！ ？ ； . ! ? ; \n
+// Soft terminators (cut only when buffer >= runeMin runes): ， , 、 ：
+func findSentenceCut(s string, runeMin int) int {
+	if s == "" {
+		return 0
+	}
+	runeCount := 0
+	for i, r := range s {
+		runeCount++
+		switch r {
+		case '。', '！', '？', '；', '!', '?', ';', '\n':
+			return i + utf8.RuneLen(r)
+		case '.':
+			// avoid splitting on numerics like "3.14"
+			if runeCount >= runeMin {
+				return i + utf8.RuneLen(r)
+			}
+		case '，', ',', '、', '：', ':':
+			if runeCount >= runeMin {
+				return i + utf8.RuneLen(r)
+			}
+		}
+	}
+	return 0
+}
 
 func (h *Hub) startInboundLoopbackWS(sess *dialogSession) {
 	if h == nil || sess == nil {
@@ -219,6 +269,16 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 			if text == "" || prov == nil {
 				continue
 			}
+			// If transfer is already in progress, do not start a new LLM turn — the user
+			// is no longer talking to the AI. Drop the final transcript silently; ASR feed
+			// itself is also gated upstream so this branch is mostly defensive.
+			if conversation.IsTransferInProgress(callID) {
+				logger.Info("voicedialog loopback asr.final dropped (transfer in progress)",
+					zap.String(KeyCallID, callID),
+					zap.Int("user_text_len", len([]rune(text))),
+				)
+				continue
+			}
 			turnMu.Lock()
 			if inFlight {
 				turnMu.Unlock()
@@ -233,21 +293,135 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 					inFlight = false
 					turnMu.Unlock()
 				}()
-				logger.Info("voicedialog loopback asr.final → LLM",
+				logger.Info("voicedialog loopback asr.final → LLM (stream)",
 					zap.String(KeyCallID, callID),
 					zap.Int("user_text_len", len([]rune(user))),
 				)
 				llmT0 := time.Now()
-				reply, err := conversation.VoicedialogLoopbackLLMQuery(ctx, prov, model, user)
+				parentUtteranceID := fmt.Sprintf("loopback-%d", time.Now().UnixNano())
+
+				var (
+					segBuf             strings.Builder
+					segIdx             int
+					firstDeltaLogged   bool
+					firstSegSentAt     time.Time
+					lastSegSentAt      time.Time
+					lastSegUtteranceID string
+				)
+
+				flushSegment := func(text string, isLast bool) {
+					text = strings.TrimSpace(text)
+					if text == "" {
+						return
+					}
+					// Mid-stream transfer guard: if transfer started while the LLM was still
+					// streaming, stop emitting further tts.speak segments. Already-queued
+					// segments are killed via invalidateQueuedTTS in deliverConversationTransferPhase.
+					if conversation.IsTransferInProgress(callID) {
+						logger.Info("voicedialog loopback tts segment skipped (transfer in progress)",
+							zap.String(KeyCallID, callID),
+							zap.Int("seg_len", len([]rune(text))),
+						)
+						return
+					}
+					segIdx++
+					utterID := fmt.Sprintf("%s-s%d", parentUtteranceID, segIdx)
+					if firstSegSentAt.IsZero() {
+						firstSegSentAt = time.Now()
+						logger.Info("voicedialog loopback first tts segment emit",
+							zap.String(KeyCallID, callID),
+							zap.Duration("llm_to_first_segment", time.Since(llmT0)),
+							zap.Int("seg_len", len([]rune(text))),
+						)
+					}
+					lastSegSentAt = time.Now()
+					lastSegUtteranceID = utterID
+					if defaultHub != nil {
+						defaultHub.mu.Lock()
+						ds := defaultHub.sessions[strings.TrimSpace(callID)]
+						defaultHub.mu.Unlock()
+						if ds != nil {
+							ds.beginPendingTTS()
+						}
+					}
+					out := map[string]any{
+						KeyType:        CmdTTSSpeak,
+						KeyCallID:      callID,
+						KeyText:        text,
+						KeyUtteranceID: utterID,
+					}
+					writeMu.Lock()
+					werr := writeJSONDeadline(c, out)
+					writeMu.Unlock()
+					if werr != nil {
+						// roll back the pending counter we just bumped
+						if defaultHub != nil {
+							defaultHub.mu.Lock()
+							ds := defaultHub.sessions[strings.TrimSpace(callID)]
+							defaultHub.mu.Unlock()
+							if ds != nil {
+								ds.endPendingTTSWithoutTransfer()
+							}
+						}
+						logger.Warn("voicedialog loopback tts.speak segment write failed",
+							zap.String(KeyCallID, callID), zap.Error(werr))
+						return
+					}
+					logger.Info("voicedialog loopback sent tts.speak segment",
+						zap.String(KeyCallID, callID),
+						zap.String(KeyUtteranceID, utterID),
+						zap.Int("seg_len", len([]rune(text))),
+						zap.Bool("last", isLast),
+					)
+				}
+
+				softCutMinRunes := loopbackSoftCutMinRunes()
+				fullReply, err := conversation.VoicedialogLoopbackLLMStream(ctx, prov, model, user,
+					func(delta string, isFinal bool) error {
+						if delta != "" {
+							if !firstDeltaLogged {
+								firstDeltaLogged = true
+								logger.Info("voicedialog loopback LLM first delta",
+									zap.String(KeyCallID, callID),
+									zap.Duration("ttfb", time.Since(llmT0)),
+								)
+							}
+							segBuf.WriteString(delta)
+							for {
+								cur := segBuf.String()
+								cut := findSentenceCut(cur, softCutMinRunes)
+								if cut <= 0 {
+									break
+								}
+								head := cur[:cut]
+								rest := cur[cut:]
+								segBuf.Reset()
+								segBuf.WriteString(rest)
+								flushSegment(head, false)
+							}
+						}
+						if isFinal {
+							rem := strings.TrimSpace(segBuf.String())
+							segBuf.Reset()
+							if rem != "" {
+								flushSegment(rem, true)
+							}
+						}
+						return nil
+					},
+				)
 				llmWall := int(time.Since(llmT0).Milliseconds())
 				if err != nil {
-					logger.Warn("voicedialog loopback LLM failed", zap.String(KeyCallID, callID), zap.Error(err))
+					logger.Warn("voicedialog loopback LLM stream failed",
+						zap.String(KeyCallID, callID), zap.Error(err))
+					// flush any buffered tail before bail-out
+					if rem := strings.TrimSpace(segBuf.String()); rem != "" {
+						segBuf.Reset()
+						flushSegment(rem, true)
+					}
 					return
 				}
-				reply = strings.TrimSpace(reply)
-				if reply == "" {
-					return
-				}
+				fullReply = strings.TrimSpace(fullReply)
 				if defaultHub != nil {
 					defaultHub.mu.Lock()
 					ds := defaultHub.sessions[strings.TrimSpace(callID)]
@@ -256,39 +430,36 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 						ds.setPendingLoopbackLLM(model, llmWall)
 					}
 				}
-				out := map[string]any{
-					KeyType:        CmdTTSSpeak,
-					KeyCallID:      callID,
-					KeyText:        reply,
-					KeyUtteranceID: fmt.Sprintf("loopback-%d", time.Now().UnixNano()),
-				}
-				writeMu.Lock()
-				werr := writeJSONDeadline(c, out)
-				writeMu.Unlock()
-				if werr != nil {
-					logger.Warn("voicedialog loopback tts.speak write failed", zap.String(KeyCallID, callID), zap.Error(werr))
+				logger.Info("voicedialog loopback LLM stream done",
+					zap.String(KeyCallID, callID),
+					zap.Int("reply_len", len([]rune(fullReply))),
+					zap.Int("segments", segIdx),
+					zap.Int("llm_wall_ms", llmWall),
+					zap.Time("last_seg_sent_at", lastSegSentAt),
+					zap.String("last_utterance_id", lastSegUtteranceID),
+				)
+				if segIdx == 0 {
 					return
 				}
-				logger.Info("voicedialog loopback sent tts.speak",
-					zap.String(KeyCallID, callID),
-					zap.Int("reply_len", len([]rune(reply))),
-				)
 				if conversation.VoicedialogShouldTriggerTransfer(callID, prov) {
-					deferred := false
 					if defaultHub != nil {
 						defaultHub.mu.Lock()
 						ds := defaultHub.sessions[strings.TrimSpace(callID)]
 						defaultHub.mu.Unlock()
 						if ds != nil {
 							ds.markTransferAfterNextTTS()
-							deferred = true
-							logger.Info("voicedialog loopback: transfer deferred until TTS completes",
-								zap.String(KeyCallID, callID),
-							)
+							// If queued segments already drained (fast playback), fire now.
+							if ds.pendingTTSEmpty() && ds.consumeTransferAfterNextTTS() {
+								logger.Info("voicedialog loopback: transfer fires immediately (no pending TTS)",
+									zap.String(KeyCallID, callID),
+								)
+								go conversation.TriggerTransferToAgent(context.Background(), callID, logger.Lg)
+							} else {
+								logger.Info("voicedialog loopback: transfer deferred until last TTS segment ends",
+									zap.String(KeyCallID, callID),
+								)
+							}
 						}
-					}
-					if !deferred {
-						conversation.TriggerTransferToAgent(context.Background(), callID, logger.Lg)
 					}
 				}
 			}(text)

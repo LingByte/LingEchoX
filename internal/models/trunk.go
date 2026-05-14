@@ -22,7 +22,7 @@ const (
 
 type Trunk struct {
 	ID          uint           `json:"id" gorm:"primarykey"`
-	TenantID    uint           `json:"tenantId" gorm:"index;not null;default:0"` // SaaS isolation
+	TenantID    uint           `json:"tenantId,string" gorm:"index;not null;default:0"` // SaaS isolation
 	CreatedAt   time.Time      `json:"createdAt" label:"创建时间"`
 	UpdatedAt   time.Time      `json:"updatedAt" label:"更新时间"`
 	DeletedAt   gorm.DeletedAt `json:"deletedAt" gorm:"index"`
@@ -48,7 +48,7 @@ type TrunkNumber struct {
 	// TenantID 表示「这条号码当前已分配给哪个租户」。
 	// 0 表示平台号池待分配；>0 表示该租户独占。租户用户只能看到 tenant_id = 自己的号码。
 	// 与 Trunk.TenantID 解耦：Trunk 通常是平台级（tenant_id=0）的运营商资源，号码却是按个分配。
-	TenantID uint   `json:"tenantId" gorm:"column:tenant_id;index;not null;default:0" label:"分配租户"`
+	TenantID uint   `json:"tenantId,string" gorm:"column:tenant_id;index;not null;default:0" label:"分配租户"`
 	Number   string `json:"number" gorm:"size:200" label:"号码"`
 	// CallerDisplayName 写入外呼/转呼 INVITE From 的引号显示名（quoted display-name），如「七牛云客服专线」。
 	// 取代环境变量 SIP_CALLER_DISPLAY_NAME；主叫号码 user 部分用 Number（取代 SIP_CALLER_ID）。

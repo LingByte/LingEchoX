@@ -186,6 +186,19 @@ func deliverConversationTransferPhase(callID string, phase string, fields map[st
 	sess.emitGateway(event(EvDialogTransfer, callID, extra))
 
 	switch ph {
+	case PhaseTransferRequested, PhaseTransferLoading, PhaseTransferRinging, PhaseTransferConnected:
+		// Once transfer enters any of these phases the AI is no longer the active speaker:
+		// the caller will hear hold music / ringback / agent audio. We must:
+		//   1) invalidate every tts.speak still queued in the loopback → gateway pipeline
+		//      so trailing AI segments don't bleed into the transition,
+		//   2) preempt any in-flight pipe.Speak,
+		//   3) ASR / LLM gating is enforced via conversation.IsTransferInProgress() at
+		//      the ProcessPCM / EvASRFinal / handleTTSSpeak entrypoints.
+		sess.invalidateQueuedTTS()
+		sess.stopGatewayTTSPlayback()
+	}
+
+	switch ph {
 	case PhaseTransferLoading:
 		sess.beginTransferLoadingPlayback()
 	case PhaseTransferRinging, PhaseTransferConnected, PhaseTransferFailed, PhaseTransferNoAgent:

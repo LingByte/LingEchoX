@@ -17,7 +17,8 @@ export interface TrunkRow {
 export interface TrunkNumberRow {
   id: number
   trunkId: number
-  tenantId?: number
+  // tenantId is a Snowflake string (Tenant.ID > 2^53). Backend serializes with json:"tenantId,string".
+  tenantId?: string
   number: string
   callerDisplayName?: string
   prefix?: string
@@ -71,12 +72,12 @@ export async function deleteTrunk(id: number): Promise<ApiResponse<{ id: number 
 export async function listTrunkNumbers(
   page = 1,
   size = 20,
-  opts?: { trunkId?: number; number?: string; tenantId?: number },
+  opts?: { trunkId?: number; number?: string; tenantId?: string },
 ): Promise<ApiResponse<Paginated<TrunkNumberRow>>> {
   const q = new URLSearchParams({ page: String(page), size: String(size) })
   if (opts?.trunkId != null && opts.trunkId > 0) q.set('trunkId', String(opts.trunkId))
   if (opts?.number) q.set('number', opts.number)
-  if (opts?.tenantId != null && opts.tenantId > 0) q.set('tenantId', String(opts.tenantId))
+  if (opts?.tenantId && opts.tenantId !== '0') q.set('tenantId', opts.tenantId)
   return get(`/sip-center/trunk-numbers?${q.toString()}`)
 }
 
@@ -86,7 +87,8 @@ export async function getTrunkNumber(id: number): Promise<ApiResponse<TrunkNumbe
 
 export async function createTrunkNumber(body: {
   trunkId: number
-  tenantId?: number
+  // tenantId is the Snowflake Tenant.ID as a string ("0" for unassigned platform pool).
+  tenantId?: string
   number: string
   callerDisplayName?: string
   prefix?: string
@@ -106,7 +108,8 @@ export async function createTrunkNumber(body: {
 
 export async function updateTrunkNumber(id: number, body: {
   trunkId: number
-  tenantId?: number
+  // tenantId is the Snowflake Tenant.ID as a string ("0" for unassigned platform pool).
+  tenantId?: string
   number: string
   callerDisplayName?: string
   prefix?: string

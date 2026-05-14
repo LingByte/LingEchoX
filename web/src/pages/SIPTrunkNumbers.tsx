@@ -113,10 +113,10 @@ const SIPTrunkNumbers = () => {
     setLoading(true)
     try {
       const tid = trunkFilter ? parseInt(trunkFilter, 10) : 0
-      const assignTid = tenantFilter ? parseInt(tenantFilter, 10) : 0
+      const assignTid = tenantFilter.trim()
       const res = await listTrunkNumbers(page, pageSize, {
         trunkId: Number.isFinite(tid) && tid > 0 ? tid : undefined,
-        tenantId: Number.isFinite(assignTid) && assignTid > 0 ? assignTid : undefined,
+        tenantId: assignTid && assignTid !== '0' ? assignTid : undefined,
         number: numberQ.trim() || undefined,
       })
       if (res.code === 200 && res.data) {
@@ -190,10 +190,11 @@ const SIPTrunkNumbers = () => {
     const cin = parseInt(form.callInConcurrent, 10) || 0
     const eff = toRFC3339OrUndefined(form.effectiveTime)
     const exp = toRFC3339OrUndefined(form.expirationTime)
-    const assignTenant = parseInt(form.tenantId, 10)
+    // Tenant.ID is a Snowflake (>2^53); preserve as opaque string and never parseInt.
+    const assignTenant = (form.tenantId || '').trim() || '0'
     const body = {
       trunkId,
-      tenantId: Number.isFinite(assignTenant) && assignTenant >= 0 ? assignTenant : 0,
+      tenantId: assignTenant,
       number: num,
       callerDisplayName: form.callerDisplayName.trim(),
       prefix: form.prefix.trim(),
@@ -251,9 +252,10 @@ const SIPTrunkNumbers = () => {
     { label: '待分配（平台池）', value: '0' },
     ...tenants.map((t) => ({ label: `${t.name} (#${t.id})`, value: String(t.id) })),
   ]
-  const tenantLabel = (tid?: number) => {
-    if (!tid) return '待分配'
-    const hit = tenants.find((x) => x.id === tid)
+  const tenantLabel = (tid?: string) => {
+    if (!tid || tid === '0') return '待分配'
+    // TenantRow.id is typed as number for legacy reasons but the runtime value is a Snowflake string.
+    const hit = tenants.find((x) => String(x.id) === tid)
     return hit ? `${hit.name} (#${tid})` : `租户 #${tid}`
   }
 
@@ -517,12 +519,12 @@ const SIPTrunkNumbers = () => {
                 value={form.outboundTrunkNumberId === '0' ? undefined : form.outboundTrunkNumberId}
                 onChange={(v) => setForm((f) => ({ ...f, outboundTrunkNumberId: (v as string) ?? '0' }))}
                 options={(() => {
-                  const tid = parseInt(form.tenantId, 10)
-                  if (!Number.isFinite(tid) || tid <= 0) return []
+                  const tid = (form.tenantId || '').trim()
+                  if (!tid || tid === '0') return []
                   return rows
                     .filter((n) => {
                       if (n.id === editingId) return false
-                      if ((n.tenantId ?? 0) !== tid) return false
+                      if (String(n.tenantId ?? '0') !== tid) return false
                       const d = String(n.direction || '').trim().toLowerCase()
                       return d === 'outbound' || d === 'both' || d === 'all'
                     })

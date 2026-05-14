@@ -143,6 +143,59 @@ var builtinPermissions = []struct {
 	// Credentials
 	{"api.credentials.read", "访问密钥查看", PermissionKindAPI, "api.credentials"},
 	{"api.credentials.write", "访问密钥管理", PermissionKindAPI, "api.credentials"},
+	// Menu (sidebar visibility codes consumed by the web frontend; see web/src/components/Layout/Sidebar.tsx)
+	{"menu.workspace.overview", "工作台菜单", PermissionKindMenu, "menu.workspace"},
+	{"menu.tel.records", "通话记录菜单", PermissionKindMenu, "menu.tel"},
+	{"menu.tel.webseat", "Web 坐席菜单", PermissionKindMenu, "menu.tel"},
+	{"menu.res.pool", "号码池菜单", PermissionKindMenu, "menu.res"},
+	{"menu.res.outbound", "外呼任务菜单", PermissionKindMenu, "menu.res"},
+	{"menu.res.script", "脚本管理菜单", PermissionKindMenu, "menu.res"},
+	{"menu.acc.keys", "访问管理菜单", PermissionKindMenu, "menu.acc"},
+	{"menu.org.members", "成员管理菜单", PermissionKindMenu, "menu.org"},
+	{"menu.org.dept", "部门菜单", PermissionKindMenu, "menu.org"},
+	{"menu.org.role", "角色与权限菜单", PermissionKindMenu, "menu.org"},
+}
+
+// BackfillSystemTenantAdminPermissions ensures every system「管理员」role is bound to the
+// full current catalog. Idempotent; only inserts missing pivot rows. Used to heal tenants
+// created before new permission codes (e.g. menu.* codes) were introduced.
+func BackfillSystemTenantAdminPermissions(db *gorm.DB, operator string) error {
+	var permIDs []uint
+	if err := db.Model(&Permission{}).Pluck("id", &permIDs).Error; err != nil {
+		return err
+	}
+	if len(permIDs) == 0 {
+		return nil
+	}
+	var adminRoleIDs []uint
+	if err := db.Model(&TenantRole{}).
+		Where("is_system = ? AND name = ?", true, TenantAdminRoleName).
+		Pluck("id", &adminRoleIDs).Error; err != nil {
+		return err
+	}
+	for _, roleID := range adminRoleIDs {
+		var bound []uint
+		if err := db.Model(&TenantRolePermission{}).
+			Where("role_id = ?", roleID).
+			Pluck("permission_id", &bound).Error; err != nil {
+			return err
+		}
+		have := make(map[uint]struct{}, len(bound))
+		for _, id := range bound {
+			have[id] = struct{}{}
+		}
+		for _, pid := range permIDs {
+			if _, ok := have[pid]; ok {
+				continue
+			}
+			rp := &TenantRolePermission{RoleID: roleID, PermissionID: pid}
+			rp.SetCreateInfo(operator)
+			if err := db.Create(rp).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // SyncPermissionCatalog upserts the built-in permission rows; existing rows are updated, missing ones created.

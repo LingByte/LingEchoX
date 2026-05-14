@@ -7,9 +7,14 @@ import (
 
 	"github.com/LingByte/SoulNexus/pkg/media"
 	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	siptts "github.com/LingByte/SoulNexus/pkg/voice/tts"
+	"github.com/LingByte/SoulNexus/pkg/synthesizer"
 	"github.com/gorilla/websocket"
 )
+
+// gatewayQcloudTTSStream is defined in gateway_media.go; declare here as opaque type
+// reference for dialogSession.ttsService. Importing synthesizer keeps the dependency
+// graph documented (the actual SDK is wrapped inside gatewayQcloudTTSStream).
+var _ = (*synthesizer.QCloudService)(nil)
 
 // --- Wire protocol: JSON field keys (gateway ↔ WebSocket client) ---
 
@@ -174,11 +179,28 @@ type dialogSession struct {
 	clientSeen bool
 
 	gatewayMu     sync.Mutex
-	ttsSpeakMu    sync.Mutex
-	ttsPipe       *siptts.Pipeline
 	ttsPlayingPtr *atomic.Bool
 	ttsStartedNS  *atomic.Int64
 	mediaSession  *media.MediaSession
+
+	// --- pipelined TTS player state (see tts_segmenter.go) ----------------
+	// Sample rates captured at attachGatewayMedia time so the player goroutine does
+	// not have to call back into env / config on every segment.
+	ttsCloudSR  int
+	ttsBridgeSR int
+	// ttsService is the TTS service adapter (Tencent Cloud SDK wrapped). Owned by
+	// attachGatewayMedia, consumed by per-segment prefetch goroutines.
+	ttsService *gatewayQcloudTTSStream
+	// ttsSegmentCh feeds the single player goroutine. Buffered; closed in stopTTSPlayer.
+	ttsSegmentCh chan *ttsSegmentJob
+	// Lifecycle guards for the player goroutine.
+	ttsPlayerOnce     sync.Once
+	ttsPlayerStopOnce sync.Once
+	ttsPlayerWg       sync.WaitGroup
+	// ttsCurrentCancel is set by the player at the start of each segment and reached
+	// in by stopGatewayTTSPlayback / barge-in to preempt the in-flight segment.
+	ttsCurrentMu     sync.Mutex
+	ttsCurrentCancel context.CancelFunc
 
 	transferLoadingMu     sync.Mutex
 	transferLoadingCancel context.CancelFunc
@@ -195,4 +217,22 @@ type dialogSession struct {
 
 	// Defer TriggerTransferToAgent until handleTTSSpeak finishes (avoid ringback over assistant audio).
 	transferAfterNextTTS atomic.Bool
+
+	// pendingTTSCount tracks tts.speak segments emitted but not yet finished playing.
+	// Incremented by the loopback writer (beginPendingTTS) before sending each segment, and
+	// decremented at the end of handleTTSSpeak. transferAfterNextTTS only fires when this hits 0.
+	pendingTTSCount atomic.Int32
+
+	// ttsGenSeq monotonically increments per tts.speak command received. ttsGenInvalidBefore
+	// stores the high-water mark assigned at the moment of barge-in / cancel / interrupt;
+	// any queued handleTTSSpeak goroutine whose gen <= invalidBefore is dropped before
+	// touching the synthesizer (so a single barge-in clears the entire queued segment chain
+	// rather than only the currently-playing segment).
+	ttsGenSeq           atomic.Uint64
+	ttsGenInvalidBefore atomic.Uint64
+
+	// firstAudioHook is invoked once on the very next outbound PCM frame after handleTTSSpeak
+	// arms it (used to log tts_first_audio_ms relative to the speak command arrival).
+	firstAudioMu   sync.Mutex
+	firstAudioHook func()
 }

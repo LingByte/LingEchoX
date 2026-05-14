@@ -41,7 +41,12 @@ func (s *SeedService) seedPermissions() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return models.SyncPermissionCatalog(s.db)
+	if err := models.SyncPermissionCatalog(s.db); err != nil {
+		return err
+	}
+	// Heal pre-existing tenants whose system「管理员」role was bound before new
+	// permission codes (e.g. menu.* sidebar codes) were added to the catalog.
+	return models.BackfillSystemTenantAdminPermissions(s.db, "seed")
 }
 
 func (s *SeedService) seedConfigs() error {

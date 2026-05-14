@@ -42,7 +42,8 @@ type trunkNumberWriteReq struct {
 	EffectiveTime     *string `json:"effectiveTime"`
 	ExpirationTime    *string `json:"expirationTime"`
 	// TenantID 平台将号码分配给租户；0 表示待分配池。
-	TenantID uint `json:"tenantId"`
+	// 因 Tenant.ID 使用 Snowflake（>2^53），JSON 必须以字符串编解码以防止 JS Number 精度丢失。
+	TenantID uint `json:"tenantId,string"`
 	// VoiceDialogWsURL 入局呼入语音对话网关（ws/wss）；空则平台默认。
 	VoiceDialogWsURL string `json:"voiceDialogWsUrl"`
 	// OutboundTrunkNumberID 当本号码作为「呼入 DID」需要对外发起呼叫（盲转/外呼回流）时，
@@ -230,7 +231,9 @@ func (h *Handlers) listTrunkNumbers(c *gin.Context) {
 		}
 		var tenantFilter uint
 		if s := strings.TrimSpace(c.Query("tenantId")); s != "" {
-			if v, err := strconv.ParseUint(s, 10, 32); err == nil {
+			// Tenant.ID is a Snowflake (>2^32), so parse as 64-bit; truncating to
+			// 32-bit silently dropped the filter and showed all tenants' numbers.
+			if v, err := strconv.ParseUint(s, 10, 64); err == nil {
 				tenantFilter = uint(v)
 			}
 		}

@@ -55,6 +55,44 @@ func VoicedialogLoopbackLLMQuery(_ context.Context, p llm.LLMProvider, model, us
 	return normalizeTTSText(reply), nil
 }
 
+// VoicedialogLoopbackLLMStream runs one user turn in streaming mode and emits "message" deltas
+// so the caller can split by sentence punctuation and dispatch tts.speak segments early.
+//
+// All providers (OpenAI/Coze/Ollama/Alibaba) share the same delta semantics via the
+// LLMProvider.QueryStream contract: callback(segment, isComplete) where segment is the new
+// text increment, and isComplete=true is sent exactly once at end-of-stream with segment="".
+//
+// onDelta is invoked with (deltaText, isFinal); the ctx parameter is retained for future
+// cancellation hooks but currently providers manage their own internal context.
+func VoicedialogLoopbackLLMStream(
+	_ context.Context,
+	p llm.LLMProvider,
+	model, userText string,
+	onDelta func(delta string, isFinal bool) error,
+) (string, error) {
+	userText = strings.TrimSpace(userText)
+	if userText == "" || p == nil {
+		return "", nil
+	}
+	full, err := p.QueryStream(userText, llm.QueryOptions{Model: model, Stream: true},
+		func(seg string, complete bool) error {
+			if onDelta == nil {
+				return nil
+			}
+			if !complete && seg != "" {
+				return onDelta(seg, false)
+			}
+			if complete {
+				return onDelta("", true)
+			}
+			return nil
+		})
+	if err != nil {
+		return full, err
+	}
+	return normalizeTTSText(full), nil
+}
+
 // VoicedialogShouldTriggerTransfer mirrors outbound SIP voice transfer gates after an assistant turn (LLM tool / pending flag).
 func VoicedialogShouldTriggerTransfer(callID string, prov llm.LLMProvider) bool {
 	if prov == nil {

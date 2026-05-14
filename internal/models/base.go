@@ -3,6 +3,7 @@ package models
 import (
 	"time"
 
+	"github.com/LingByte/SoulNexus/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -16,8 +17,24 @@ type BaseModel struct {
 	Remark    string         `json:"remark,omitempty" gorm:"size:128;comment:Remark"`
 }
 
-// BeforeCreate GORM hook: automatically set creation time before creating
+// BeforeCreate GORM hook: assigns a Snowflake ID when the caller did not
+// supply one, and stamps creation/update timestamps.
+//
+// The catalog uses `autoIncrement:false` (see BaseModel.ID) because Snowflake
+// IDs are mandatory across services (they're embedded in JWTs, exported to
+// JS clients as strings, and survive logical replication / sharding).
+// Historically callers were expected to assign IDs themselves, but in
+// practice every code path skipped that step — which made any model.Create
+// with ID=0 fail with `Duplicate entry '0' for key 'PRIMARY'` on the second
+// row because MySQL stored the literal zero from the first row instead of
+// auto-incrementing. Assigning here closes the gap once for every model.
+//
+// Callers that explicitly set m.ID (e.g. importing fixed-ID seed data) are
+// unaffected: the hook only fills zero values.
 func (m *BaseModel) BeforeCreate(tx *gorm.DB) error {
+	if m.ID == 0 && utils.SnowflakeUtil != nil {
+		m.ID = uint(utils.SnowflakeUtil.NextID())
+	}
 	now := time.Now()
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = now
