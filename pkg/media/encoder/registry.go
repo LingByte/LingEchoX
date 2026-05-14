@@ -22,7 +22,8 @@ func init() {
 	RegisterCodec(CodecPCMU, createPCMUEncode, createPCMUDecode)
 	RegisterCodec(CodecPCMA, createPCMAEncode, createPCMADecode)
 	RegisterCodec(CodecPCM, PcmToPcm, PcmToPcm)
-	RegisterCodec(CodecOPUS, createOPUSEncode, createOPUSDecode)
+	// Opus disabled for now (web seat / bridge use PCMA first); re-enable when needed:
+	// RegisterCodec(CodecOPUS, createOPUSEncode, createOPUSDecode)
 	RegisterCodec(CodecG722, createG722Encode, createG722Decode)
 }
 

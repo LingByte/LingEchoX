@@ -1,6 +1,8 @@
 package conversation
 
 import (
+	"strings"
+
 	"github.com/LingByte/SoulNexus/pkg/logger"
 	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
 	"go.uber.org/zap"
@@ -8,6 +10,7 @@ import (
 
 // StartWebSeatHandoff stops AI media and waits for the browser to POST {APIPrefix}/lingecho/webseat/v1/join with this Call-ID.
 func StartWebSeatHandoff(inboundCallID string, lg *zap.Logger) {
+	inboundCallID = strings.TrimSpace(inboundCallID)
 	if lg == nil && logger.Lg != nil {
 		lg = logger.Lg
 	}

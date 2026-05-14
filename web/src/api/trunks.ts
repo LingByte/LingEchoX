@@ -23,6 +23,7 @@ export interface TrunkNumberRow {
   prefix?: string
   description?: string
   direction?: string
+  outboundTrunkNumberId?: number
   status?: string
   concurrent?: number
   callInConcurrent?: number
@@ -91,6 +92,7 @@ export async function createTrunkNumber(body: {
   prefix?: string
   description?: string
   direction?: string
+  outboundTrunkNumberId?: number
   status?: string
   concurrent?: number
   callInConcurrent?: number
@@ -110,6 +112,7 @@ export async function updateTrunkNumber(id: number, body: {
   prefix?: string
   description?: string
   direction?: string
+  outboundTrunkNumberId?: number
   status?: string
   concurrent?: number
   callInConcurrent?: number

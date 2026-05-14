@@ -402,6 +402,24 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
           )
       }
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream))
+      // Prefer G.711 A-law (PCMA), then μ-law — avoid Opus so server bridge stays on PCMA/PCMU.
+      const audioSender = pc.getSenders().find((s) => s.track?.kind === 'audio')
+      if (audioSender && typeof audioSender.getCapabilities === 'function') {
+        const caps = audioSender.getCapabilities('audio')
+        const list = caps?.codecs
+        if (list?.length) {
+          const pcma = list.filter((c) => c.mimeType.toLowerCase().includes('pcma'))
+          const pcmu = list.filter((c) => c.mimeType.toLowerCase().includes('pcmu'))
+          const prefs = [...pcma, ...pcmu]
+          if (prefs.length && typeof audioSender.setCodecPreferences === 'function') {
+            try {
+              audioSender.setCodecPreferences(prefs)
+            } catch {
+              /* ignore if browser rejects */
+            }
+          }
+        }
+      }
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
       logSignal('setLocalDescription offer')

@@ -46,6 +46,7 @@ type FormState = {
   effectiveTime: string
   expirationTime: string
   voiceDialogWsUrl: string
+  outboundTrunkNumberId: string
 }
 
 const defaultForm = (): FormState => ({
@@ -63,6 +64,7 @@ const defaultForm = (): FormState => ({
   effectiveTime: '',
   expirationTime: '',
   voiceDialogWsUrl: '',
+  outboundTrunkNumberId: '0',
 })
 
 const SIPTrunkNumbers = () => {
@@ -163,6 +165,7 @@ const SIPTrunkNumbers = () => {
       effectiveTime: eff,
       expirationTime: exp,
       voiceDialogWsUrl: r.voiceDialogWsUrl || '',
+      outboundTrunkNumberId: String(r.outboundTrunkNumberId ?? 0),
     })
     setModalOpen(true)
   }
@@ -203,6 +206,10 @@ const SIPTrunkNumbers = () => {
       effectiveTime: eff ?? null,
       expirationTime: exp ?? null,
       voiceDialogWsUrl: form.voiceDialogWsUrl.trim(),
+      outboundTrunkNumberId: (() => {
+        const v = parseInt(form.outboundTrunkNumberId, 10)
+        return Number.isFinite(v) && v > 0 ? v : 0
+      })(),
     }
     setSaving(true)
     try {
@@ -502,6 +509,30 @@ const SIPTrunkNumbers = () => {
               </div>
             </Space>
             <Checkbox checked={form.isTransferRelay} onChange={(c) => setForm((f) => ({ ...f, isTransferRelay: !!c }))}>转人工中继号码</Checkbox>
+            <div>
+              <Typography.Text style={{ fontSize: 12 }}>外呼号码（可选）</Typography.Text>
+              <Select
+                allowClear
+                placeholder="默认使用本号码自己外呼"
+                value={form.outboundTrunkNumberId === '0' ? undefined : form.outboundTrunkNumberId}
+                onChange={(v) => setForm((f) => ({ ...f, outboundTrunkNumberId: (v as string) ?? '0' }))}
+                options={(() => {
+                  const tid = parseInt(form.tenantId, 10)
+                  if (!Number.isFinite(tid) || tid <= 0) return []
+                  return rows
+                    .filter((n) => {
+                      if (n.id === editingId) return false
+                      if ((n.tenantId ?? 0) !== tid) return false
+                      const d = String(n.direction || '').trim().toLowerCase()
+                      return d === 'outbound' || d === 'both' || d === 'all'
+                    })
+                    .map((n) => ({ label: `${n.number} (#${n.id})`, value: String(n.id) }))
+                })()}
+              />
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                当本号码作为「呼入 DID」需要转接/外呼时,改用这条号码作为出局网关+主叫。候选范围:同租户、direction ∈ outbound/both/all。留空=用本号码自己。
+              </Typography.Paragraph>
+            </div>
             <Space style={{ width: '100%' }} size={12}>
               <div style={{ flex: 1 }}>
                 <Typography.Text style={{ fontSize: 12 }}>生效时间（可选）</Typography.Text>

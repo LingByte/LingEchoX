@@ -129,6 +129,29 @@ func cancelTransferInviteWatch(outbound string) {
 	}
 }
 
+// MigrateTransferInviteOutboundCallID reschedules the ring-timeout timer when the outbound dialog
+// Call-ID from 200 OK differs from the INVITE Call-ID. The timer callback captures the old id, so
+// we stop the old timer and schedule a fresh watch keyed by newID.
+func MigrateTransferInviteOutboundCallID(inbound, oldID, newID string) {
+	inbound = strings.TrimSpace(inbound)
+	oldID = strings.TrimSpace(oldID)
+	newID = strings.TrimSpace(newID)
+	if inbound == "" || oldID == "" || newID == "" || oldID == newID {
+		return
+	}
+	v, ok := transferInviteTimers.LoadAndDelete(oldID)
+	if !ok || v == nil {
+		return
+	}
+	t, ok := v.(*time.Timer)
+	if !ok {
+		return
+	}
+	if t.Stop() {
+		scheduleTransferInviteWatch(inbound, newID)
+	}
+}
+
 func scheduleWebSeatJoinWatch(inbound string, acdTargetID uint) {
 	inbound = strings.TrimSpace(inbound)
 	if inbound == "" {

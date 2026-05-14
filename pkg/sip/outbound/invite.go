@@ -138,5 +138,6 @@ func nonZero(n, def int) int {
 }
 
 func newCallID(localIP string) string {
+	// Host part should match Via/Contact identity (SIPHost) so carriers do not rewrite Call-ID.
 	return fmt.Sprintf("%d@%s", time.Now().UnixNano(), nonEmpty(localIP, "127.0.0.1"))
 }

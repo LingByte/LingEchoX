@@ -16,6 +16,7 @@ import (
 	"github.com/LingByte/SoulNexus/pkg/response"
 	"github.com/LingByte/SoulNexus/pkg/utils"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // trunkWriteReq 没有 providerCode 字段：供应商编码由后端在 BeforeCreate 钩子中生成，
@@ -44,6 +45,32 @@ type trunkNumberWriteReq struct {
 	TenantID uint `json:"tenantId"`
 	// VoiceDialogWsURL 入局呼入语音对话网关（ws/wss）；空则平台默认。
 	VoiceDialogWsURL string `json:"voiceDialogWsUrl"`
+	// OutboundTrunkNumberID 当本号码作为「呼入 DID」需要对外发起呼叫（盲转/外呼回流）时，
+	// 改用哪条 TrunkNumber 作为出局网关 + 主叫；0 表示用本号码自己。
+	OutboundTrunkNumberID uint `json:"outboundTrunkNumberId"`
+}
+
+// validateOutboundTrunkNumberBinding 校验外呼号码绑定：必须与本号码同租户、direction 允许外呼、
+// 且不指向本号码自身（避免循环）。tenantID == 0（平台号池）时禁止绑定。
+func validateOutboundTrunkNumberBinding(db *gorm.DB, selfID, outboundID, tenantID uint) error {
+	if outboundID == 0 {
+		return nil
+	}
+	if tenantID == 0 {
+		return fmt.Errorf("outboundTrunkNumberId 需先把本号码分配给某个租户")
+	}
+	if outboundID == selfID {
+		return fmt.Errorf("outboundTrunkNumberId 不能指向号码自身")
+	}
+	var n models.TrunkNumber
+	if err := db.Where("id = ? AND tenant_id = ?", outboundID, tenantID).First(&n).Error; err != nil {
+		return fmt.Errorf("outboundTrunkNumberId 不属于同一租户或不存在")
+	}
+	dir := strings.ToLower(strings.TrimSpace(n.Direction))
+	if dir != "outbound" && dir != "both" && dir != "all" {
+		return fmt.Errorf("outboundTrunkNumberId 对应号码 direction 必须是 outbound/both/all")
+	}
+	return nil
 }
 
 func normalizeTrunkNumberVoiceDialogWs(raw string) (string, error) {
@@ -256,21 +283,26 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
+	if err := validateOutboundTrunkNumberBinding(h.db, 0, req.OutboundTrunkNumberID, req.TenantID); err != nil {
+		response.Fail(c, err.Error(), nil)
+		return
+	}
 	row := models.TrunkNumber{
-		TrunkID:           req.TrunkID,
-		TenantID:          req.TenantID,
-		Number:            number,
-		CallerDisplayName: strings.TrimSpace(req.CallerDisplayName),
-		Prefix:            strings.TrimSpace(req.Prefix),
-		Description:       strings.TrimSpace(req.Description),
-		Direction:         strings.TrimSpace(req.Direction),
-		Status:            strings.TrimSpace(req.Status),
-		Concurrent:        req.Concurrent,
-		CallInConcurrent:  req.CallInConcurrent,
-		IsTransferRelay:   req.IsTransferRelay,
-		EffectiveTime:     eff,
-		ExpirationTime:    exp,
-		VoiceDialogWSURL:  voiceWS,
+		TrunkID:               req.TrunkID,
+		TenantID:              req.TenantID,
+		Number:                number,
+		CallerDisplayName:     strings.TrimSpace(req.CallerDisplayName),
+		Prefix:                strings.TrimSpace(req.Prefix),
+		Description:           strings.TrimSpace(req.Description),
+		Direction:             strings.TrimSpace(req.Direction),
+		Status:                strings.TrimSpace(req.Status),
+		Concurrent:            req.Concurrent,
+		CallInConcurrent:      req.CallInConcurrent,
+		IsTransferRelay:       req.IsTransferRelay,
+		EffectiveTime:         eff,
+		ExpirationTime:        exp,
+		VoiceDialogWSURL:      voiceWS,
+		OutboundTrunkNumberID: req.OutboundTrunkNumberID,
 	}
 	if err := h.db.Create(&row).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -334,21 +366,26 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
+	if err := validateOutboundTrunkNumberBinding(h.db, id, req.OutboundTrunkNumberID, req.TenantID); err != nil {
+		response.Fail(c, err.Error(), nil)
+		return
+	}
 	updates := map[string]any{
-		"trunk_id":            req.TrunkID,
-		"tenant_id":           req.TenantID,
-		"number":              number,
-		"caller_display_name": strings.TrimSpace(req.CallerDisplayName),
-		"prefix":              strings.TrimSpace(req.Prefix),
-		"description":         strings.TrimSpace(req.Description),
-		"direction":           strings.TrimSpace(req.Direction),
-		"status":              strings.TrimSpace(req.Status),
-		"concurrent":          req.Concurrent,
-		"call_in_concurrent":  req.CallInConcurrent,
-		"is_transfer_relay":   req.IsTransferRelay,
-		"effective_time":      eff,
-		"expiration_time":     exp,
-		"voice_dialog_ws_url": voiceWS,
+		"trunk_id":                 req.TrunkID,
+		"tenant_id":                req.TenantID,
+		"number":                   number,
+		"caller_display_name":      strings.TrimSpace(req.CallerDisplayName),
+		"prefix":                   strings.TrimSpace(req.Prefix),
+		"description":              strings.TrimSpace(req.Description),
+		"direction":                strings.TrimSpace(req.Direction),
+		"status":                   strings.TrimSpace(req.Status),
+		"concurrent":               req.Concurrent,
+		"call_in_concurrent":       req.CallInConcurrent,
+		"is_transfer_relay":        req.IsTransferRelay,
+		"effective_time":           eff,
+		"expiration_time":          exp,
+		"voice_dialog_ws_url":      voiceWS,
+		"outbound_trunk_number_id": req.OutboundTrunkNumberID,
 	}
 	if err := h.db.Model(&models.TrunkNumber{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

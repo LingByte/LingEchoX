@@ -191,7 +191,8 @@ func RegisterAwaiting(callID string, cs *sipSession.CallSession, lg *zap.Logger)
 	if defaultHub == nil {
 		return errors.New("webseat: InitDefault not called")
 	}
-	if strings.TrimSpace(callID) == "" || cs == nil {
+	callID = strings.TrimSpace(callID)
+	if callID == "" || cs == nil {
 		return errors.New("webseat: invalid call or session")
 	}
 	h := defaultHub
@@ -459,16 +460,57 @@ func (h *Hub) emitFinalizePersist(callID, initiator string, cs *sipSession.CallS
 	go h.cfg.FinalizeInboundPersist(context.Background(), callID, init, raw, codec, sr, ch)
 }
 
+// cleanupInboundAfterJoinFailure runs when completeJoin fails after we removed the call from awaiting.
+// Without this, the PSTN leg can stay up (no BYE) while the web join never completes.
+func (h *Hub) cleanupInboundAfterJoinFailure(callID string, cs *sipSession.CallSession, lg *zap.Logger) {
+	if h == nil || strings.TrimSpace(callID) == "" {
+		return
+	}
+	h.broadcastIncomingEnd(callID, "ended")
+	h.emitFinalizePersist(callID, "local", cs)
+	if cs != nil {
+		cs.Stop()
+	}
+	if h.cfg.SendUASBye != nil {
+		if err := h.cfg.SendUASBye(callID); err != nil && lg != nil {
+			lg.Warn("webseat: join failed; SendUASBye failed", zap.String("call_id", callID), zap.Error(err))
+		} else if err == nil && h.cfg.ForgetUASDialog != nil {
+			h.cfg.ForgetUASDialog(callID)
+		}
+	} else if h.cfg.ForgetUASDialog != nil {
+		h.cfg.ForgetUASDialog(callID)
+	}
+	if h.cfg.RemoveCallSession != nil {
+		h.cfg.RemoveCallSession(callID)
+	}
+}
+
 func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
-	if defaultHub == nil || callID == "" {
+	if defaultHub == nil {
+		return false
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
 		return false
 	}
 	h := defaultHub
+	lg := logger.Lg
+	if lg == nil {
+		lg = zap.NewNop()
+	}
+
 	h.mu.Lock()
-	ab, ok := h.active[callID]
-	if !ok {
+	ab, activeOK := h.active[callID]
+	if !activeOK {
 		entry, waiting := h.awaiting[callID]
 		if waiting {
+			if sendByeToCustomer && h.cfg.SendUASBye != nil {
+				if err := h.cfg.SendUASBye(callID); err != nil {
+					h.mu.Unlock()
+					lg.Warn("webseat: SendUASBye failed (awaiting join path)", zap.String("call_id", callID), zap.Error(err))
+					return false
+				}
+			}
 			delete(h.awaiting, callID)
 			h.mu.Unlock()
 			h.broadcastIncomingEnd(callID, "ended")
@@ -484,9 +526,6 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 			if cs != nil {
 				cs.Stop()
 			}
-			if sendByeToCustomer && h.cfg.SendUASBye != nil {
-				_ = h.cfg.SendUASBye(callID)
-			}
 			if h.cfg.RemoveCallSession != nil {
 				h.cfg.RemoveCallSession(callID)
 			}
@@ -497,13 +536,29 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 			if h.cfg.ReleaseTransferDedupe != nil {
 				h.cfg.ReleaseTransferDedupe(callID)
 			}
+			lg.Info("webseat: session torn down", zap.String("call_id", callID), zap.Bool("bye_customer", sendByeToCustomer), zap.String("phase", "awaiting"))
 			return true
 		}
 		h.mu.Unlock()
 		return false
 	}
+	h.mu.Unlock()
+
+	if sendByeToCustomer && h.cfg.SendUASBye != nil {
+		if err := h.cfg.SendUASBye(callID); err != nil {
+			lg.Warn("webseat: SendUASBye failed (active bridge path)", zap.String("call_id", callID), zap.Error(err))
+			return false
+		}
+	}
+
+	h.mu.Lock()
+	if cur, still := h.active[callID]; !still || cur != ab {
+		h.mu.Unlock()
+		return false
+	}
 	delete(h.active, callID)
 	h.mu.Unlock()
+
 	h.broadcastIncomingEnd(callID, "ended")
 
 	initiator := "remote"
@@ -512,7 +567,6 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 	}
 	h.emitFinalizePersist(callID, initiator, ab.inbound)
 
-	// br is nil until the browser connects and OnTrack runs (async after join response).
 	if ab.br != nil {
 		ab.br.Stop()
 	}
@@ -522,9 +576,6 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 	if ab.inbound != nil {
 		ab.inbound.CloseRTPOnly()
 	}
-	if sendByeToCustomer && h.cfg.SendUASBye != nil {
-		_ = h.cfg.SendUASBye(callID)
-	}
 	if h.cfg.RemoveCallSession != nil {
 		h.cfg.RemoveCallSession(callID)
 	}
@@ -532,9 +583,10 @@ func teardownWebSeat(callID string, sendByeToCustomer bool) bool {
 		h.cfg.ForgetUASDialog(callID)
 	}
 	h.acdReleaseBindingToAvailable(callID)
-	if logger.Lg != nil {
-		logger.Lg.Info("webseat: session torn down", zap.String("call_id", callID), zap.Bool("bye_customer", sendByeToCustomer))
+	if h.cfg.ReleaseTransferDedupe != nil {
+		h.cfg.ReleaseTransferDedupe(callID)
 	}
+	lg.Info("webseat: session torn down", zap.String("call_id", callID), zap.Bool("bye_customer", sendByeToCustomer))
 	return true
 }
 
@@ -582,6 +634,7 @@ func (h *Hub) handleJoin(w http.ResponseWriter, r *http.Request) {
 
 	answer, err := h.completeJoin(r.Context(), callID, entry.cs, body, lg)
 	if err != nil {
+		h.cleanupInboundAfterJoinFailure(callID, entry.cs, lg)
 		h.acdReleaseBindingToAvailable(callID)
 		if h.cfg.ReleaseTransferDedupe != nil {
 			h.cfg.ReleaseTransferDedupe(callID)
@@ -683,13 +736,13 @@ func (h *Hub) completeJoin(ctx context.Context, callID string, inbound *sipSessi
 		_ = pc.AddICECandidate(c)
 	}
 
-	opusCap := webrtc.RTPCodecCapability{
-		MimeType:    webrtc.MimeTypeOpus,
-		ClockRate:   48000,
-		Channels:    2,
-		SDPFmtpLine: "minptime=10;useinbandfec=1",
+	// Must match codecs registered in newMediaEngine() (PCMA/PCMU only). Using Opus here
+	// causes AddTrack to fail: "codec is not supported by remote" and join returns 500.
+	txCap := webrtc.RTPCodecCapability{
+		MimeType:  webrtc.MimeTypePCMU,
+		ClockRate: 8000,
 	}
-	txLocal, err := webrtc.NewTrackLocalStaticSample(opusCap, "audio", "soulnexus")
+	txLocal, err := webrtc.NewTrackLocalStaticSample(txCap, "audio", "soulnexus")
 	if err != nil {
 		_ = pc.Close()
 		return nil, err
@@ -758,14 +811,14 @@ func (h *Hub) waitRemoteTrackAndBridge(
 		if h.cfg.ReleaseTransferDedupe != nil {
 			h.cfg.ReleaseTransferDedupe(callID)
 		}
-		_ = teardownWebSeat(callID, false)
+		_ = teardownWebSeat(callID, true)
 		return
 	}
 	if remoteTrack == nil {
 		if h.cfg.ReleaseTransferDedupe != nil {
 			h.cfg.ReleaseTransferDedupe(callID)
 		}
-		_ = teardownWebSeat(callID, false)
+		_ = teardownWebSeat(callID, true)
 		return
 	}
 
@@ -776,7 +829,7 @@ func (h *Hub) waitRemoteTrackAndBridge(
 		if h.cfg.ReleaseTransferDedupe != nil {
 			h.cfg.ReleaseTransferDedupe(callID)
 		}
-		_ = teardownWebSeat(callID, false)
+		_ = teardownWebSeat(callID, true)
 		_ = pc.Close()
 		return
 	}
@@ -802,7 +855,7 @@ func (h *Hub) waitRemoteTrackAndBridge(
 		if h.cfg.ReleaseTransferDedupe != nil {
 			h.cfg.ReleaseTransferDedupe(callID)
 		}
-		_ = teardownWebSeat(callID, false)
+		_ = teardownWebSeat(callID, true)
 		return
 	}
 
@@ -814,7 +867,7 @@ func (h *Hub) waitRemoteTrackAndBridge(
 			h.cfg.ReleaseTransferDedupe(callID)
 		}
 		br.Stop()
-		_ = teardownWebSeat(callID, false)
+		_ = teardownWebSeat(callID, true)
 		_ = pc.Close()
 		return
 	}
@@ -830,14 +883,10 @@ func (h *Hub) waitRemoteTrackAndBridge(
 
 func newMediaEngine() *webrtc.MediaEngine {
 	me := &webrtc.MediaEngine{}
+	// G.711 only for web seat (no Opus): PCMA preferred for CN/EU-style carriers; PCMU fallback.
 	_ = me.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeOpus,
-			ClockRate:   48000,
-			Channels:    2,
-			SDPFmtpLine: "minptime=10;useinbandfec=1",
-		},
-		PayloadType: 111,
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000},
+		PayloadType:        8,
 	}, webrtc.RTPCodecTypeAudio)
 	_ = me.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000},
@@ -866,6 +915,7 @@ func mediaFromRemoteTrack(tr *webrtc.TrackRemote) media.CodecConfig {
 	}
 	switch {
 	case strings.Contains(mime, "opus"):
+		// Web seat MediaEngine no longer offers Opus; kept for forward-compat if SDP still lists it.
 		decodeCh := ch
 		if decodeCh > 2 {
 			decodeCh = 2
@@ -878,7 +928,31 @@ func mediaFromRemoteTrack(tr *webrtc.TrackRemote) media.CodecConfig {
 			FrameDuration:      "20ms",
 			OpusDecodeChannels: decodeCh,
 		}
+	case strings.Contains(mime, "pcmu") || strings.Contains(mime, "g711u"):
+		sr := int(c.ClockRate)
+		if sr <= 0 {
+			sr = 8000
+		}
+		return media.CodecConfig{
+			Codec:         "pcmu",
+			SampleRate:    sr,
+			Channels:      1,
+			BitDepth:      8,
+			FrameDuration: "20ms",
+		}
+	case strings.Contains(mime, "pcma") || strings.Contains(mime, "g711a"):
+		sr := int(c.ClockRate)
+		if sr <= 0 {
+			sr = 8000
+		}
+		return media.CodecConfig{
+			Codec:         "pcma",
+			SampleRate:    sr,
+			Channels:      1,
+			BitDepth:      8,
+			FrameDuration: "20ms",
+		}
 	default:
-		return media.CodecConfig{Codec: "opus", SampleRate: 48000, Channels: 1, BitDepth: 16, FrameDuration: "20ms", OpusDecodeChannels: 2}
+		return media.CodecConfig{Codec: "pcma", SampleRate: 8000, Channels: 1, BitDepth: 8, FrameDuration: "20ms"}
 	}
 }

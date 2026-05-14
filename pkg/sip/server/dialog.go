@@ -71,7 +71,12 @@ func requestURIFromContact(contact string) string {
 	return c
 }
 
+func normUASCallID(callID string) string {
+	return strings.TrimSpace(callID)
+}
+
 func (s *SIPServer) rememberUASDialog(callID string, remote *net.UDPAddr, inv *stack.Message, ourToWithTag string) {
+	callID = normUASCallID(callID)
 	if s == nil || callID == "" || inv == nil || remote == nil {
 		return
 	}
@@ -95,7 +100,11 @@ func (s *SIPServer) rememberUASDialog(callID string, remote *net.UDPAddr, inv *s
 }
 
 func (s *SIPServer) forgetUASDialog(callID string) {
-	if s == nil || callID == "" {
+	if s == nil {
+		return
+	}
+	callID = normUASCallID(callID)
+	if callID == "" {
 		return
 	}
 	s.dlgMu.Lock()
@@ -109,7 +118,11 @@ func (s *SIPServer) ForgetUASDialog(callID string) {
 }
 
 func (s *SIPServer) buildUASBye(callID string) (*stack.Message, *net.UDPAddr, error) {
-	if s == nil || callID == "" {
+	if s == nil {
+		return nil, nil, fmt.Errorf("sip: invalid hangup")
+	}
+	callID = normUASCallID(callID)
+	if callID == "" {
 		return nil, nil, fmt.Errorf("sip: invalid hangup")
 	}
 	s.dlgMu.Lock()
@@ -144,7 +157,11 @@ func (s *SIPServer) buildUASBye(callID string) (*stack.Message, *net.UDPAddr, er
 
 // buildReferNotify builds an in-dialog NOTIFY (Event: refer) with a message/sipfrag body.
 func (s *SIPServer) buildReferNotify(callID string, sipfragBody string, subscriptionState string) (*stack.Message, *net.UDPAddr, error) {
-	if s == nil || callID == "" {
+	if s == nil {
+		return nil, nil, fmt.Errorf("sip: invalid refer notify")
+	}
+	callID = normUASCallID(callID)
+	if callID == "" {
 		return nil, nil, fmt.Errorf("sip: invalid refer notify")
 	}
 	s.dlgMu.Lock()
@@ -194,6 +211,10 @@ func randomHexBranch() string {
 
 // SendUASBye sends BYE to the remote party for an inbound UAS dialog (no local RTP teardown).
 func (s *SIPServer) SendUASBye(callID string) error {
+	callID = normUASCallID(callID)
+	if callID == "" {
+		return fmt.Errorf("sip: empty call-id")
+	}
 	msg, dst, err := s.buildUASBye(callID)
 	if err != nil {
 		return err
@@ -207,7 +228,11 @@ func (s *SIPServer) SendUASBye(callID string) error {
 
 // HangupInboundCall ends an inbound leg: transfer bridge (BYE both sides), or AI call (BYE + teardown).
 func (s *SIPServer) HangupInboundCall(callID string) {
-	if s == nil || callID == "" {
+	if s == nil {
+		return
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
 		return
 	}
 	s.releaseInboundCapacity(callID)

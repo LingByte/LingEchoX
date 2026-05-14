@@ -65,6 +65,11 @@ type SIPServer struct {
 	voiceWSLookupMu sync.RWMutex
 	voiceWSLookup   func(callID string) string
 
+	// Optional: outbound.Manager — drop UAC leg after BYE is fully handled (transfer bridge / generic).
+	outboundBYELegCleanup func(callID string)
+	// Optional: map established transfer_bridge outbound Call-ID → inbound PSTN Call-ID (DialRequest.CorrelationID).
+	transferBridgeInboundFromOutbound func(outboundCallID string) (inboundCallID string, ok bool)
+
 	dlgMu  sync.RWMutex
 	uasDlg map[string]*uasDialogState // inbound Call-ID -> dialog (for server-initiated BYE)
 
@@ -183,15 +188,22 @@ type Config struct {
 	// OnSIPResponse is optional: SIP responses on the listen socket (UAC / outbound legs).
 	// Typically set to outbound.Manager.HandleSIPResponse.
 	OnSIPResponse func(resp *stack.Message, addr *net.UDPAddr)
+
+	// OutboundBYELegCleanup drops outbound.Manager leg state for this Call-ID after BYE handling. Optional.
+	OutboundBYELegCleanup func(callID string)
+	// TransferBridgeInboundFromOutbound maps established transfer_bridge outbound Call-ID to inbound PSTN Call-ID. Optional.
+	TransferBridgeInboundFromOutbound func(outboundCallID string) (inboundCallID string, ok bool)
 }
 
 func New(cfg Config) *SIPServer {
 	s := &SIPServer{
-		localIP:     strings.TrimSpace(cfg.LocalIP),
-		listenHost:  strings.TrimSpace(cfg.Host),
-		listenPort:  cfg.Port,
-		callStore:   make(map[string]*sipSession.CallSession),
-		inviteBrief: make(map[string]inviteBrief),
+		localIP:                           strings.TrimSpace(cfg.LocalIP),
+		listenHost:                        strings.TrimSpace(cfg.Host),
+		listenPort:                        cfg.Port,
+		callStore:                         make(map[string]*sipSession.CallSession),
+		inviteBrief:                       make(map[string]inviteBrief),
+		outboundBYELegCleanup:             cfg.OutboundBYELegCleanup,
+		transferBridgeInboundFromOutbound: cfg.TransferBridgeInboundFromOutbound,
 	}
 	if s.localIP == "" {
 		s.localIP = "127.0.0.1"
@@ -573,7 +585,7 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		return nil
 	}
 
-	callID := msg.GetHeader("Call-ID")
+	callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
 	if callID == "" {
 		// SIP requires Call-ID; if absent respond 400.
 		return s.makeResponse(msg, 400, "Bad Request", "", "")
@@ -960,7 +972,7 @@ func (s *SIPServer) handleAck(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	if s.txMgr != nil {
 		_ = s.txMgr.HandleAck(msg, addr)
 	}
-	callID := msg.GetHeader("Call-ID")
+	callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
 	if callID == "" {
 		return nil
 	}
@@ -1012,7 +1024,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
-	callID := msg.GetHeader("Call-ID")
+	callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
 	if callID == "" {
 		return s.makeResponse(msg, 400, "Bad Request", "", "")
 	}
@@ -1023,6 +1035,11 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	if tb := conversation.HangupTransferBridgeIfAny(callID); tb != nil {
 		s.forgetUASDialog(callID)
 		s.releaseInboundCapacity(tb.InboundCallID)
+		conversation.CleanupCallState(tb.InboundCallID)
+		s.endVoiceDialogBridge(tb.InboundCallID)
+		if s.outboundBYELegCleanup != nil && strings.TrimSpace(tb.OutboundCallID) != "" {
+			s.outboundBYELegCleanup(tb.OutboundCallID)
+		}
 		if p := s.callPersistStore(); p != nil {
 			go p.OnBye(context.Background(), ByePersistParams{
 				CallID:             tb.InboundCallID,
@@ -1034,6 +1051,34 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 			})
 		}
 		return s.makeResponse(msg, 200, "OK", "", "")
+	}
+	if s.transferBridgeInboundFromOutbound != nil {
+		if inbound, ok := s.transferBridgeInboundFromOutbound(callID); ok && inbound != "" {
+			if logger.Lg != nil {
+				logger.Lg.Info("sip transfer bridge: outbound remote BYE fallback (bridge map miss)",
+					zap.String("outbound_call_id", callID),
+					zap.String("inbound_call_id", inbound))
+			}
+			tb := conversation.TeardownTransferBridgeOnOutboundRemoteByeFallback(inbound, callID)
+			s.forgetUASDialog(callID)
+			s.releaseInboundCapacity(inbound)
+			conversation.CleanupCallState(inbound)
+			s.endVoiceDialogBridge(inbound)
+			if s.outboundBYELegCleanup != nil {
+				s.outboundBYELegCleanup(callID)
+			}
+			if tb != nil && s.callPersistStore() != nil {
+				go s.callPersistStore().OnBye(context.Background(), ByePersistParams{
+					CallID:             tb.InboundCallID,
+					RawPayload:         tb.RawPayload,
+					CodecName:          tb.CodecName,
+					Initiator:          tb.Initiator,
+					RecordSampleRate:   tb.RecordSampleRate,
+					RecordOpusChannels: tb.RecordOpusChannels,
+				})
+			}
+			return s.makeResponse(msg, 200, "OK", "", "")
+		}
 	}
 	if conversation.HangupWebSeatBridgeIfAny(callID) {
 		s.forgetUASDialog(callID)
@@ -1072,6 +1117,9 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	}
 	s.forgetUASDialog(callID)
 	s.releaseInboundCapacity(callID)
+	if s.outboundBYELegCleanup != nil {
+		s.outboundBYELegCleanup(callID)
+	}
 	return s.makeResponse(msg, 200, "OK", "", "")
 }
 
@@ -1259,7 +1307,11 @@ func (s *SIPServer) ListenAddr() (host string, port int) {
 
 // GetCallSession returns the active CallSession for a Call-ID, or nil.
 func (s *SIPServer) GetCallSession(callID string) *sipSession.CallSession {
-	if s == nil || callID == "" {
+	if s == nil {
+		return nil
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
 		return nil
 	}
 	s.mu.Lock()
@@ -1269,7 +1321,11 @@ func (s *SIPServer) GetCallSession(callID string) *sipSession.CallSession {
 
 // RemoveCallSession deletes a Call-ID from the store without stopping media (used when RTP was torn down elsewhere).
 func (s *SIPServer) RemoveCallSession(callID string) {
-	if s == nil || callID == "" {
+	if s == nil {
+		return
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
 		return
 	}
 	s.endVoiceDialogBridge(callID)
@@ -1281,7 +1337,11 @@ func (s *SIPServer) RemoveCallSession(callID string) {
 // RegisterCallSession adds an established session (e.g. outbound UAC leg after ACK) so BYE and
 // other in-dialog requests are handled the same as inbound calls.
 func (s *SIPServer) RegisterCallSession(callID string, cs *sipSession.CallSession) {
-	if s == nil || callID == "" || cs == nil {
+	if s == nil || cs == nil {
+		return
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
 		return
 	}
 	s.mu.Lock()

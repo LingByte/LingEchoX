@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/LingByte/SoulNexus/pkg/media/encoder"
-	"github.com/hraban/opus"
 )
 
 // recMixPeakThreshold mirrors sip/server recording mix: gentle peak scaling before hard clip.
@@ -655,7 +654,7 @@ func pcm16StereoInterleavedToWav(lr []int16, sampleRate int) []byte {
 	_ = binary.Write(buf, binary.LittleEndian, uint16(2)) // stereo
 	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate))
 	_ = binary.Write(buf, binary.LittleEndian, uint32(uint32(sampleRate)*4)) // byte rate
-	_ = binary.Write(buf, binary.LittleEndian, uint16(4))                     // block align
+	_ = binary.Write(buf, binary.LittleEndian, uint16(4))                    // block align
 	_ = binary.Write(buf, binary.LittleEndian, uint16(16))
 	_, _ = buf.WriteString("data")
 	_ = binary.Write(buf, binary.LittleEndian, uint32(dataSize))
@@ -853,127 +852,19 @@ func MixedOpusRecordingToStereoWav(b []byte, sampleRate, decodeChannels int) []b
 }
 
 func opusDecodeLegWallSegments(frames []taggedOpusFrame, sampleRate, decodeChannels int) []wallPCMSeg {
-	if len(frames) == 0 {
-		return nil
-	}
-	sort.Slice(frames, func(i, j int) bool { return frames[i].seq < frames[j].seq })
-	dec, err := opus.NewDecoder(sampleRate, decodeChannels)
-	if err != nil {
-		return nil
-	}
-	maxSamples := sampleRate * 120 / 1000
-	if maxSamples < 960 {
-		maxSamples = 960
-	}
-	pcmScratch := make([]int16, maxSamples*decodeChannels)
-	defaultFrameSamples := sampleRate / 50
-	if defaultFrameSamples <= 0 {
-		defaultFrameSamples = 960
-	}
-	var out []wallPCMSeg
-	var lastSeq uint16
-	var hasSeq bool
-	for _, f := range frames {
-		if hasSeq {
-			gap := int(uint16(f.seq - lastSeq))
-			if gap > 1 && gap < 20 {
-				for i := 0; i < gap-1; i++ {
-					_, _ = dec.Decode(nil, pcmScratch)
-				}
-			}
-		}
-		lastSeq = f.seq
-		hasSeq = true
-		samples, derr := dec.Decode(f.payload, pcmScratch)
-		if derr != nil || samples <= 0 {
-			plcSamples, plcErr := dec.Decode(nil, pcmScratch)
-			if plcErr == nil && plcSamples > 0 {
-				samples = plcSamples
-			} else {
-				samples = defaultFrameSamples
-				if samples > maxSamples {
-					samples = maxSamples
-				}
-				for i := 0; i < samples*decodeChannels; i++ {
-					pcmScratch[i] = 0
-				}
-			}
-		}
-		var mono []int16
-		if decodeChannels == 2 {
-			for i := 0; i < samples; i++ {
-				L := int32(pcmScratch[i*2])
-				R := int32(pcmScratch[i*2+1])
-				mono = append(mono, int16((L+R)/2))
-			}
-		} else {
-			mono = append(mono, pcmScratch[:samples]...)
-		}
-		out = append(out, wallPCMSeg{wallNs: f.wallNs, seq: f.seq, pcm: mono})
-	}
-	return out
+	// Opus decoding disabled in this build.
+	_ = frames
+	_ = sampleRate
+	_ = decodeChannels
+	return nil
 }
 
 func opusDecodeLegTimelineSegments(frames []taggedOpusFrame, sampleRate, decodeChannels int) []sn2PCMTrackSeg {
-	if len(frames) == 0 {
-		return nil
-	}
-	sort.Slice(frames, func(i, j int) bool { return frames[i].seq < frames[j].seq })
-	dec, err := opus.NewDecoder(sampleRate, decodeChannels)
-	if err != nil {
-		return nil
-	}
-	maxSamples := sampleRate * 120 / 1000
-	if maxSamples < 960 {
-		maxSamples = 960
-	}
-	pcmScratch := make([]int16, maxSamples*decodeChannels)
-	defaultFrameSamples := sampleRate / 50
-	if defaultFrameSamples <= 0 {
-		defaultFrameSamples = 960
-	}
-	var out []sn2PCMTrackSeg
-	var lastSeq uint16
-	var hasSeq bool
-	for _, f := range frames {
-		if hasSeq {
-			gap := int(uint16(f.seq - lastSeq))
-			if gap > 1 && gap < 20 {
-				for i := 0; i < gap-1; i++ {
-					_, _ = dec.Decode(nil, pcmScratch)
-				}
-			}
-		}
-		lastSeq = f.seq
-		hasSeq = true
-		samples, derr := dec.Decode(f.payload, pcmScratch)
-		if derr != nil || samples <= 0 {
-			plcSamples, plcErr := dec.Decode(nil, pcmScratch)
-			if plcErr == nil && plcSamples > 0 {
-				samples = plcSamples
-			} else {
-				samples = defaultFrameSamples
-				if samples > maxSamples {
-					samples = maxSamples
-				}
-				for i := 0; i < samples*decodeChannels; i++ {
-					pcmScratch[i] = 0
-				}
-			}
-		}
-		var mono []int16
-		if decodeChannels == 2 {
-			for i := 0; i < samples; i++ {
-				L := int32(pcmScratch[i*2])
-				R := int32(pcmScratch[i*2+1])
-				mono = append(mono, int16((L+R)/2))
-			}
-		} else {
-			mono = append(mono, pcmScratch[:samples]...)
-		}
-		out = append(out, sn2PCMTrackSeg{ts: f.ts, seq: f.seq, pcm: mono})
-	}
-	return out
+	// Opus decoding disabled in this build.
+	_ = frames
+	_ = sampleRate
+	_ = decodeChannels
+	return nil
 }
 
 func opusFramesPerLegStereoWav(frames []taggedOpusFrame, sampleRate, decodeChannels int) []byte {
@@ -1116,196 +1007,19 @@ func opusTaggedFramesToWav(b []byte, sampleRate, decodeChannels int) []byte {
 }
 
 func decodeTaggedOpusFrames(frames []taggedOpusFrame, sampleRate, decodeChannels int, withSeq bool) []byte {
-	if len(frames) == 0 {
-		return nil
-	}
-	if sampleRate <= 0 {
-		sampleRate = 48000
-	}
-	if decodeChannels < 1 {
-		decodeChannels = 1
-	}
-	if decodeChannels > 2 {
-		decodeChannels = 2
-	}
-	// User uplink and AI/TTS downlink are independent RTP streams; a single OpusDecoder
-	// keeps cross-packet state, so alternating legs corrupts decode (often the AI leg).
-	decUser, errU := opus.NewDecoder(sampleRate, decodeChannels)
-	decAI, errA := opus.NewDecoder(sampleRate, decodeChannels)
-	if errU != nil || errA != nil {
-		return nil
-	}
-	maxSamples := sampleRate * 120 / 1000
-	if maxSamples < 960 {
-		maxSamples = 960
-	}
-	pcmScratch := make([]int16, maxSamples*decodeChannels)
-	var mono []int16
-	defaultFrameSamples := sampleRate / 50 // 20ms
-	if defaultFrameSamples <= 0 {
-		defaultFrameSamples = 960
-	}
-	var lastSeqUser uint16
-	var lastSeqAI uint16
-	var hasSeqUser bool
-	var hasSeqAI bool
-	// archival: keep all uplink (see recordingMonoDuckUserFrames).
-	aiPriorityLeft := 0
-	for _, f := range frames {
-		if f.dir == recTagAILeg {
-			aiPriorityLeft = recordingMonoDuckUserFrames
-		} else if aiPriorityLeft > 0 {
-			aiPriorityLeft--
-			// Skip uplink frames during short AI-active window to avoid fragmenting AI audio.
-			continue
-		}
-
-		dec := decUser
-		switch f.dir {
-		case recTagUserLeg:
-			dec = decUser
-		case recTagAILeg:
-			dec = decAI
-		default:
-			continue
-		}
-		if withSeq {
-			var gap int
-			if f.dir == recTagUserLeg {
-				if hasSeqUser {
-					gap = int(uint16(f.seq - lastSeqUser))
-					if gap > 1 && gap < 20 {
-						for i := 0; i < gap-1; i++ {
-							if plc, err := dec.Decode(nil, pcmScratch); err == nil && plc > 0 {
-								if decodeChannels == 2 {
-									for j := 0; j < plc; j++ {
-										L := int32(pcmScratch[j*2])
-										R := int32(pcmScratch[j*2+1])
-										mono = append(mono, int16((L+R)/2))
-									}
-								} else {
-									mono = append(mono, pcmScratch[:plc]...)
-								}
-							}
-						}
-					}
-				}
-				lastSeqUser = f.seq
-				hasSeqUser = true
-			} else {
-				if hasSeqAI {
-					gap = int(uint16(f.seq - lastSeqAI))
-					if gap > 1 && gap < 20 {
-						for i := 0; i < gap-1; i++ {
-							if plc, err := dec.Decode(nil, pcmScratch); err == nil && plc > 0 {
-								if decodeChannels == 2 {
-									for j := 0; j < plc; j++ {
-										L := int32(pcmScratch[j*2])
-										R := int32(pcmScratch[j*2+1])
-										mono = append(mono, int16((L+R)/2))
-									}
-								} else {
-									mono = append(mono, pcmScratch[:plc]...)
-								}
-							}
-						}
-					}
-				}
-				lastSeqAI = f.seq
-				hasSeqAI = true
-			}
-		}
-		samples, derr := dec.Decode(f.payload, pcmScratch)
-		if derr != nil || samples <= 0 {
-			// Packet loss concealment: use decoder PLC to keep timeline continuous.
-			plcSamples, plcErr := dec.Decode(nil, pcmScratch)
-			if plcErr == nil && plcSamples > 0 {
-				samples = plcSamples
-			} else {
-				samples = defaultFrameSamples
-				if samples > maxSamples {
-					samples = maxSamples
-				}
-				// PLC unavailable; fill with silence to avoid timeline collapse.
-				for i := 0; i < samples*decodeChannels; i++ {
-					pcmScratch[i] = 0
-				}
-			}
-		}
-		if decodeChannels == 2 {
-			for i := 0; i < samples; i++ {
-				L := int32(pcmScratch[i*2])
-				R := int32(pcmScratch[i*2+1])
-				mono = append(mono, int16((L+R)/2))
-			}
-		} else {
-			mono = append(mono, pcmScratch[:samples]...)
-		}
-	}
-	return pcm16MonoToWav(mono, sampleRate)
+	// Opus decoding disabled in this build.
+	_ = frames
+	_ = sampleRate
+	_ = decodeChannels
+	_ = withSeq
+	return nil
 }
 
 // OpusLengthPrefixedPayloadsToWav decodes legacy inbound-only [uint16LE len][opus frame]... to mono WAV.
+// Opus decoding disabled in this build.
 func OpusLengthPrefixedPayloadsToWav(b []byte, sampleRate, decodeChannels int) []byte {
-	if len(b) < 2 {
-		return nil
-	}
-	if sampleRate <= 0 {
-		sampleRate = 48000
-	}
-	if decodeChannels < 1 {
-		decodeChannels = 1
-	}
-	if decodeChannels > 2 {
-		decodeChannels = 2
-	}
-	dec, err := opus.NewDecoder(sampleRate, decodeChannels)
-	if err != nil {
-		return nil
-	}
-	maxSamples := sampleRate * 120 / 1000
-	if maxSamples < 960 {
-		maxSamples = 960
-	}
-	pcmScratch := make([]int16, maxSamples*decodeChannels)
-	var mono []int16
-	defaultFrameSamples := sampleRate / 50 // 20ms
-	if defaultFrameSamples <= 0 {
-		defaultFrameSamples = 960
-	}
-	for len(b) >= 2 {
-		n := int(binary.LittleEndian.Uint16(b[:2]))
-		b = b[2:]
-		if n <= 0 || n > 4000 || len(b) < n {
-			break
-		}
-		pkt := b[:n]
-		b = b[n:]
-		samples, derr := dec.Decode(pkt, pcmScratch)
-		if derr != nil || samples <= 0 {
-			// Packet loss concealment for legacy stream.
-			plcSamples, plcErr := dec.Decode(nil, pcmScratch)
-			if plcErr == nil && plcSamples > 0 {
-				samples = plcSamples
-			} else {
-				samples = defaultFrameSamples
-				if samples > maxSamples {
-					samples = maxSamples
-				}
-				for i := 0; i < samples*decodeChannels; i++ {
-					pcmScratch[i] = 0
-				}
-			}
-		}
-		if decodeChannels == 2 {
-			for i := 0; i < samples; i++ {
-				L := int32(pcmScratch[i*2])
-				R := int32(pcmScratch[i*2+1])
-				mono = append(mono, int16((L+R)/2))
-			}
-		} else {
-			mono = append(mono, pcmScratch[:samples]...)
-		}
-	}
-	return pcm16MonoToWav(mono, sampleRate)
+	_ = b
+	_ = sampleRate
+	_ = decodeChannels
+	return nil
 }

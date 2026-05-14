@@ -130,7 +130,7 @@ type SignalingSender interface {
 
 // ManagerConfig configures outbound legs.
 type ManagerConfig struct {
-	// LocalIP is used in SDP c= line and Call-ID host part.
+	// LocalIP is used in SDP c= line (RTP advertised address).
 	LocalIP string
 	// SIPHost / SIPPort identify this UA in Via/Contact (usually listen addr).
 	SIPHost string
@@ -148,6 +148,10 @@ type ManagerConfig struct {
 
 	// OnEstablished is optional analytics hook after media hooks succeed.
 	OnEstablished func(EstablishedLeg)
+
+	// OnDialogCallIDAdopted runs when a 200 OK to INVITE uses a different Call-ID than our INVITE
+	// (e.g. SBC rewrite). correlationID is req.CorrelationID (inbound Call-ID for transfers).
+	OnDialogCallIDAdopted func(oldID, newID, correlationID string)
 
 	// OnTransferBridge runs after 200 OK + ACK for MediaProfileTransferBridge.
 	// CorrelationID on the request is the inbound Call-ID; cs is the outbound UAC leg.
@@ -257,6 +261,12 @@ func (m *Manager) HandleSIPResponse(resp *stack.Message, addr *net.UDPAddr) {
 		)
 		return
 	}
+	// SBCs often rewrite the Call-ID host on 1xx/2xx; adopt before handleResponse so leg.params,
+	// RegisterCallSession, transfer bridge maps, and in-dialog BYE use the dialog Call-ID.
+	cseqHdr := strings.ToUpper(strings.TrimSpace(resp.GetHeader("CSeq")))
+	if strings.Contains(cseqHdr, "INVITE") && resp.StatusCode < 300 {
+		m.adoptOutboundDialogCallIDIfNeeded(leg, resp)
+	}
 	leg.handleResponse(context.Background(), resp, addr)
 }
 
@@ -275,11 +285,15 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		return "", fmt.Errorf("sip/outbound: empty signaling address")
 	}
 
-	localSDP := m.cfg.LocalIP
+	sigHost := strings.TrimSpace(m.cfg.SIPHost)
+	if sigHost == "" {
+		sigHost = "127.0.0.1"
+	}
+	localSDP := strings.TrimSpace(m.cfg.LocalIP)
 	if localSDP == "" {
 		localSDP = "127.0.0.1"
 	}
-	callID = newCallID(localSDP)
+	callID = newCallID(sigHost)
 	dialCommitted := false
 	defer func() {
 		if !dialCommitted {
@@ -502,6 +516,45 @@ func (m *Manager) AbandonEarlyTransferInvite(callID string) bool {
 	return true
 }
 
+// adoptOutboundDialogCallIDIfNeeded rekeys the outbound leg when a 2xx to INVITE echoes a different Call-ID
+// (some SBCs normalize the host part). ACK/BYE and bridge maps must use the dialog Call-ID.
+func (m *Manager) adoptOutboundDialogCallIDIfNeeded(leg *outLeg, resp *stack.Message) {
+	if m == nil || leg == nil || resp == nil {
+		return
+	}
+	newCID := strings.TrimSpace(resp.GetHeader("Call-ID"))
+	oldCID := strings.TrimSpace(leg.params.CallID)
+	if newCID == "" || newCID == oldCID {
+		return
+	}
+	var adopCb func(string, string, string)
+	m.mu.Lock()
+	if m.legs[oldCID] != leg {
+		m.mu.Unlock()
+		return
+	}
+	if ex := m.legs[newCID]; ex != nil && ex != leg {
+		m.mu.Unlock()
+		logger.Warn("sip outbound: refuse dialog call-id adopt (collision)",
+			zap.String("old", oldCID), zap.String("new", newCID))
+		return
+	}
+	delete(m.legs, oldCID)
+	leg.params.CallID = newCID
+	m.legs[newCID] = leg
+	adopCb = m.cfg.OnDialogCallIDAdopted
+	m.mu.Unlock()
+
+	if adopCb != nil {
+		adopCb(oldCID, newCID, strings.TrimSpace(leg.req.CorrelationID))
+	}
+	logger.Info("sip outbound: dialog call-id adopted from 200 OK",
+		zap.String("invite_call_id", oldCID),
+		zap.String("dialog_call_id", newCID),
+		zap.String("correlation_id", strings.TrimSpace(leg.req.CorrelationID)),
+	)
+}
+
 type outLeg struct {
 	m       *Manager
 	params  inviteParams
@@ -640,6 +693,8 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 		)
 	}
 	leg.rtpSess.SetRemoteAddr(remoteRTP)
+
+	leg.m.adoptOutboundDialogCallIDIfNeeded(leg, resp)
 
 	if err := applyOutboundAnswerSRTP(leg.rtpSess, leg.srtpOfferKey, leg.srtpOfferSalt, answer); err != nil {
 		logger.Warn("sip outbound SRTP negotiation failed", zap.String("call_id", leg.params.CallID), zap.Error(err))
@@ -861,4 +916,44 @@ func txKeyFromResponse(resp *stack.Message) string {
 	}
 	val = strings.TrimSpace(strings.Trim(val, "\""))
 	return inviteTxKey(val, cseqNum)
+}
+
+// callIDLocalPart returns the substring before the last '@' for SIP Call-ID local@host matching.
+func callIDLocalPart(callID string) (local string, ok bool) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return "", false
+	}
+	i := strings.LastIndex(callID, "@")
+	if i <= 0 || i >= len(callID)-1 {
+		return "", false
+	}
+	return callID[:i], true
+}
+
+// legByCallIDOrHostRewrite finds an outbound leg by exact Call-ID or by matching the local part
+// before '@' when an SBC rewrites only the host portion (responses / BYE vs INVITE).
+func (m *Manager) legByCallIDOrHostRewrite(callID string) *outLeg {
+	callID = strings.TrimSpace(callID)
+	if m == nil || callID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if lg := m.legs[callID]; lg != nil {
+		return lg
+	}
+	local, ok := callIDLocalPart(callID)
+	if !ok {
+		return nil
+	}
+	for _, lg := range m.legs {
+		if lg == nil {
+			continue
+		}
+		if l2, ok2 := callIDLocalPart(lg.params.CallID); ok2 && l2 == local {
+			return lg
+		}
+	}
+	return nil
 }

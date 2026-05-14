@@ -440,8 +440,24 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		if userText == "" {
 			return
 		}
+		// 转人工已发起：从此刻起不再喂 ASR 文本进 LLM/TTS。
+		// 否则主叫端正在听 hold 音乐 / 坐席声音时，AI 仍然会继续应答，导致"两边一起说话"。
+		// 转接结束（坐席挂断回 AI 极少见，目前不支持回流）后由通话结束 CleanupCallState 统一清理。
+		if IsTransferInProgress(cs.CallID) {
+			lg.Debug("sip voice asr trigger suppressed (transfer in progress)",
+				zap.String("call_id", cs.CallID),
+				zap.String("trigger", trigger),
+			)
+			return
+		}
 		go func(userText string, asrIsFinal bool, trigger string) {
 			if ms == nil || ms.GetContext().Err() != nil {
+				return
+			}
+			// Re-check inside the goroutine: TriggerTransferToAgent may have fired
+			// between the outer gate and the actual LLM call (the same LLM turn that
+			// just decided "transfer_to_agent" will race us here).
+			if IsTransferInProgress(cs.CallID) {
 				return
 			}
 			turnMu.Lock()
@@ -543,6 +559,17 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 
 	pipe.SetTextCallback(func(text string, isFinal bool) {
 		if ms == nil || ms.GetContext().Err() != nil {
+			return
+		}
+		// 转人工后 ASR 文本一律丢弃：不更新 asrState、不重置 partial timer，
+		// 避免转接期间累积的句子在通话结束前突然把一段话喂给 LLM。
+		if IsTransferInProgress(cs.CallID) {
+			partialMu.Lock()
+			pendingPartial = ""
+			if partialTimer != nil {
+				partialTimer.Stop()
+			}
+			partialMu.Unlock()
 			return
 		}
 		trimmed := strings.TrimSpace(text)

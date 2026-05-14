@@ -45,6 +45,7 @@ type transferBridgeState struct {
 // TransferBridgeByePersist carries inbound-leg recording + media metadata for sippersist.OnBye after a transfer bridge ends.
 type TransferBridgeByePersist struct {
 	InboundCallID      string
+	OutboundCallID     string // agent/trunk leg (optional; used to drop outbound.Manager state after BYE)
 	RawPayload         []byte
 	CodecName          string
 	Initiator          string
@@ -52,13 +53,88 @@ type TransferBridgeByePersist struct {
 	RecordOpusChannels int
 }
 
+func normCallID(s string) string {
+	return strings.TrimSpace(s)
+}
+
+// bridgeCallLocalPart returns the substring before '@' so we can match dialog Call-IDs when only the host differs (SBC).
+func bridgeCallLocalPart(cid string) (string, bool) {
+	cid = normCallID(cid)
+	if cid == "" {
+		return "", false
+	}
+	i := strings.LastIndex(cid, "@")
+	if i <= 0 || i >= len(cid)-1 {
+		return "", false
+	}
+	return cid[:i], true
+}
+
+// findBridgeStateUnlocked finds bs by exact map key or by outbound/inbound Call-ID local-part match (bridgeMu held).
+func findBridgeStateUnlocked(callID string) *transferBridgeState {
+	if bridges == nil {
+		return nil
+	}
+	callID = normCallID(callID)
+	if callID == "" {
+		return nil
+	}
+	if bs := bridges[callID]; bs != nil {
+		return bs
+	}
+	loc, ok := bridgeCallLocalPart(callID)
+	if !ok {
+		return nil
+	}
+	for _, bs := range bridges {
+		if bs == nil {
+			continue
+		}
+		if lo, oko := bridgeCallLocalPart(bs.outboundID); oko && lo == loc {
+			return bs
+		}
+		if li, oki := bridgeCallLocalPart(bs.inboundID); oki && li == loc {
+			return bs
+		}
+	}
+	return nil
+}
+
+func transferBridgeLegHung(bs *transferBridgeState, hungCallID string) (inboundHung, outboundHung bool) {
+	if bs == nil {
+		return false, false
+	}
+	h := normCallID(hungCallID)
+	if h == "" {
+		return false, false
+	}
+	if h == bs.inboundID {
+		return true, false
+	}
+	if h == bs.outboundID {
+		return false, true
+	}
+	loc, ok := bridgeCallLocalPart(h)
+	if !ok {
+		return false, false
+	}
+	if li, ok2 := bridgeCallLocalPart(bs.inboundID); ok2 && li == loc {
+		return true, false
+	}
+	if lo, ok3 := bridgeCallLocalPart(bs.outboundID); ok3 && lo == loc {
+		return false, true
+	}
+	return false, false
+}
+
 func transferBridgePersistSnapshot(bs *transferBridgeState, initiator string) *TransferBridgeByePersist {
 	if bs == nil || bs.inboundID == "" {
 		return nil
 	}
 	p := &TransferBridgeByePersist{
-		InboundCallID: bs.inboundID,
-		Initiator:     initiator,
+		InboundCallID:  bs.inboundID,
+		OutboundCallID: bs.outboundID,
+		Initiator:      initiator,
 	}
 	if initiator == "" {
 		p.Initiator = "remote"
@@ -94,6 +170,7 @@ func SetTransferPeerCallbacks(sendOutboundBYE func(callID string) error, hangupI
 
 // ActiveTransferBridgeForCallID is true when this Call-ID (inbound or outbound) is in an active media bridge.
 func ActiveTransferBridgeForCallID(callID string) bool {
+	callID = normCallID(callID)
 	if callID == "" {
 		return false
 	}
@@ -102,8 +179,76 @@ func ActiveTransferBridgeForCallID(callID string) bool {
 	if bridges == nil {
 		return false
 	}
-	_, ok := bridges[callID]
-	return ok
+	return findBridgeStateUnlocked(callID) != nil
+}
+
+// MigrateTransferBridgeOutboundCallID rekeys the active transfer bridge when the outbound dialog Call-ID
+// changes after 200 OK (SBC rewrite). Safe no-op if no bridge or IDs do not match.
+func MigrateTransferBridgeOutboundCallID(inbound, oldID, newID string) {
+	inbound, oldID, newID = normCallID(inbound), normCallID(oldID), normCallID(newID)
+	if inbound == "" || oldID == "" || newID == "" || oldID == newID {
+		return
+	}
+	bridgeMu.Lock()
+	defer bridgeMu.Unlock()
+	if bridges == nil {
+		return
+	}
+	bs, ok := bridges[oldID]
+	if !ok || bs == nil || bs.inboundID != inbound || bs.outboundID != oldID {
+		return
+	}
+	delete(bridges, oldID)
+	bs.outboundID = newID
+	bridges[newID] = bs
+	bridges[inbound] = bs
+}
+
+// TeardownTransferBridgeOnOutboundRemoteByeFallback ends the PSTN inbound leg when the agent/trunk side
+// sent BYE but the bridge map had no entry for outboundCallID (e.g. Call-ID drift). Idempotent with callStore.RemoveCallSession.
+func TeardownTransferBridgeOnOutboundRemoteByeFallback(inboundCallID, outboundCallID string) *TransferBridgeByePersist {
+	inboundCallID = normCallID(inboundCallID)
+	outboundCallID = normCallID(outboundCallID)
+	if inboundCallID == "" || outboundCallID == "" {
+		return nil
+	}
+	var inboundCS *sipSession.CallSession
+	if lookupInbound != nil {
+		inboundCS = lookupInbound(inboundCallID)
+	}
+	persist := transferBridgePersistSnapshot(&transferBridgeState{
+		inboundID:  inboundCallID,
+		outboundID: outboundCallID,
+		inboundCS:  inboundCS,
+	}, "remote")
+	if bridgeHangupInbound != nil {
+		if err := bridgeHangupInbound(inboundCallID); err != nil && logger.Lg != nil {
+			logger.Lg.Warn("sip transfer bridge: fallback inbound BYE failed",
+				zap.String("inbound_call_id", inboundCallID),
+				zap.String("outbound_call_id", outboundCallID),
+				zap.Error(err),
+			)
+		}
+	} else if logger.Lg != nil {
+		logger.Lg.Warn("sip transfer bridge: bridgeHangupInbound not wired; inbound leg may leak (fallback)",
+			zap.String("inbound_call_id", inboundCallID),
+			zap.String("outbound_call_id", outboundCallID),
+		)
+	}
+	if inboundCS != nil {
+		inboundCS.CloseRTPOnly()
+	}
+	if callStore != nil {
+		callStore.RemoveCallSession(inboundCallID)
+		callStore.RemoveCallSession(outboundCallID)
+	}
+	if logger.Lg != nil {
+		logger.Lg.Info("sip transfer bridge ended (outbound bye map miss fallback)",
+			zap.String("inbound_call_id", inboundCallID),
+			zap.String("outbound_call_id", outboundCallID),
+		)
+	}
+	return persist
 }
 
 // StartTransferBridge stops AI media on both legs and bridges audio.
@@ -112,6 +257,8 @@ func ActiveTransferBridgeForCallID(callID string) bool {
 // Raw relay keeps peer SSRC/seq/timestamp; only PT is remapped when needed.
 // inboundCallID is the original caller's Call-ID (CorrelationID on the outbound DialRequest).
 func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSession, outboundCallID string, lg *zap.Logger) {
+	inboundCallID = normCallID(inboundCallID)
+	outboundCallID = normCallID(outboundCallID)
 	stopTransferRinging(inboundCallID)
 	cancelTransferInviteWatch(outboundCallID)
 	transferExcludeReset(inboundCallID)
@@ -247,15 +394,36 @@ func hangPeerIfNeeded(bs *transferBridgeState, hungCallID string) {
 	if bs == nil {
 		return
 	}
-	if hungCallID == bs.inboundID {
+	inboundHung, outboundHung := transferBridgeLegHung(bs, hungCallID)
+	if inboundHung {
 		if bridgeSendOutboundBYE != nil {
-			_ = bridgeSendOutboundBYE(bs.outboundID)
+			if err := bridgeSendOutboundBYE(bs.outboundID); err != nil && logger.Lg != nil {
+				logger.Lg.Warn("sip transfer bridge: send BYE to outbound peer failed",
+					zap.String("inbound_call_id", bs.inboundID),
+					zap.String("outbound_call_id", bs.outboundID),
+					zap.Error(err),
+				)
+			}
+		} else if logger.Lg != nil {
+			logger.Lg.Warn("sip transfer bridge: bridgeSendOutboundBYE not wired; outbound leg will leak",
+				zap.String("outbound_call_id", bs.outboundID),
+			)
 		}
 		return
 	}
-	if hungCallID == bs.outboundID {
+	if outboundHung {
 		if bridgeHangupInbound != nil {
-			_ = bridgeHangupInbound(bs.inboundID)
+			if err := bridgeHangupInbound(bs.inboundID); err != nil && logger.Lg != nil {
+				logger.Lg.Warn("sip transfer bridge: send BYE to inbound peer failed",
+					zap.String("inbound_call_id", bs.inboundID),
+					zap.String("outbound_call_id", bs.outboundID),
+					zap.Error(err),
+				)
+			}
+		} else if logger.Lg != nil {
+			logger.Lg.Warn("sip transfer bridge: bridgeHangupInbound not wired; inbound leg will leak",
+				zap.String("inbound_call_id", bs.inboundID),
+			)
 		}
 	}
 }
@@ -283,13 +451,14 @@ func teardownBridge(bs *transferBridgeState) {
 // Notifies the peer leg with BYE before local teardown when callbacks are wired.
 // When non-nil, the caller must run sippersist.OnBye once for TransferBridgeByePersist.InboundCallID (BYE arrived on this stack).
 func HangupTransferBridgeIfAny(callID string) *TransferBridgeByePersist {
+	callID = normCallID(callID)
 	bridgeMu.Lock()
 	defer bridgeMu.Unlock()
 	if bridges == nil {
 		return nil
 	}
-	bs, ok := bridges[callID]
-	if !ok {
+	bs := findBridgeStateUnlocked(callID)
+	if bs == nil {
 		return nil
 	}
 	persist := transferBridgePersistSnapshot(bs, "remote")
@@ -307,13 +476,14 @@ func HangupTransferBridgeIfAny(callID string) *TransferBridgeByePersist {
 // HangupTransferBridgeFull tears down an active transfer bridge and BYE both SIP legs (e.g. keyword hangup).
 // When non-nil, the caller must run sippersist.OnBye for TransferBridgeByePersist.InboundCallID with initiator "local".
 func HangupTransferBridgeFull(callID string) *TransferBridgeByePersist {
+	callID = normCallID(callID)
 	bridgeMu.Lock()
 	defer bridgeMu.Unlock()
 	if bridges == nil {
 		return nil
 	}
-	bs, ok := bridges[callID]
-	if !ok {
+	bs := findBridgeStateUnlocked(callID)
+	if bs == nil {
 		return nil
 	}
 	persist := transferBridgePersistSnapshot(bs, "local")

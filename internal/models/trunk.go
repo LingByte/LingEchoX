@@ -70,6 +70,10 @@ type TrunkNumber struct {
 	// - "weight" (default): pick highest weight (tie-break lower id)
 	// - "round_robin": pick next eligible target in id order (still requires weight>0; weight acts as enable/disable)
 	ACDDispatchMode string `json:"acdDispatchMode,omitempty" gorm:"column:acd_dispatch_mode;size:24;index;default:weight" label:"ACD 分配模式"`
+	// OutboundTrunkNumberID 当本号码作为「呼入 DID」需要对外发起呼叫（盲转/AI 外呼回流）时，
+	// 改用哪条 TrunkNumber 作为出局网关 + 主叫。0 表示「使用本号码自己」（若 direction 允许外呼）。
+	// 必须是同租户、direction ∈ {outbound, both, all} 的号码。
+	OutboundTrunkNumberID uint `json:"outboundTrunkNumberId" gorm:"column:outbound_trunk_number_id;not null;default:0;index" label:"外呼号码"`
 }
 
 // newProviderCode 生成 <prefix>_<32位无短横线UUID>，约 36 字节，留充足余量。

@@ -170,6 +170,10 @@ func Start(cfg Config) (*Embedded, error) {
 				sipServerPtr.RegisterCallSession(callID, cs)
 			}
 		},
+		OnDialogCallIDAdopted: func(oldID, newID, correlationID string) {
+			conversation.MigrateTransferInviteOutboundCallID(correlationID, oldID, newID)
+			conversation.MigrateTransferBridgeOutboundCallID(correlationID, oldID, newID)
+		},
 		OnTransferBridge: func(correlationID string, cs *sipSession.CallSession, outboundCallID string) {
 			conversation.StartTransferBridge(correlationID, cs, outboundCallID, nil)
 		},
@@ -234,6 +238,8 @@ func Start(cfg Config) (*Embedded, error) {
 		Port:          cfg.Port,
 		LocalIP:       localIP,
 		OnSIPResponse: outMgr.HandleSIPResponse,
+		OutboundBYELegCleanup:             outMgr.CleanupLegIfPresent,
+		TransferBridgeInboundFromOutbound: outMgr.InboundCallIDForEstablishedTransferBridge,
 	})
 
 	em := &Embedded{
@@ -369,15 +375,18 @@ func Start(cfg Config) (*Embedded, error) {
 	conversation.SetTransferPeerCallbacks(outMgr.SendBYE, sipServerPtr.SendUASBye)
 	conversation.SetSIPHangup(func(callID string) {
 		callID = strings.TrimSpace(callID)
-		if callID == "" {
+		if callID == "" || sipServerPtr == nil {
+			return
+		}
+		// Blind-transfer outbound leg is keyed in outMgr; full teardown (incl. PSTN BYE) is keyed by inbound Call-ID.
+		if in, ok := outMgr.InboundCallIDForEstablishedTransferBridge(callID); ok && in != "" {
+			sipServerPtr.HangupInboundCall(in)
 			return
 		}
 		if err := outMgr.SendBYE(callID); err == nil {
 			if logger.Lg != nil {
 				logger.Lg.Info("sip: hangup outbound BYE sent", zap.String("call_id", callID))
 			}
-			sipServerPtr.HangupInboundCall(callID)
-			return
 		}
 		sipServerPtr.HangupInboundCall(callID)
 	})
@@ -527,14 +536,33 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 
 		var dt outbound.DialTarget
 		picked := false
+		// 由「呼入 DID → OutboundTrunkNumberID」或租户级 fallback 解析出的备选主叫；
+		// 当 ACD 行没填 SipCallerID 时用作兜底。switch 之外才能在下方主叫合并阶段使用。
+		var outboundCallerUser, outboundCallerDisplay string
 		src := strings.ToLower(strings.TrimSpace(row.SipSource))
 		switch src {
 		case models.ACDSipSourceTrunk:
 			host := row.SipTrunkHost
 			sig := row.SipTrunkSignalingAddr
 			port := row.SipTrunkPort
-			// Compatibility fallback: allow legacy ACD trunk rows without explicit sip_trunk_host
-			// to use tenant trunk gateway from PickTrunkTransferConfig.
+			// 兜底优先级（host/port/caller 缺失时按此顺序补全）：
+			//   1. 呼入 DID（TrunkNumber）上配置的 OutboundTrunkNumberID —— 号码级"用别的号码外呼"。
+			//   2. 租户级 PickTrunkTransferConfig（is_transfer_relay 或可外呼号码）。
+			if strings.TrimSpace(host) == "" && inboundTrunkNumberID > 0 && tenantID > 0 {
+				if tn, err := models.GetTrunkNumberByIDForTenant(db, inboundTrunkNumberID, tenantID); err == nil && tn.OutboundTrunkNumberID > 0 {
+					if tc, ok := models.ResolveACDOutboundFromTrunkNumber(db, tenantID, tn.OutboundTrunkNumberID); ok {
+						host = tc.Host
+						if port <= 0 {
+							port = tc.Port
+						}
+						if strings.TrimSpace(sig) == "" {
+							sig = tc.SignalingAddr()
+						}
+						outboundCallerUser = tc.CallerUser
+						outboundCallerDisplay = tc.CallerDisplay
+					}
+				}
+			}
 			if strings.TrimSpace(host) == "" {
 				if tc, ok := models.PickTrunkTransferConfig(db, tenantID); ok {
 					host = tc.Host
@@ -543,6 +571,12 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 					}
 					if strings.TrimSpace(sig) == "" {
 						sig = tc.SignalingAddr()
+					}
+					if outboundCallerUser == "" {
+						outboundCallerUser = tc.CallerUser
+					}
+					if outboundCallerDisplay == "" {
+						outboundCallerDisplay = tc.CallerDisplay
 					}
 				}
 			}
@@ -594,7 +628,13 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 
 		dt.CallerUser = strings.TrimSpace(row.SipCallerID)
 		dt.CallerDisplayName = strings.TrimSpace(row.SipCallerDisplayName)
-		// 即便 ACD 行命中了，也允许 Trunk 信息补齐缺失字段（例如运营忘了在 ACD 行上填 caller_id）。
+		// 主叫合并优先级：ACD 行 SipCallerID > 呼入 DID 的 OutboundTrunkNumberID 解析值 > 租户级 PickTrunkTransferConfig。
+		if dt.CallerUser == "" && outboundCallerUser != "" {
+			dt.CallerUser = outboundCallerUser
+		}
+		if dt.CallerDisplayName == "" && outboundCallerDisplay != "" {
+			dt.CallerDisplayName = outboundCallerDisplay
+		}
 		if dt.CallerUser == "" || dt.CallerDisplayName == "" {
 			if tc, ok := models.PickTrunkTransferConfig(db, tenantID); ok {
 				if dt.CallerUser == "" {

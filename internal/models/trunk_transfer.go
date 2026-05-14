@@ -103,6 +103,39 @@ func PickTrunkOutboundConfig(db *gorm.DB, tenantID uint) (TrunkTransferConfig, b
 	return PickTrunkConfig(db, tenantID, TrunkRoleOutbound)
 }
 
+// ResolveACDOutboundFromTrunkNumber 把一条已分配给租户的 TrunkNumber 展开成 ACD 行需要的
+// 出局网关 + 主叫字段。号码必须显式可外呼（direction ∈ {outbound, both, all}）。
+// 用于「转接/外呼时用另一个号码」：呼入号码只支持 inbound 时仍可独立绑定可外呼号码。
+func ResolveACDOutboundFromTrunkNumber(db *gorm.DB, tenantID, trunkNumberID uint) (TrunkTransferConfig, bool) {
+	if db == nil || tenantID == 0 || trunkNumberID == 0 {
+		return TrunkTransferConfig{}, false
+	}
+	var n TrunkNumber
+	if err := db.Where("id = ? AND tenant_id = ?", trunkNumberID, tenantID).First(&n).Error; err != nil {
+		return TrunkTransferConfig{}, false
+	}
+	dir := strings.ToLower(strings.TrimSpace(n.Direction))
+	if dir != "outbound" && dir != "both" && dir != "all" {
+		return TrunkTransferConfig{}, false
+	}
+	var trunk Trunk
+	if err := db.First(&trunk, n.TrunkID).Error; err != nil {
+		return TrunkTransferConfig{}, false
+	}
+	host, port, ok := parseTrunkLocalAddr(trunk.LocalAddr)
+	if !ok {
+		return TrunkTransferConfig{}, false
+	}
+	return TrunkTransferConfig{
+		Host:          host,
+		Port:          port,
+		CallerUser:    strings.TrimSpace(n.Number),
+		CallerDisplay: strings.TrimSpace(n.CallerDisplayName),
+		TrunkID:       trunk.ID,
+		TrunkNumberID: n.ID,
+	}, true
+}
+
 // PickTrunkOutboundConfigByCaller selects trunk gateway by an explicitly specified caller number.
 // The matched number must belong to tenantID and be outbound-enabled (direction in outbound/both/all).
 func PickTrunkOutboundConfigByCaller(db *gorm.DB, tenantID uint, callerRaw string) (TrunkTransferConfig, bool) {
