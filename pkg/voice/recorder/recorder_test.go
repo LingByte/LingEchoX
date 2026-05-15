@@ -10,6 +10,9 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // memStore is a minimal stores.Store impl backed by an in-process map so
@@ -277,5 +280,139 @@ func TestPlacePCMTrackBytes_RealSilencePreserved(t *testing.T) {
 	}
 	if maxZeros < 1000 {
 		t.Fatalf("expected ≥1000 contiguous zero bytes (real silence), got %d", maxZeros)
+	}
+}
+
+// TestPlacePCMTrackBytes_EnvJitterSnapOverride 验证 SIP_RECORDING_JITTER_SNAP_MS
+// 环境变量能调整 snap 窗口：把窗口改成 30ms 后，原本被 80ms 默认窗口吃掉的
+// 60ms 间隔就应当被识别为"真静音"而保留零填充。这是排查现场抖动问题的旋钮。
+func TestPlacePCMTrackBytes_EnvJitterSnapOverride(t *testing.T) {
+	t.Setenv("SIP_RECORDING_JITTER_SNAP_MS", "30")
+	const rate = 8000
+	frameBytes := 160 * 2
+	mk := func(marker byte) []byte {
+		b := make([]byte, frameBytes)
+		for i := range b {
+			b[i] = marker
+		}
+		return b
+	}
+	// 60ms gap：默认 80ms 阈值会 snap 拼接（无零填充），改成 30ms 阈值后
+	// 60ms > 30ms 应当被当作真静音保留。
+	segs := []frame{
+		{wallNs: 0, pcm: mk(0xAA)},
+		{wallNs: 60 * 1_000_000, pcm: mk(0xBB)},
+	}
+	out := placePCMTrackBytes(segs, 0, rate)
+	// 60ms @ 8kHz = 480 samples = 960 bytes 之间应该有非可忽略的零填充。
+	zeros := 0
+	maxZeros := 0
+	for _, b := range out {
+		if b == 0 {
+			zeros++
+			if zeros > maxZeros {
+				maxZeros = zeros
+			}
+		} else {
+			zeros = 0
+		}
+	}
+	if maxZeros < 200 {
+		t.Fatalf("expected ≥200 contiguous zero bytes once snap window is shrunk to 30ms, got %d", maxZeros)
+	}
+}
+
+// TestRecorder_SampleRateMismatchWarns 验证当 caller 喂入的 PCM 字节流在
+// 5s 观察窗口内推算出的 implied rate 与 cfg.SampleRate 偏差超过 30% 时，
+// recorder 会立即 WARN 一次（且只一次）。
+//
+// 模拟方式：cfg 配置 8kHz，但实际以 16kHz 节奏喂入字节（每 wall-clock
+// 秒喂 32000 字节而非 16000），observer 捕获 zap 日志。
+func TestRecorder_SampleRateMismatchWarns(t *testing.T) {
+	core, obs := observer.New(zap.WarnLevel)
+	r := New(Config{
+		CallID:     "rate-mismatch-test",
+		Bucket:     "test",
+		SampleRate: 8000,
+		Logger:     zap.New(core),
+		Store:      newMemStore(),
+	})
+	if r == nil {
+		t.Fatal("New returned nil")
+	}
+	// 模拟真实 RTP 节奏：每 20ms 喂一块。
+	// 16 kHz 实际：每 20ms = 320 samples = 640 bytes。
+	// 喂 300 个 20ms chunk 覆盖 ~6 秒 wall，跨过 5s 阈值。
+	// 注：N 太小时 implied = bytes/(N-1 个间隔) 会高估，需要 N 大一些才收敛。
+	const (
+		wallStart = int64(1_000_000_000)
+		stepNs    = int64(20_000_000) // 20ms
+		bytesPer  = int64(640)        // 16 kHz × 20ms × 2 byte/sample
+		nChunks   = 300
+	)
+	for i := int64(0); i < nChunks; i++ {
+		r.mu.Lock()
+		r.updateRateStats(true, wallStart+i*stepNs, bytesPer)
+		r.mu.Unlock()
+	}
+	logs := obs.FilterMessage("recorder: sample-rate mismatch detected").All()
+	if len(logs) != 1 {
+		t.Fatalf("expected exactly 1 warn log, got %d", len(logs))
+	}
+	got := logs[0].ContextMap()
+	if got["leg"] != "caller" {
+		t.Errorf("leg: got %v want caller", got["leg"])
+	}
+	if got["configured_hz"] != int64(8000) {
+		t.Errorf("configured_hz: got %v want 8000", got["configured_hz"])
+	}
+	implied, _ := got["implied_hz"].(float64)
+	// implied 在 ±5% 内应当贴近 16 kHz。
+	if implied < 15200 || implied > 16800 {
+		t.Errorf("implied_hz: got %v want ≈16000", implied)
+	}
+
+	// 再喂几次，warn 仍只应有 1 条（per-leg 只 warn 一次）。
+	for i := int64(nChunks); i < nChunks+50; i++ {
+		r.mu.Lock()
+		r.updateRateStats(true, wallStart+i*stepNs, bytesPer)
+		r.mu.Unlock()
+	}
+	logs = obs.FilterMessage("recorder: sample-rate mismatch detected").All()
+	if len(logs) != 1 {
+		t.Fatalf("expected per-leg-once warn, got %d", len(logs))
+	}
+}
+
+// TestRecorder_SampleRateWithinTolerance_NoWarn 验证 implied rate 落在 ±30%
+// 容忍度内时不报警。短期网络抖动 / 突发包不均会让短窗口 implied 飘 ±10-15%，
+// 这些是正常的不应当被噪音化。
+func TestRecorder_SampleRateWithinTolerance_NoWarn(t *testing.T) {
+	core, obs := observer.New(zap.WarnLevel)
+	r := New(Config{
+		CallID:     "rate-tolerant-test",
+		Bucket:     "test",
+		SampleRate: 16000,
+		Logger:     zap.New(core),
+		Store:      newMemStore(),
+	})
+	if r == nil {
+		t.Fatal("New returned nil")
+	}
+	// 16 kHz cfg，喂 18 kHz 速率（+12.5% 偏差，仍在 30% 内）。
+	// 每 20ms 喂一块：18 kHz × 20ms × 2 = 720 字节。
+	const (
+		wallStart = int64(1_000_000_000)
+		stepNs    = int64(20_000_000) // 20ms
+		bytesPer  = int64(720)        // 18 kHz × 20ms × 2 byte/sample
+		nChunks   = 300
+	)
+	for i := int64(0); i < nChunks; i++ {
+		r.mu.Lock()
+		r.updateRateStats(false, wallStart+i*stepNs, bytesPer)
+		r.mu.Unlock()
+	}
+	if n := obs.FilterMessage("recorder: sample-rate mismatch detected").Len(); n != 0 {
+		t.Fatalf("expected no warn within tolerance, got %d", n)
 	}
 }

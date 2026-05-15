@@ -218,7 +218,9 @@ func placeWallPCMTrack(segs []wallPCMSeg, pcmHz int) []int16 {
 		}
 		return segs[i].seq < segs[j].seq
 	})
-	const jitterSnapNs uint64 = 80 * 1_000_000
+	// Snap 窗口可由 SIP_RECORDING_JITTER_SNAP_MS 覆盖，默认 80ms。详见
+	// recording_jitter_config.go::RecordingJitterSnapNs 的注释。
+	jitterSnapNs := uint64(RecordingJitterSnapNs())
 	base := segs[0].wallNs
 	var out []int16
 	pen := 0

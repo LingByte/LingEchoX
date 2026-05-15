@@ -107,6 +107,42 @@ func TestSN3_G711Stereo_JitterSnap_ContiguousTTS(t *testing.T) {
 	}
 }
 
+// TestSN3_G711Stereo_JitterSnap_EnvOverride 验证 SIP_RECORDING_JITTER_SNAP_MS
+// 环境变量同样能调整老 SN3→WAV 路径的 snap 窗口；缩到 30ms 后，原本被
+// 默认 80ms 吞掉的 60ms 间隔将保留为真静音。
+func TestSN3_G711Stereo_JitterSnap_EnvOverride(t *testing.T) {
+	t.Setenv("SIP_RECORDING_JITTER_SNAP_MS", "30")
+	var buf bytes.Buffer
+	buf.WriteString("SN3")
+	pcm160 := bytes.Repeat([]byte{0x7f}, 160)
+	appendSN3 := func(dir byte, seq uint16, rtpTs uint32, wallNs uint64, payload []byte) {
+		buf.WriteByte(dir)
+		_ = binary.Write(&buf, binary.LittleEndian, seq)
+		_ = binary.Write(&buf, binary.LittleEndian, rtpTs)
+		_ = binary.Write(&buf, binary.LittleEndian, wallNs)
+		_ = binary.Write(&buf, binary.LittleEndian, uint16(len(payload)))
+		buf.Write(payload)
+	}
+	// 60ms gap：默认 80ms 阈值会 snap，改 30ms 后保留为真静音。
+	appendSN3(recTagAILeg, 1, 0, 0, pcm160)
+	appendSN3(recTagAILeg, 2, 160, 60_000_000, pcm160)
+	wav := G711TaggedRecordingToStereoWav(buf.Bytes(), "pcmu")
+	if len(wav) == 0 {
+		t.Fatal("expected wav")
+	}
+	idx := bytes.Index(wav, []byte("data"))
+	if idx < 0 {
+		t.Fatal("missing data chunk")
+	}
+	dataSize := int(binary.LittleEndian.Uint32(wav[idx+4 : idx+8]))
+	nStereoSamples := dataSize / 4
+	// 60ms@8k=480 samples gap + 2*160 samples = ~800 stereo samples expected。
+	// 默认 80ms 模式下只有 ~320 samples（拼接），所以 ≥600 充分区分两条路径。
+	if nStereoSamples < 600 {
+		t.Fatalf("env override未生效：60ms gap 应保留为真静音，got %d samples", nStereoSamples)
+	}
+}
+
 // SN3 must preserve real pause between TTS phrases even when RTP timestamps stay back-to-back (common for one RTP sender).
 func TestSN3_G711Stereo_WallClockGapBetweenAI_RTPContinuous(t *testing.T) {
 	var buf bytes.Buffer

@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/LinByte/VoiceServer/pkg/stores"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 	"go.uber.org/zap"
 )
@@ -98,7 +99,31 @@ type Recorder struct {
 	// recovery data; Flush success → chunks are reclaimed and the
 	// bucket carries exactly one row per call.
 	chunkKeys []string
+
+	// 每路（caller / AI）采样率运行时校验状态。每次 append 累计字节数和
+	// 时间跨度；一旦观察窗口 ≥ rateCheckMinSeconds 就计算 implied rate =
+	// bytes / 2 / elapsed，与 cfg.SampleRate 偏差超过 rateCheckTolerance
+	// 立刻 WARN 一次（per-leg 仅 warn 一次，避免日志风暴）。
+	// 这能在生产里几秒内捕获到"配错码率"这类潜伏 bug —— 比如把 16k 采样的
+	// PCM 写进配置为 8k 的 recorder 会产生 pitch-shift 静电，但一般要等到
+	// 通话结束听录音才发现。
+	inFirstNs, inLastNs   int64
+	inBytes               int64
+	inRateWarned          bool
+	outFirstNs, outLastNs int64
+	outBytes              int64
+	outRateWarned         bool
 }
+
+// 采样率运行时校验阈值。
+const (
+	// 累计观察窗口达到这么久才开始计算 implied rate（短窗口噪声大）。
+	rateCheckMinSeconds = 5
+	// implied rate 与 cfg.SampleRate 的相对偏差容忍度。30% 之外才警告 ——
+	// 网络抖动 / 突发包到达不均会让短期 implied rate 飘 ±10-15%；30% 留
+	// 足余量同时仍能捕获 8k↔16k、16k↔48k 这种量级错配。
+	rateCheckTolerance = 0.30
+)
 
 // frame is one PCM16 LE mono chunk tagged with its arrival wall clock.
 // The actual PCM bytes are owned by the recorder (callers MUST NOT
@@ -279,9 +304,79 @@ func (r *Recorder) append(caller bool, pcm []byte) {
 	f := frame{wallNs: time.Now().UnixNano(), pcm: buf}
 	if caller {
 		r.inSegs = append(r.inSegs, f)
+		r.updateRateStats(true, f.wallNs, int64(len(buf)))
 	} else {
 		r.outSegs = append(r.outSegs, f)
+		r.updateRateStats(false, f.wallNs, int64(len(buf)))
 	}
+}
+
+// updateRateStats 在锁内被 append 调用，累计单路的字节数与时间跨度，并在
+// 累计窗口 ≥ rateCheckMinSeconds 时计算 implied rate（PCM16 = 2 bytes/sample）
+// 与 cfg.SampleRate 的相对偏差。超出 rateCheckTolerance 立即 WARN 一次。
+//
+// 仅警告不修复：自动修复（resample）会掩盖配置错误，而错误一般是上游 bug
+// 应当被人看到。warned 标志确保每路每次通话只 warn 一次。
+//
+// 注意调用位置：必须在 append 已经持有 r.mu 时调用，函数本身不再加锁。
+func (r *Recorder) updateRateStats(caller bool, wallNs, byteCount int64) {
+	configured := r.cfg.SampleRate
+	if configured <= 0 {
+		return
+	}
+	var (
+		firstNs *int64
+		lastNs  *int64
+		bytesP  *int64
+		warned  *bool
+		legName string
+	)
+	if caller {
+		firstNs = &r.inFirstNs
+		lastNs = &r.inLastNs
+		bytesP = &r.inBytes
+		warned = &r.inRateWarned
+		legName = "caller"
+	} else {
+		firstNs = &r.outFirstNs
+		lastNs = &r.outLastNs
+		bytesP = &r.outBytes
+		warned = &r.outRateWarned
+		legName = "ai"
+	}
+	if *firstNs == 0 {
+		*firstNs = wallNs
+	}
+	*lastNs = wallNs
+	*bytesP += byteCount
+	if *warned {
+		return
+	}
+	elapsedNs := *lastNs - *firstNs
+	if elapsedNs < int64(rateCheckMinSeconds)*1_000_000_000 {
+		return
+	}
+	// implied rate = (bytes / 2) samples / (elapsedNs / 1e9) seconds
+	//             = bytes * 1e9 / (2 * elapsedNs)
+	implied := float64(*bytesP) * 1e9 / (2.0 * float64(elapsedNs))
+	delta := implied - float64(configured)
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta/float64(configured) <= rateCheckTolerance {
+		return
+	}
+	*warned = true
+	r.log.Warn("recorder: sample-rate mismatch detected",
+		zap.String("call_id", r.cfg.CallID),
+		zap.String("leg", legName),
+		zap.Int("configured_hz", configured),
+		zap.Float64("implied_hz", implied),
+		zap.Float64("deviation_pct", delta/float64(configured)*100),
+		zap.Int64("observed_bytes", *bytesP),
+		zap.Int64("observed_ms", elapsedNs/1_000_000),
+		zap.String("hint", "upstream is feeding PCM at a rate that doesn't match cfg.SampleRate; recording will sound pitch-shifted"),
+	)
 }
 
 // Flush builds the stereo WAV, uploads it via stores.Default(), and
@@ -455,7 +550,8 @@ func placePCMTrackBytes(segs []frame, baseNs int64, rate int) []byte {
 	// is still "the same continuous utterance"), small enough that a
 	// real inter-turn pause (≥100ms) still produces an audible silence
 	// gap in the recording.
-	const jitterSnapNs int64 = 80 * 1_000_000
+	// 通过 SIP_RECORDING_JITTER_SNAP_MS 可覆盖（clamp 到 10~500ms）。
+	jitterSnapNs := utils.RecordingJitterSnapNs()
 
 	// Pen advances forward through the timeline so successive bursts
 	// don't overlap. Position is in samples (PCM16 = 2 bytes/sample).

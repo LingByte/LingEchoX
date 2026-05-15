@@ -75,6 +75,17 @@ HandleSIPINFODTMF、TriggerTransferFromReferTo 需要逐一映射。
 - [x] voice.go：resample 失败时不再以错误采样率写 recorder（避免 pitch-shift 静电）
 - [x] voice.go：playWelcomeWav 接入 recordTap，欢迎语不再录音缺失
 - [x] voice.go：streamPlainTextToTTS 同步接入 cs.WriteAIPCM
+- [x] **录音 jitter snap 阈值环境变量化 + 采样率运行时校验（小修）**
+        2026-05-16。两个改进合并交付：
+        ① 抽出 `utils.RecordingJitterSnapNs()` 共享 helper（默认 80ms，
+        SIP_RECORDING_JITTER_SNAP_MS 可 override，clamp 10~500ms），同时
+        wire 进 pkg/voice/recorder::placePCMTrackBytes 和
+        utils/sip_recording_wav.go::placeWallPCMTrack 两条录音路径。
+        ② Recorder.append 内嵌 per-leg 字节速率统计：观察窗口 ≥5s 时计算
+        implied rate，超过 cfg.SampleRate ±30% 立即 WARN 一次（per-leg-once）。
+        能在生产里几秒内捕获"配错码率→pitch-shift 静电"这类潜伏 bug。
+        新增 4 个回归测试：JitterSnap_EnvOverride（recorder + SN3 各一）、
+        SampleRateMismatchWarns、SampleRateWithinTolerance_NoWarn。
 - [x] **utils/sip_recording_wav.go::placeWallPCMTrack 套 jitter snap（修入库录音电流音）**
         2026-05-16 借助 SIP_TTS_RAW_DUMP_DIR tap 二分定位：QCloud 原始 PCM
         干净、实时通话也干净，唯独事后下载的 SN3→WAV 入库录音持续电流音。

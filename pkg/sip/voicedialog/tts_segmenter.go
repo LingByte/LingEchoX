@@ -23,7 +23,6 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
-	"github.com/LinByte/VoiceServer/pkg/utils"
 	siptts "github.com/LinByte/VoiceServer/pkg/voice/tts"
 	"go.uber.org/zap"
 )
@@ -159,41 +158,8 @@ func (sess *dialogSession) startSegmentPrefetch(job *ttsSegmentJob) {
 	job.prefetchCancel = cancel
 	job.pcmCh = make(chan []byte, ttsSegmentPCMChanCap)
 
-	// Optional diagnostic tap: dump SDK's RAW PCM (before any framing/resample/encode/RTP)
-	// to .wav files so the user can listen and isolate "电流音" source. Set
-	// SIP_TTS_RAW_DUMP_DIR=/some/dir to enable; one file per segment named
-	// <call_id>__<utterance_id>__<cloudSR>hz.wav. If the dump itself sounds noisy →
-	// QCloud model fault (try a different voice/sample-rate). If clean → our pipeline
-	// is corrupting it downstream.
-	// utils.GetEnv 会同时查进程 env + 项目 .env 文件，且 key 自动大写归一化；
-	// 直接 os.Getenv 拿不到 .env 里写的变量（这是用户最常踩的坑）。
-	rawDumpDir := strings.TrimSpace(utils.GetEnv("SIP_TTS_RAW_DUMP_DIR"))
-	var rawDumpW *rawPCMDumper
-	if rawDumpDir != "" {
-		if d, err := newRawPCMDumper(rawDumpDir, sess.meta.CallID, job.utteranceID, sess.ttsCloudSR); err != nil {
-			logger.Warn("voicedialog tts raw dump open failed",
-				zap.String(KeyCallID, sess.meta.CallID), zap.Error(err))
-		} else {
-			rawDumpW = d
-			logger.Info("voicedialog tts raw dump active",
-				zap.String(KeyCallID, sess.meta.CallID),
-				zap.String(KeyUtteranceID, job.utteranceID),
-				zap.String("path", d.path),
-				zap.Int("cloud_sr", sess.ttsCloudSR),
-			)
-		}
-	}
-
 	go func() {
 		defer close(job.pcmCh)
-		defer func() {
-			if rawDumpW != nil {
-				if err := rawDumpW.Close(); err != nil {
-					logger.Warn("voicedialog tts raw dump close",
-						zap.String(KeyCallID, sess.meta.CallID), zap.Error(err))
-				}
-			}
-		}()
 		svc := sess.ttsService
 		if svc == nil {
 			job.setPrefetchErr(errors.New("voicedialog: nil tts service"))
@@ -205,11 +171,6 @@ func (sess *dialogSession) startSegmentPrefetch(job *ttsSegmentJob) {
 			}
 			cp := make([]byte, len(pcm))
 			copy(cp, pcm)
-			// Diagnostic dump: write the EXACT bytes QCloud delivered before our
-			// pipeline touches them. ".wav" wrapper for one-click playback.
-			if rawDumpW != nil {
-				_ = rawDumpW.Write(cp)
-			}
 			select {
 			case job.pcmCh <- cp:
 				return nil
