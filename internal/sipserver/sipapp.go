@@ -18,6 +18,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
 	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -405,7 +406,7 @@ func Start(cfg Config) (*Embedded, error) {
 			}
 			return models.UpdateACDPoolTargetWorkState(ctx, acdDB, targetID, workState, "sip")
 		},
-		FinalizeInboundPersist: func(ctx context.Context, callID, initiator string, raw []byte, codecName string, recordSampleRate, recordOpusChannels int) {
+		FinalizeInboundPersist: func(ctx context.Context, callID, initiator string, raw []byte, codecName string, recordSampleRate, recordOpusChannels int, wavRec gateway.RecordingInfo) {
 			if sipCallPersist == nil {
 				return
 			}
@@ -416,6 +417,7 @@ func Start(cfg Config) (*Embedded, error) {
 				Initiator:          initiator,
 				RecordSampleRate:   recordSampleRate,
 				RecordOpusChannels: recordOpusChannels,
+				WAVRecording:       wavRec,
 			})
 		},
 	})

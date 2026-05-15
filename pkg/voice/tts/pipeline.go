@@ -10,11 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Service provides streaming PCM synthesis.
-// callback receives raw PCM bytes (little-endian int16).
-type Service interface {
-	SynthesizeStream(ctx context.Context, text string, callback func(pcm []byte) error) error
-}
+// Service is provided by service.go (ported from VoiceServer pkg/voice/tts).
+// The interface signature is identical to the previous in-pipeline declaration;
+// service.go also adds ServiceFunc / FromSynthesisService adapters so callers
+// can plug in arbitrary synthesizers without writing boilerplate.
 
 type Config struct {
 	Service Service
@@ -47,6 +46,15 @@ type Pipeline struct {
 	mu     sync.Mutex
 	playID string
 	seq    uint32
+
+	// residual carries the sub-frame PCM tail from the previous Speak()
+	// across calls so consecutive Speak()s on the same Pipeline produce
+	// a CONTINUOUS audio stream. Without this, each Speak() ended by
+	// zero-padding the last partial frame, leaving an audible silence
+	// cliff at every sentence boundary — heard as "滋滋" hiss when LEX
+	// streams an LLM reply sentence-by-sentence. See Finalize() for the
+	// end-of-turn drain.
+	residual []byte
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -89,6 +97,12 @@ func (p *Pipeline) Stop() {
 	p.mu.Lock()
 	cancel := p.cancel
 	p.cancel = nil
+	// Discard any sub-frame residual when the pipeline is stopped
+	// (barge-in, turn-cancel, etc.) so the next Start()+Speak() does
+	// NOT splice last turn's tail into the new utterance — that would
+	// produce a tiny audible "glitch" at the start of every reply
+	// after a barge-in.
+	p.residual = nil
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -135,7 +149,18 @@ func (p *Pipeline) Speak(text string) error {
 	if bufCap > bufCapMax {
 		bufCap = bufCapMax
 	}
-	buffer := make([]byte, 0, bufCap)
+	// Seed the per-call buffer with whatever sub-frame tail the previous
+	// Speak() left behind. This preserves audio continuity across the
+	// segmented Speak() calls that LEX's streamLLMToTTS makes per LLM
+	// sentence (eliminates the "滋滋" cliff between segments).
+	p.mu.Lock()
+	carry := p.residual
+	p.residual = nil
+	p.mu.Unlock()
+	buffer := make([]byte, 0, bufCap+len(carry))
+	if len(carry) > 0 {
+		buffer = append(buffer, carry...)
+	}
 	err := cfg.Service.SynthesizeStream(ctx, text, func(pcm []byte) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -167,17 +192,57 @@ func (p *Pipeline) Speak(text string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// Stash any sub-frame tail for the next Speak() instead of
+	// zero-padding it here. The old code emitted a half-frame followed
+	// by silence at every Speak() boundary; when LLM streaming triggers
+	// many short Speak() calls per turn (one per sentence in
+	// streamLLMToTTS), those silence cliffs stack up and are heard as
+	// the "每说一字滋滋" hiss the user reported. Finalize() drains the
+	// residual with a single fade-padded frame at end-of-turn.
 	if len(buffer) > 0 {
-		// Pad last partial frame so downstream encoders (e.g. Opus) always receive full 20ms PCM.
-		if len(buffer) < bytesPerFrame {
-			padded := make([]byte, bytesPerFrame)
-			copy(padded, buffer)
-			buffer = padded
-		}
-		_ = p.nextSeq()
-		if err := cfg.SendPCMFrame(buffer); err != nil {
-			return err
-		}
+		p.mu.Lock()
+		p.residual = append(p.residual[:0], buffer...)
+		p.mu.Unlock()
+	}
+	return nil
+}
+
+// Finalize emits any residual sub-frame audio left over from prior
+// Speak() calls, padding the last partial frame with zeros so
+// downstream encoders receive a full FrameDuration of PCM. Call this
+// at end-of-turn (e.g. after barge-in cancels or after the entire LLM
+// reply has been spoken) — NOT between LLM-stream sentences, since
+// that is exactly the boundary where the residual carry is needed to
+// avoid audible cliffs.
+//
+// Idempotent: safe to call multiple times; only the first call after
+// non-empty residual emits a frame.
+func (p *Pipeline) Finalize() error {
+	p.mu.Lock()
+	cfg := p.cfg
+	ctx := p.ctx
+	tail := p.residual
+	p.residual = nil
+	p.mu.Unlock()
+	if len(tail) == 0 {
+		return nil
+	}
+	bytesPerFrame := pcmBytesPerFrame(cfg.SampleRate, cfg.Channels, cfg.FrameDuration)
+	if bytesPerFrame <= 0 {
+		return nil
+	}
+	if len(tail) < bytesPerFrame {
+		padded := make([]byte, bytesPerFrame)
+		copy(padded, tail)
+		tail = padded
+	}
+	if cfg.SendPCMFrame == nil {
+		return nil
+	}
+	if err := cfg.SendPCMFrame(tail); err != nil {
+		return err
+	}
+	if ctx != nil {
 		p.paceAfterFrame(ctx, cfg)
 	}
 	return nil

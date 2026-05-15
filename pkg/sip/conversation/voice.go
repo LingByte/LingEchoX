@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	sipasr "github.com/LinByte/VoiceServer/pkg/voice/asr"
+	siprecorder "github.com/LinByte/VoiceServer/pkg/voice/recorder"
 	siptts "github.com/LinByte/VoiceServer/pkg/voice/tts"
 	"go.uber.org/zap"
 )
@@ -117,9 +119,16 @@ func sipVoiceTTSCloudSampleRate(env VoiceEnv, pcmBridgeSR int) int {
 func VoiceEnvFromProcess() VoiceEnv {
 	voiceType, _ := strconv.ParseInt(utils.GetEnv("TTS_VOICE_TYPE"), 10, 64)
 	ttsSpeed, _ := strconv.ParseInt(utils.GetEnv("TTS_SPEED"), 10, 64)
+	// TTS_SAMPLE_RATE: when unset / non-positive we leave it at 0 so that
+	// sipVoiceTTSCloudSampleRate() falls through to the negotiated SIP PCM
+	// bridge rate. For G.711 (PCMU/PCMA) this means TTS is requested at
+	// 8 kHz directly — NO resample, NO interpolator chunk-boundary
+	// artifacts (the source of the high-frequency "滋滋" hiss). Previously
+	// this defaulted to 16000 which forced an unnecessary 16k→8k
+	// downsample on every G.711 call and caused the audible hiss.
 	sr, _ := strconv.Atoi(utils.GetEnv("TTS_SAMPLE_RATE"))
-	if sr <= 0 {
-		sr = 16000
+	if sr < 0 {
+		sr = 0
 	}
 	provider := utils.GetEnv("LLM_PROVIDER")
 	appID := utils.GetEnv("LLM_APP_ID")
@@ -355,6 +364,27 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		)
 	}
 
+	// Stereo PCM recorder (replaces SN3 inline recording for new calls).
+	// Disable via SIP_RECORDER_DISABLE=1; tune chunk-rolling-upload via
+	// SIP_RECORDER_CHUNK_SECS (0 = full call only). Bucket override via
+	// SIP_RECORDER_BUCKET (defaults to recorder package's "voiceserver-recordings").
+	if strings.TrimSpace(os.Getenv("SIP_RECORDER_DISABLE")) != "1" {
+		recCfg := siprecorder.Config{
+			Bucket: strings.TrimSpace(os.Getenv("SIP_RECORDER_BUCKET")),
+			Logger: lg,
+		}
+		if secs, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SIP_RECORDER_CHUNK_SECS"))); err == nil && secs > 0 {
+			recCfg.ChunkInterval = time.Duration(secs) * time.Second
+		}
+		if cs.EnableRecorder(recCfg) {
+			lg.Info("sip voice: stereo PCM recorder enabled",
+				zap.String("call_id", cs.CallID),
+				zap.Int("sample_rate", pcmBridgeSR),
+				zap.Duration("chunk_interval", recCfg.ChunkInterval),
+			)
+		}
+	}
+
 	voiceType := env.TTSVoiceType
 	if voiceType == 0 {
 		voiceType = 101007 // 知性女声（智娜）
@@ -395,10 +425,21 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				return nil
 			}
 			pcmOut := frame
-			if ttsCloudSR != pcmBridgeSR && len(frame) >= 2 {
+			recordedAtBridgeRate := ttsCloudSR == pcmBridgeSR
+			if !recordedAtBridgeRate && len(frame) >= 2 {
 				if out, err := media.ResamplePCM(frame, ttsCloudSR, pcmBridgeSR); err == nil && len(out) > 0 {
 					pcmOut = out
+					recordedAtBridgeRate = true
 				}
+			}
+			// Stereo recorder: only capture AI when the buffer is at the
+			// bridge rate the recorder was configured with — otherwise we
+			// would silently mix in pitch-shifted PCM at the wrong rate
+			// and the playback would sound like high-pitched static
+			// ("电流音"). Skipping the rare resample-failure path is
+			// far better than producing a garbled WAV.
+			if recordedAtBridgeRate {
+				cs.WriteAIPCM(pcmOut)
 			}
 			pkt := &media.AudioPacket{
 				Payload:       pcmOut,
@@ -668,6 +709,12 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				return nil
 			}
 			pcm16 := ap.Payload
+			// Stereo recorder: capture caller side at bridge rate. We tap
+			// before the optional resample-to-ASR-rate step so the
+			// recorder always sees frames at the bridge sample rate set
+			// by EnableRecorder. Welcome / barge-in branches below may
+			// short-circuit ASR processing but recording continues.
+			cs.WriteCallerPCM(pcm16)
 			if welcomePlaying.Load() {
 				// Same RMS VAD path as TTS barge-in (requires SIP_VAD_BARGE_IN enabled).
 				if vadDet != nil && vadDet.CheckBargeIn(pcm16, true) {
@@ -748,7 +795,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				welcomeCancel = nil
 				welcomeCancelMu.Unlock()
 			}()
-			if err := playWelcomeWav(welcomeCtx, ms, lg, pcmBridgeSR); err != nil {
+			if err := playWelcomeWav(welcomeCtx, ms, lg, pcmBridgeSR, cs.WriteAIPCM); err != nil {
 				lg.Warn("sip voice welcome playback failed", zap.String("call_id", cs.CallID), zap.Error(err))
 				return
 			}
@@ -760,7 +807,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	return nil
 }
 
-func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger, sampleRate int) error {
+func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger, sampleRate int, recordTap func(pcm []byte)) error {
 	if ms == nil {
 		return fmt.Errorf("media session is nil")
 	}
@@ -802,6 +849,13 @@ func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger,
 		if len(frame) == 0 {
 			continue
 		}
+		// Stereo recorder: capture welcome playback at bridge rate so
+		// the AI track is not silent for the welcome window. Without
+		// this tap, listeners of the recorded WAV would hear "TTS
+		// starts mid-conversation" with the welcome utterance missing.
+		if recordTap != nil {
+			recordTap(frame)
+		}
 		ms.SendToOutput("sip-voice-welcome", &media.AudioPacket{
 			Payload:       frame,
 			IsSynthesized: true,
@@ -828,6 +882,8 @@ func streamPlainTextToTTS(ctx context.Context, text string, ttsPipe *siptts.Pipe
 		}
 		return "", meta, err
 	}
+	// End-of-turn residual drain (intent / script single-shot path).
+	_ = ttsPipe.Finalize()
 	meta.TTSMs = int(time.Since(t0).Milliseconds())
 	return text, meta, nil
 }
@@ -893,6 +949,8 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, use
 			}
 			return "", meta, err
 		}
+		// End-of-turn residual drain (Alibaba single-shot path).
+		_ = ttsPipe.Finalize()
 		meta.TTSMs = ttsMs
 		return strings.TrimSpace(reply), meta, nil
 	}
@@ -940,6 +998,8 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, use
 			}
 			return "", meta, err
 		}
+		// End-of-turn residual drain (streaming fallback path).
+		_ = ttsPipe.Finalize()
 		meta.TTSMs = ttsMs
 		return strings.TrimSpace(reply), meta, nil
 	}
@@ -952,6 +1012,14 @@ func streamLLMToTTS(ctx context.Context, llmProvider llm.LLMProvider, model, use
 			return strings.TrimSpace(reply), meta, nil
 		}
 		return "", meta, err
+	}
+	// Drain the per-segment residual at end-of-turn so the very last
+	// sub-frame of audio still gets emitted (with a single zero-pad
+	// cliff at the absolute end, which is far less audible than a
+	// cliff after every sentence). Best-effort: a Finalize failure
+	// here does not invalidate the spoken reply.
+	if err := ttsPipe.Finalize(); err != nil && lg != nil {
+		lg.Debug("sip voice tts finalize residual", zap.Error(err))
 	}
 	meta.TTSMs = ttsMs
 	return strings.TrimSpace(reply), meta, nil
@@ -1004,10 +1072,18 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 				return nil
 			}
 			pcmOut := frame
-			if ttsCloudSR != pcmBridgeSR && len(frame) >= 2 {
+			recordedAtBridgeRate := ttsCloudSR == pcmBridgeSR
+			if !recordedAtBridgeRate && len(frame) >= 2 {
 				if out, err := media.ResamplePCM(frame, ttsCloudSR, pcmBridgeSR); err == nil && len(out) > 0 {
 					pcmOut = out
+					recordedAtBridgeRate = true
 				}
+			}
+			// Stereo recorder: same constraint as the LLM TTS path —
+			// only capture when the buffer is at the recorder's bridge
+			// rate. See attachVoiceInner SendPCMFrame for rationale.
+			if recordedAtBridgeRate {
+				cs.WriteAIPCM(pcmOut)
 			}
 			ms.SendToOutput("sip-script-say", &media.AudioPacket{
 				Payload:       pcmOut,
@@ -1026,7 +1102,13 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 	}
 	ttsPipe.Start(runCtx)
 	defer ttsPipe.Stop()
-	return ttsPipe.Speak(text)
+	if err := ttsPipe.Speak(text); err != nil {
+		return err
+	}
+	// SpeakTextOnce uses a fresh Pipeline created per call, so Finalize
+	// here drains the only residual (sub-frame tail of `text`). Without
+	// it the very last <20ms of the script's audio would be discarded.
+	return ttsPipe.Finalize()
 }
 
 // qcloudTTSStream adapts synthesizer.QCloudService to siptts.Service (streaming PCM chunks).

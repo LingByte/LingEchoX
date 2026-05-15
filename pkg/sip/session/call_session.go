@@ -15,6 +15,8 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/media/encoder"
 	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
+	"github.com/LinByte/VoiceServer/pkg/voice/recorder"
 	"go.uber.org/zap"
 )
 
@@ -60,6 +62,14 @@ type CallSession struct {
 	recMu         sync.Mutex
 	recBuf        []byte
 	recTimeOrigin time.Time // first appendRecordingFrame sets anchor for wallNs (monotonic via time.Since)
+
+	// New stereo PCM recorder, ported from VoiceServer pkg/voice/recorder.
+	// Optional: if nil, recording falls back to the legacy SN3 blob path
+	// above. When configured (via EnableRecorder), the recorder captures
+	// already-decoded PCM frames with wall-clock alignment and produces
+	// a stereo WAV directly at flush time — bypassing the SN3 → WAV
+	// post-processing step that used to live in pkg/utils.
+	rec *recorder.Recorder
 }
 
 // NewCallSession creates a call session with codec negotiation from SDP.
@@ -387,6 +397,103 @@ func (cs *CallSession) Stop() {
 		_ = cs.rtpSess.Close()
 		cs.rtpSess = nil
 	}
+}
+
+// EnableRecorder configures the new stereo PCM recorder for this call.
+//
+// cfg.SampleRate is overridden with the call's negotiated PCM bridge rate
+// so callers can pass a half-filled Config; cfg.CallID is forced to the
+// session's CallID for the same reason. Pass cfg.ChunkInterval > 0 to
+// enable rolling partial uploads as a crash-safety net.
+//
+// Returns true when the recorder was successfully created. Idempotent
+// across repeated calls with the same configuration: if a recorder is
+// already attached, this is a no-op and returns true.
+func (cs *CallSession) EnableRecorder(cfg recorder.Config) bool {
+	if cs == nil {
+		return false
+	}
+	cs.recMu.Lock()
+	defer cs.recMu.Unlock()
+	if cs.rec != nil {
+		return true
+	}
+	cfg.CallID = cs.CallID
+	cfg.SampleRate = cs.pcmSampleRate
+	if cfg.SampleRate <= 0 {
+		return false
+	}
+	cfg.Transport = "sip"
+	if cfg.Codec == "" {
+		cfg.Codec = cs.neg.Name
+	}
+	r := recorder.New(cfg)
+	if r == nil {
+		return false
+	}
+	cs.rec = r
+	return true
+}
+
+// HasRecorder reports whether the new stereo PCM recorder is attached.
+func (cs *CallSession) HasRecorder() bool {
+	if cs == nil {
+		return false
+	}
+	cs.recMu.Lock()
+	defer cs.recMu.Unlock()
+	return cs.rec != nil
+}
+
+// WriteCallerPCM records one mono PCM16 LE frame from the caller side.
+// Caller must own the slice (recorder copies internally).
+// Sample rate must match the bridge rate set by EnableRecorder.
+// No-op when the recorder is not attached.
+func (cs *CallSession) WriteCallerPCM(pcm []byte) {
+	if cs == nil || len(pcm) == 0 {
+		return
+	}
+	cs.recMu.Lock()
+	r := cs.rec
+	cs.recMu.Unlock()
+	if r == nil {
+		return
+	}
+	r.WriteCaller(pcm)
+}
+
+// WriteAIPCM records one mono PCM16 LE frame from the AI / TTS side.
+// Caller must own the slice (recorder copies internally).
+// No-op when the recorder is not attached.
+func (cs *CallSession) WriteAIPCM(pcm []byte) {
+	if cs == nil || len(pcm) == 0 {
+		return
+	}
+	cs.recMu.Lock()
+	r := cs.rec
+	cs.recMu.Unlock()
+	if r == nil {
+		return
+	}
+	r.WriteAI(pcm)
+}
+
+// FlushRecorder finalises the recording and uploads the canonical stereo
+// WAV. Returns (RecordingInfo, true) on success, (zero, false) when the
+// recorder is not attached or upload failed (consult logs). Idempotent —
+// repeated calls return false after the first success.
+func (cs *CallSession) FlushRecorder(ctx context.Context) (gateway.RecordingInfo, bool) {
+	if cs == nil {
+		return gateway.RecordingInfo{}, false
+	}
+	cs.recMu.Lock()
+	r := cs.rec
+	cs.rec = nil
+	cs.recMu.Unlock()
+	if r == nil {
+		return gateway.RecordingInfo{}, false
+	}
+	return r.Flush(ctx)
 }
 
 // AppendRecordingSample appends one RTP payload to the SN3 blob (used during transfer bridge when

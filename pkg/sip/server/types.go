@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"time"
+
+	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 )
 
 // SIPRegisterStore persists REGISTER bindings for INVITE proxy and outbound dial lookup.
@@ -28,19 +30,26 @@ type InvitePersistParams struct {
 	TenantID             uint
 	InboundTrunkNumberID uint // sip_trunk_numbers.id when matched via DID resolver; 0 otherwise
 	CallID               string
-	From        string
-	To          string
-	RemoteSig   string
-	RemoteRTP   string
-	LocalRTP    string
-	Codec       string
-	PayloadType uint8
-	ClockRate   int
-	CSeqInvite  string
-	Direction   string
+	From                 string
+	To                   string
+	RemoteSig            string
+	RemoteRTP            string
+	LocalRTP             string
+	Codec                string
+	PayloadType          uint8
+	ClockRate            int
+	CSeqInvite           string
+	Direction            string
 }
 
 // ByePersistParams describes BYE-time persistence and recording metadata.
+//
+// RawPayload carries the legacy SN3 blob (RTP-payload-level recording);
+// downstream persisters decode this into a WAV by calling into
+// pkg/utils/sip_recording_wav.go. When the new stereo PCM recorder
+// (pkg/voice/recorder) was active for the call, the server also fills in
+// WAVRecording with the already-uploaded RecordingInfo and the persister
+// should prefer that path (zero re-encoding, single canonical artefact).
 type ByePersistParams struct {
 	CallID             string
 	RawPayload         []byte
@@ -48,6 +57,12 @@ type ByePersistParams struct {
 	Initiator          string
 	RecordSampleRate   int
 	RecordOpusChannels int
+
+	// WAVRecording is non-nil when pkg/voice/recorder produced a stereo
+	// WAV for this call. Persister implementations should write its
+	// URL/Bytes/DurationMs onto the call_recording row instead of
+	// re-decoding RawPayload. Zero-valued (non-pointer? — Bucket=="" check) means SN3 fallback.
+	WAVRecording gateway.RecordingInfo
 }
 
 // SIPCallPersistStore defines persistence hooks used by SIP server.

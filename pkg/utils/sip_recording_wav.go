@@ -198,6 +198,16 @@ type wallPCMSeg struct {
 }
 
 // placeWallPCMTrack maps capture-time offsets to samples (same idea as NEWLINGECHO server/recording.go timeline mix).
+//
+// JITTER SNAP（与 pkg/voice/recorder/placePCMTrackBytes 同源修复）：
+// TTS Pipeline 的 PaceRealtime 是 time.Sleep(FrameDuration) 节拍，叠加 Go
+// 调度抖动 + RTP TX 拥塞，相邻 RTP 包的 wallNs 间距并不严格等于 FrameDuration
+// （±1-3ms 抖动）。原算法把每帧硬贴在 wall-clock 网格上，相邻帧间这点抖动被
+// 当作真静音用 0 填进 WAV，听起来就是 20ms 周期的 click → 用户报告的
+// "入库录音电流音"。修法：当当前帧的 wall 推算位置离上一帧尾 <80ms 时，
+// 视为"逻辑上连续的同一段音频"，强制 snap 到 pen 拼起来；超过 80ms 才
+// 当作真静音保留。8kHz 下 80ms = 640 个样本，远大于任何调度抖动，又远小于
+// 真实回合间停顿（≥100ms），不会误吃真静音。
 func placeWallPCMTrack(segs []wallPCMSeg, pcmHz int) []int16 {
 	if len(segs) == 0 || pcmHz <= 0 {
 		return nil
@@ -208,11 +218,19 @@ func placeWallPCMTrack(segs []wallPCMSeg, pcmHz int) []int16 {
 		}
 		return segs[i].seq < segs[j].seq
 	})
+	const jitterSnapNs uint64 = 80 * 1_000_000
 	base := segs[0].wallNs
 	var out []int16
 	pen := 0
+	prevTailNs := base
 	for _, s := range segs {
 		posFromWall := int(int64(s.wallNs-base) * int64(pcmHz) / 1e9)
+		// Snap micro-jitter forward to pen so contiguous TTS frames stay
+		// contiguous in the WAV. Only the gap-case (pos > pen) needs this;
+		// the overlap-case (pos < pen) is already handled by the pen guard.
+		if posFromWall > pen && s.wallNs >= prevTailNs && (s.wallNs-prevTailNs) < jitterSnapNs {
+			posFromWall = pen
+		}
 		if posFromWall < pen {
 			posFromWall = pen
 		}
@@ -224,6 +242,9 @@ func placeWallPCMTrack(segs []wallPCMSeg, pcmHz int) []int16 {
 		if end > pen {
 			pen = end
 		}
+		// Convert pen (sample count from base) back to wall-time-equivalent
+		// so the next iteration can compute a meaningful inter-frame gap.
+		prevTailNs = base + uint64(int64(pen)*int64(1_000_000_000)/int64(pcmHz))
 	}
 	return out
 }

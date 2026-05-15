@@ -45,10 +45,16 @@ func (s *SIPServer) clearInviteBrief(callID string) {
 }
 
 // endVoiceDialogBridge tears down pkg/sip/voicedialog state and clears INVITE snapshot meta.
+//
+// Honours both the legacy direct path (voicedialog.EndCall) and the new
+// interface path (fireOnTerminate, defined in compat.go) so business code
+// can migrate gradually from the conversation/voicedialog packages to a
+// CallLifecycleObserver registered via SetCallLifecycleObserver.
 func (s *SIPServer) endVoiceDialogBridge(callID string) {
 	if s == nil || strings.TrimSpace(callID) == "" {
 		return
 	}
 	voicedialog.EndCall(callID)
+	s.fireOnTerminate(callID, "ended")
 	s.clearInviteBrief(callID)
 }

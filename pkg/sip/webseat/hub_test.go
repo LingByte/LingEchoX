@@ -5,9 +5,9 @@ import (
 )
 
 func TestPersistSnapshotInboundNil(t *testing.T) {
-	raw, name, sr, ch := persistSnapshotInbound(nil)
-	if raw != nil || name != "" || sr != 0 || ch != 0 {
-		t.Fatalf("%v %q %d %d", raw, name, sr, ch)
+	raw, name, sr, ch, wav := persistSnapshotInbound(nil)
+	if raw != nil || name != "" || sr != 0 || ch != 0 || wav.URL != "" || wav.Bucket != "" || wav.Key != "" {
+		t.Fatalf("%v %q %d %d %+v", raw, name, sr, ch, wav)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	siprtp "github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
 	"go.uber.org/zap"
@@ -49,7 +50,9 @@ type Config struct {
 	SetACDWebSeatWorkState func(ctx context.Context, targetID uint, workState string) error
 	// FinalizeInboundPersist runs once when a web-seat handoff ends (BYE, hangup, or bridge teardown).
 	// callID is the inbound PSTN Call-ID; initiator is "remote" (customer BYE) or "local" (operator / full hangup).
-	FinalizeInboundPersist func(ctx context.Context, callID, initiator string, raw []byte, codecName string, recordSampleRate, recordOpusChannels int)
+	// wavRec is the (already-uploaded) stereo WAV from pkg/voice/recorder; zero-valued (Bucket=="") when the
+	// new recorder was disabled / no PCM was captured — the persister should fall back to RawPayload (SN3) decoding.
+	FinalizeInboundPersist func(ctx context.Context, callID, initiator string, raw []byte, codecName string, recordSampleRate, recordOpusChannels int, wavRec gateway.RecordingInfo)
 	// OnWebSeatBridgeEstablished runs after the browser SDP answer is accepted (bridge setup begins).
 	OnWebSeatBridgeEstablished func(callID string)
 	// OnWebSeatJoinTimeout runs when no browser join arrives within SIP_WEBSEAT_JOIN_TIMEOUT (after dedupe release).
@@ -433,9 +436,9 @@ func HangupFull(callID string) bool {
 	return teardownWebSeat(callID, true)
 }
 
-func persistSnapshotInbound(cs *sipSession.CallSession) (raw []byte, codecName string, recSR, recOpusCh int) {
+func persistSnapshotInbound(cs *sipSession.CallSession) (raw []byte, codecName string, recSR, recOpusCh int, wavRec gateway.RecordingInfo) {
 	if cs == nil {
-		return nil, "", 0, 0
+		return nil, "", 0, 0, gateway.RecordingInfo{}
 	}
 	raw = cs.TakeRecording()
 	codecName = cs.NegotiatedCodec().Name
@@ -445,7 +448,12 @@ func persistSnapshotInbound(cs *sipSession.CallSession) (raw []byte, codecName s
 	if recOpusCh < 1 {
 		recOpusCh = src.Channels
 	}
-	return raw, codecName, recSR, recOpusCh
+	// Best-effort flush of the stereo PCM recorder — if not enabled or
+	// upload failed we still return the SN3 RawPayload above as fallback.
+	if info, ok := cs.FlushRecorder(context.Background()); ok {
+		wavRec = info
+	}
+	return raw, codecName, recSR, recOpusCh, wavRec
 }
 
 func (h *Hub) emitFinalizePersist(callID, initiator string, cs *sipSession.CallSession) {
@@ -456,8 +464,8 @@ func (h *Hub) emitFinalizePersist(callID, initiator string, cs *sipSession.CallS
 	if init == "" {
 		init = "remote"
 	}
-	raw, codec, sr, ch := persistSnapshotInbound(cs)
-	go h.cfg.FinalizeInboundPersist(context.Background(), callID, init, raw, codec, sr, ch)
+	raw, codec, sr, ch, wavRec := persistSnapshotInbound(cs)
+	go h.cfg.FinalizeInboundPersist(context.Background(), callID, init, raw, codec, sr, ch, wavRec)
 }
 
 // cleanupInboundAfterJoinFailure runs when completeJoin fails after we removed the call from awaiting.

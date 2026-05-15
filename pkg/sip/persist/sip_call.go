@@ -81,34 +81,39 @@ type SIPCall struct {
 	ToHeader   string `json:"toHeader" gorm:"type:text"`
 	// FromNumber / ToNumber 是从 FromHeader / ToHeader 中提取出来的纯数字号码，用于日志和列表展示。
 	// 例如 `"bob" <sip:13800138000@10.0.4.12>;tag=xyz` → "13800138000"。
-	FromNumber        string         `json:"fromNumber" gorm:"size:64;index"`
-	ToNumber          string         `json:"toNumber" gorm:"size:64;index"`
-	CSeqInvite        string         `json:"cseqInvite" gorm:"size:64"`
-	RemoteAddr        string         `json:"remoteAddr" gorm:"size:128;index"`
-	Direction         string         `json:"direction" gorm:"size:16;index"`
-	RemoteRTPAddr     string         `json:"remoteRtpAddr" gorm:"size:128;index"`
-	LocalRTPAddr      string         `json:"localRtpAddr" gorm:"size:128;index"`
-	PayloadType       uint8          `json:"-" gorm:"index"`
-	Codec             string         `json:"-" gorm:"size:32;index"`
-	ClockRate         int            `json:"-" gorm:"column:clock_rate"`
-	State             string         `json:"state" gorm:"size:32;index"`
-	InviteAt          *time.Time     `json:"inviteAt" gorm:"index"`
-	AckAt             *time.Time     `json:"ackAt" gorm:"index"`
-	ByeAt             *time.Time     `json:"byeAt" gorm:"index"`
-	EndedAt           *time.Time     `json:"endedAt" gorm:"index"`
-	FailureReason     string         `json:"failureReason" gorm:"type:text"`
-	RecordingURL      string         `json:"recordingUrl" gorm:"size:1024"`
-	RecordingRawBytes int            `json:"recordingRawBytes" gorm:"column:recording_raw_bytes;default:0"`
-	RecordingWavBytes int            `json:"recordingWavBytes" gorm:"column:recording_wav_bytes;default:0"`
-	ByeInitiator      string         `json:"byeInitiator" gorm:"column:bye_initiator;size:16"`
-	DurationSec       int            `json:"durationSec" gorm:"default:0"`
-	EndStatus         string         `json:"endStatus" gorm:"size:64;index"`
-	Turns             datatypes.JSON `json:"turns" gorm:"type:json"`
-	TurnCount         int            `json:"turnCount" gorm:"default:0"`
-	FirstTurnAt       *time.Time     `json:"firstTurnAt"`
-	LastTurnAt        *time.Time     `json:"lastTurnAt"`
-	HadSIPTransfer    bool           `json:"hadSipTransfer" gorm:"column:had_sip_transfer;default:0"`
-	HadWebSeat        bool           `json:"hadWebSeat" gorm:"column:had_web_seat;default:0"`
+	FromNumber        string     `json:"fromNumber" gorm:"size:64;index"`
+	ToNumber          string     `json:"toNumber" gorm:"size:64;index"`
+	CSeqInvite        string     `json:"cseqInvite" gorm:"size:64"`
+	RemoteAddr        string     `json:"remoteAddr" gorm:"size:128;index"`
+	Direction         string     `json:"direction" gorm:"size:16;index"`
+	RemoteRTPAddr     string     `json:"remoteRtpAddr" gorm:"size:128;index"`
+	LocalRTPAddr      string     `json:"localRtpAddr" gorm:"size:128;index"`
+	PayloadType       uint8      `json:"-" gorm:"index"`
+	Codec             string     `json:"-" gorm:"size:32;index"`
+	ClockRate         int        `json:"-" gorm:"column:clock_rate"`
+	State             string     `json:"state" gorm:"size:32;index"`
+	InviteAt          *time.Time `json:"inviteAt" gorm:"index"`
+	AckAt             *time.Time `json:"ackAt" gorm:"index"`
+	ByeAt             *time.Time `json:"byeAt" gorm:"index"`
+	EndedAt           *time.Time `json:"endedAt" gorm:"index"`
+	FailureReason     string     `json:"failureReason" gorm:"type:text"`
+	RecordingURL      string     `json:"recordingUrl" gorm:"size:1024"`
+	RecordingRawBytes int        `json:"recordingRawBytes" gorm:"column:recording_raw_bytes;default:0"`
+	RecordingWavBytes int        `json:"recordingWavBytes" gorm:"column:recording_wav_bytes;default:0"`
+	// RecordingHash is filled by pkg/voice/recorder (LingEchoX improvement
+	// over upstream VoiceServer, which never populated the hash field).
+	// Format is "sha256:<64 hex>"; empty for legacy SN3 → WAV decoded
+	// recordings whose canonical bytes do not flow through the recorder.
+	RecordingHash  string         `json:"recordingHash,omitempty" gorm:"column:recording_hash;size:96"`
+	ByeInitiator   string         `json:"byeInitiator" gorm:"column:bye_initiator;size:16"`
+	DurationSec    int            `json:"durationSec" gorm:"default:0"`
+	EndStatus      string         `json:"endStatus" gorm:"size:64;index"`
+	Turns          datatypes.JSON `json:"turns" gorm:"type:json"`
+	TurnCount      int            `json:"turnCount" gorm:"default:0"`
+	FirstTurnAt    *time.Time     `json:"firstTurnAt"`
+	LastTurnAt     *time.Time     `json:"lastTurnAt"`
+	HadSIPTransfer bool           `json:"hadSipTransfer" gorm:"column:had_sip_transfer;default:0"`
+	HadWebSeat     bool           `json:"hadWebSeat" gorm:"column:had_web_seat;default:0"`
 	// TransferACDTargetID is the acd_pool_targets.id selected when the call was transferred to an agent.
 	// 0 means no transfer or unknown target.
 	TransferACDTargetID uint `json:"transferAcdTargetId,omitempty" gorm:"column:transfer_acd_target_id;index;default:0"`

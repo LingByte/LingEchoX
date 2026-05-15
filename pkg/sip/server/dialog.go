@@ -11,6 +11,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 )
 
 type uasDialogState struct {
@@ -264,6 +265,7 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 	var raw []byte
 	var codec string
 	var recSR, recOpusCh int
+	var wavRec gateway.RecordingInfo
 	if cs != nil {
 		raw = cs.TakeRecording()
 		codec = cs.NegotiatedCodec().Name
@@ -272,6 +274,9 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 		recOpusCh = src.OpusDecodeChannels
 		if recOpusCh < 1 {
 			recOpusCh = src.Channels
+		}
+		if info, ok := cs.FlushRecorder(context.Background()); ok {
+			wavRec = info
 		}
 		cs.Stop()
 	}
@@ -284,6 +289,7 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 			Initiator:          "local",
 			RecordSampleRate:   recSR,
 			RecordOpusChannels: recOpusCh,
+			WAVRecording:       wavRec,
 		})
 	}
 }

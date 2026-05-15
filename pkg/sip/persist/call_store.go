@@ -107,6 +107,39 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 		updates["recording_raw_bytes"] = len(raw)
 	}
 
+	// New stereo PCM recorder fast-path — when pkg/voice/recorder produced
+	// and uploaded a stereo WAV during the call, we just record the
+	// resulting URL/Bytes and skip the SN3 → WAV decode below entirely.
+	// SN3 RawPayload remains stored as recording_raw_bytes for now in case
+	// dashboards still want the per-frame timeline; it is not re-uploaded.
+	if wav := p.WAVRecording; wav.URL != "" || (wav.Bucket != "" && wav.Key != "") {
+		if wav.URL != "" {
+			updates["recording_url"] = wav.URL
+		}
+		if wav.Bytes > 0 {
+			updates["recording_wav_bytes"] = wav.Bytes
+		}
+		if wav.DurationMs > 0 {
+			if sec := int(wav.DurationMs / 1000); sec > 0 {
+				updates["duration_sec"] = sec
+			}
+		}
+		if wav.Hash != "" {
+			updates["recording_hash"] = wav.Hash
+		}
+		s.lg.Info("sippersist recording attached from voice/recorder",
+			zap.String("call_id", callID),
+			zap.String("url", wav.URL),
+			zap.Int("wav_bytes", wav.Bytes),
+			zap.Int64("duration_ms", wav.DurationMs),
+			zap.String("hash", wav.Hash),
+		)
+		if err := s.db.WithContext(ctx).Model(&SIPCall{}).Where("call_id = ?", callID).Updates(updates).Error; err != nil {
+			s.lg.Warn("sippersist bye update", zap.String("call_id", callID), zap.Error(err))
+		}
+		return
+	}
+
 	c := strings.ToLower(codecName)
 	store := stores.Default()
 	bucket := ""

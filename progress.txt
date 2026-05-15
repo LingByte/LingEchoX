@@ -1,0 +1,168 @@
+# LingEchoX 复刻 VoiceServer 底层 — 进度跟踪
+
+## 背景
+LingEchoX 与 VoiceServer 共用同一 module path: `github.com/LinByte/VoiceServer`。
+VoiceServer 底层 SIP 设计更解耦（业务通过 InviteHandler 接口注入，
+录音抽到 pkg/voice/recorder 统一 stereo WAV）。
+本计划逐层把 VS 底层迁回 LEX，并保留 LEX 独有的业务功能
+（conversation / voicedialog / webseat / persist / outbound 业务流程）。
+
+## 总体策略
+- 保持 LEX 业务包不动（conversation / voicedialog / webseat / persist），先把底层撑起来。
+- 底层（sip/* + voice/*）逐包对齐到 VS，再把业务侧的 import 切回去。
+- 每完成一档就跑 `go build ./...`；不允许任何持续编译失败。
+
+## 已对齐的包（基本零差异）
+- pkg/sip/uas, pkg/sip/dtmf, pkg/sip/dialog, pkg/sip/sdp, pkg/sip/rtp
+- pkg/sip/transaction（仅空白格式差异，可忽略）
+- pkg/sip/stack（LEX 多 1 个 18 行 pcm.go 工具函数，保留）
+
+## Phase A — 协议栈对齐（安全 / 加法）
+- [x] pkg/sip/bridge/two_leg.go：合并 VS 的 BridgeDirection / PCMTapFunc / SetDirectionalPCMTap
+- [x] pkg/sip/bridge/two_leg_relay.go：对齐 VS 版本
+
+## Phase B — sip/server 解耦
+- [x] B-1：拷入 VS interfaces.go / incoming.go / compat.go（共存模式，添加字段不破现有调用）
+  - SIPServer struct 新增：inviteHandler/dtmfSink/transferHandler/callObserver/terminateHooks
+  - 提供 Set{Invite,DTMFSink,Transfer,CallLifecycle}Handler 注入入口
+  - endVoiceDialogBridge 合并：同时走 voicedialog.EndCall（旧） + fireOnTerminate（新）
+- [ ] B-2：sip_server.go 移除对 conversation/voicedialog 的直接 import
+       需要在 conversation 包增加 wrapper 实现 CallLifecycleObserver等，
+       并在 cmd/server/bootstrap 代码处调用 SetCallLifecycleObserver 等。
+       完成后才能从 sip_server.go 删除 conversation.* 直接调用。
+- [ ] B-3：拷入 VS pkg/sip/session/decoder.go；call_session.go 重构为薄壳
+
+风险：sip_server.go 对 conversation 包有 ~11 个直接调用点，
+其中 cleanupCallState、HangupTransferBridgeIfAny、HangupWebSeatBridgeIfAny、
+ActiveTransferBridgeForCallID、ActiveWebSeatSession、TeardownTransferBridge*、
+HandleSIPINFODTMF、TriggerTransferFromReferTo 需要逐一映射。
+
+## Phase C — voice/* 子树 (大部分新增)
+- [x] C-1：pkg/voice/recorder（统一 stereo WAV，含 chunk rolling upload；
+        从 VS 拷入但解耦了对 gateway 的强依赖）
+- [x] C-2：pkg/voice/gateway/types.go + persistence.go（精简版：把 TurnEvent
+        从 client.go 提到 persistence.go，让 recorder 不需要拉 vad/metrics）
+- [x] C-5：CallSession 录音器集成（pkg/sip/session/call_session.go）
+        新方法：EnableRecorder / WriteCallerPCM / WriteAIPCM / FlushRecorder
+        attachVoiceInner 自动启用（SIP_RECORDER_DISABLE=1 关闭，
+        SIP_RECORDER_CHUNK_SECS / SIP_RECORDER_BUCKET 调参）
+        TTS SendPCMFrame、ASR proc 两侧 PCM tap 已接通
+        ByePersistParams.WAVRecording 新字段；BYE 路径自动 Flush
+        webseat FinalizeInboundPersist 回调签名扩展 wavRec
+        persister 优先消费 WAVRecording，跳过 SN3 → WAV 解码
+        SN3 buf 与新录音并行，作为 RawPayload fallback（暂不删除）
+        新增 pkg/sip/session/recorder_test.go 覆盖 nil-safe + 全链路 flush
+- [x] C-4a：pkg/voice/vad（VS 完整 detector 拷入，与 LEX pkg/sip/vad 并存）
+- [x] C-4b：pkg/voice/metrics（VS 完整 metrics + app 拷入）
+- [x] C-4c：pkg/voice/asr/{turnstate,state,sentence_filter}.go + 测试（与 LEX 现有 pipeline.go 共存）
+- [x] C-4d：pkg/voice/tts/{service,cache,segmenter}.go + 测试（删除 pipeline.go 重复 Service 接口、重命名 fakeService 避免测试冲突）
+- [ ] C-3：pkg/voice/gateway/client.go 完整版（依赖 voice/vad、voice/metrics、voice/medialeg）
+- [ ] C-4e：pkg/voice/medialeg.go（需 LEX asr/tts pipeline.go API 兑齐 VS，生效需同步重构 conversation/voice.go）
+- [ ] C-6：业务包改用 voice/gateway 而不是直接调 SIP session
+
+## Phase D — 优化（VS 自身的不足）
+- [ ] recorder：chunk rolling upload 改成基于"已编码 size"而非时钟 tick，避免半空 chunk
+- [x] recorder：RecordingInfo.Hash 现能被填充（sha256:<hex>）
+        VS 原版 Hash 字段完全没填过；本处补齐
+        SIPCall 表新增 recording_hash 列；persister 同步写入
+- [x] recorder：**TTS 帧 jitter snap 修电流音**
+        VS 原版用纯 wall-clock 放置每帧，TTS 20ms 的 time.Sleep + 调度抖动
+        在每两帧之间产生 ±1-3ms 错位，旧算法在缝里填零 = 周期性咔哒/电流音。
+        改：当 (wallNs - 上一帧尾) < 80ms 时 snap 到 pen 连续拼接，
+        > 80ms 才保留为真静音。新增 2 个回归测试：
+        TestPlacePCMTrackBytes_JitterSnap / RealSilencePreserved
+- [x] recorder：append 丢弃奇数尾字节，避免 16-bit 样本 high/low 字节互换
+- [x] voice.go：resample 失败时不再以错误采样率写 recorder（避免 pitch-shift 静电）
+- [x] voice.go：playWelcomeWav 接入 recordTap，欢迎语不再录音缺失
+- [x] voice.go：streamPlainTextToTTS 同步接入 cs.WriteAIPCM
+- [x] **utils/sip_recording_wav.go::placeWallPCMTrack 套 jitter snap（修入库录音电流音）**
+        2026-05-16 借助 SIP_TTS_RAW_DUMP_DIR tap 二分定位：QCloud 原始 PCM
+        干净、实时通话也干净，唯独事后下载的 SN3→WAV 入库录音持续电流音。
+        根因是这条**老**录音转码路径在 placeWallPCMTrack 用了"裸 wall-clock 网格"
+        贴帧：TTS Pipeline 的 time.Sleep + Go 调度 ±1-3ms 抖动把每 20ms 帧间隙
+        填了零，听起来就是 20ms 周期的 click。修法同 pkg/voice/recorder
+        里那个 jitter snap：相邻帧 wall 间距 <80ms 一律 snap 到 pen 拼接，
+        ≥80ms 才当真静音保留。
+        新回归测试：TestSN3_G711Stereo_JitterSnap_ContiguousTTS
+        （10 帧 ±2ms 抖动应拼接为连续 1600 样本、R 通道无 4+ 连续零）。
+        既有测试 RTP/Wall gap 真静音用例继续 PASS。
+- [x] **voicedialog/gateway_media.go：cloudSR 默认回退到桥接率**
+        SIP_TTS_RAW_DUMP_DIR 实测发现：QCloud 8 kHz 直出和 16 kHz 直出原始
+        PCM 都干净，所以"电流音"全是下游 jitter 引入，不需要 16k→8k 重采样。
+        我们的 2-tap 平均/线性插值降采都不带真正的抗混叠 LPF，反而是污染源。
+        默认 cloud==bridge（G.711 即 8 kHz）整体绕过降采；显式
+        TTS_SAMPLE_RATE 覆盖仍生效。
+- [x] **voicedialog/tts_raw_dump.go：QCloud 一手 PCM 落盘 WAV 诊断 tap**
+        排错链反复改下游处理仍有"电流音"，新增最上游 tap：在 prefetch
+        goroutine 里 SDK callback 一收到 PCM 就以 16-bit mono WAV 直接
+        落盘，绕开所有 framer/resample/encode/RTP。播放该 wav 即可判定
+        噪音是 QCloud 模型自身吐出来的、还是我们链路加的。
+        启用：SIP_TTS_RAW_DUMP_DIR=/path 环境变量；
+        文件名 <call_id>__<utterance_id>__<sr>hz.wav。
+- [x] **voicedialog/tts_segmenter.go：playSegment 整体替换为 VS tts.Pipeline**
+        用户反馈"welcome.wav 干净、上行录音干净、唯独 TTS 有电流音"——锁定到
+        playSegment 自己重新发明了一遍「buffer + 分帧 + 节拍 + 兜底」，但
+        welcome 用的 playPCMFrames 是从一个**连续 PCM 数组**切片，TTS player
+        从 chunked channel 累积进 buffer，多重风险：
+        ① emitFrame 用 time.After 而非 ticker 长话累计漂移；
+        ② QCloud 偶发奇字节 chunk 直接 append → 后续帧高低字节互换 = 持续电流音；
+        ③ 之前的 DC-hold 兜底每次 underrun→真 PCM 重连一次 click。
+        VS 没有 tts_segmenter 这个文件，它直接用 voice/tts.Pipeline。
+        改造：把 playSegment 里的 player buffer 全删，注入一个
+        chanReplayService 把 prefetch 的 pcmCh 对接给 siptts.Pipeline；
+        Pipeline 负责帧切分（连续 buffer 切片，chunk 边界天然安全）、
+        PaceRealtime 节拍、Finalize 段尾 zero-pad。**保留** prefetch
+        goroutine（段间 SDK 握手并行优化）。
+        chanReplayService 同时做：
+        - cloudSR != bridgeSR 时缓冲全段后**整段重采样**（避开
+          InterpolatingConverter 每 chunk 重置 sourcePos 的相位错位）
+        - 防御性丢弃奇字节 chunk
+- [x] **voicedialog/tts_segmenter.go：移除 underrun DC-hold 兜底帧**
+        bug：playSegment 在 pcmCh 暂时空时插入「最后样本复制 20ms」的兜底帧
+        维持 RTP 节拍。但 hold-frame → 真 PCM 重连时 hold 住的样本值和下
+        一块 PCM 首样本之间是任意阶跃（step）→ PCMA 编码后接收端 click。
+        QCloud WS 推 PCM 节奏不均（80~200ms 一块），一段回复里 8-20 次
+        underrun → 8-20 次 click → 用户听到的"滋滋滋"。注释里"DC hold 不
+        产生波形阶跃"的自圆其说是错的，只解决了 hold 起点的阶跃，没解决
+        终点。VS 的 pkg/voice/tts/Pipeline 在 underrun 时只阻塞等下一块
+        PCM，从不合成兜底帧——这次彻底对齐：
+        ttsUnderrunSilenceMaxMs: 200 → 0，maxSilenceFrames=0 ⇒
+        select default 分支走不到 hold 路径，回落到阻塞 select。
+        代价：极少数情况下 RTP cadence 短暂停顿 50~150ms，对端 SIP UA
+        jitter buffer (60-200ms) 完全能吸收。
+- [x] **VoiceEnvFromProcess 修死写 16k：G.711 通话不再触发任何重采样**
+        bug：旧代码 TTS_SAMPLE_RATE 未设时强制默认 16000；
+        sipVoiceTTSCloudSampleRate 又优先用 env 值 → G.711 桥接率 8000
+        被忽略 → 每帧都走 16k→8k 下采样；media.ResamplePCM 的
+        InterpolatingConverter.Write **每次 chunk 调用都重置 sourcePos**，
+        chunk 边界处样本不连续 = 周期性高频伪音 = "滋滋"。
+        修：env 未设时保持 0，让 sipVoiceTTSCloudSampleRate 落到桥接率。
+        G.711 通话 ttsCloudSR=8000=pcmBridgeSR ⇒ 完全无重采样，TTS PCM
+        直接喂 G.711 编码器（VS 默认行为，gateway_media.go 已正确，
+        SIP 直通路径漏写）。
+        webseat/gateway_media.go 路径之前已修正过，注释里有同一诊断。
+- [x] tts/pipeline.go：**residual buffer 跨 Speak() 承接**修"每说一字滋滋声"
+        旧版 Speak() 末尾把不足一帧的 PCM 尾零填充并发出，LEX
+        streamLLMToTTS 按句子调一次 Speak() ⇒ 每个句末插入零静音 cliff =
+        高频咔哒 = "每字滋滋"。VS 每 turn 只调一次 Speak() 故无此问题。
+        修：sub-frame tail 暂存到 p.residual；下一次 Speak() 拼接到 buffer
+        头部；新增 Finalize() 在 turn 结束时做最后一次零填充 drain；
+        Stop()（barge-in）清空 residual 避免上下两轮拼接。
+        4 处 turn-终点接入 Finalize：streamLLMToTTS 流式/fallback/Alibaba
+        +SpeakTextOnce + streamPlainTextToTTS。
+        新增 2 个回归测试 + 改 1 个现有测试反映新语义：
+        TestPipeline_ResidualCarriesAcrossSpeak、TestPipeline_StopClearsResidual
+- [ ] sip/server：把 inviteHandlerMu 等多把 RWMutex 合成单个 atomic.Pointer[handlerSet]
+- [ ] outbound/manager：VS 单文件 598 行，按职责拆 dialer/auth/refer 三文件
+
+## 当前活动
+本会话累计交付：
+A + B-1 + C-1 + C-2 + C-4a/b/c/d + C-5（录音全链路） + D-2（hash）。
+全量 go test ./pkg/{sip,voice}/... 绿；go build ./... 零错。
+
+下一步（单独会话）：
+· Phase B-2：conversation 包增 ServerObserver wrapper、bootstrap 注入、
+  才能干净剖离 sip_server.go 对业务包的直接依赖。
+· Phase C-3/C-4e：pkg/voice/gateway/client.go + medialeg.go 需要同步调整
+  pkg/voice/{asr,tts}/pipeline.go API（增加 Close / InputSampleRate / Sink等），
+  同时重构 conversation/voice.go 使用新 API。预计 ±300 行。

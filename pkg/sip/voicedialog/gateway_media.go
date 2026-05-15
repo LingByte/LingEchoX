@@ -37,6 +37,16 @@ func gatewayTTSCloudSR(ttsSampleRate int, pcmBridge int) int {
 	if ttsSampleRate > 0 {
 		return ttsSampleRate
 	}
+	// 关键判断：通过 SIP_TTS_RAW_DUMP_DIR 落盘的 QCloud 16 kHz 原始 PCM 实测干净
+	// （用户 2026-05-16 验证），所以"电流音"出在我们的 16 → 8 kHz 降采上：
+	// 旧的 chanReplayService.streamingHalveDecimate16to8 是 2-tap 平均，在 4 kHz
+	// 衰减仅 0 dB、2/6 kHz 仅 -3 dB，远不够压住 4-8 kHz 的能量，全部混叠回基带 →
+	// 听觉为持续高频"嘶嘶"。`media.ResamplePCM` 的线性插值在 16k→8k 也是纯
+	// decimation 同样无抗混叠 LPF。
+	// 短期最稳的修法：让 QCloud 直接吐桥接率（8 kHz for G.711），整体绕过本地降采；
+	// QCloud 的 8 kHz 模型本身即是电话场景训练，已正确做过抗混叠。配合新 Pipeline
+	// 后再无 DC-hold/time.After/odd-byte 等老 bug，听感应当与 welcome.wav 对齐。
+	// 若桥接是宽带（≥16k），云端 == 桥接率即可。
 	if pcmBridge > 0 {
 		return pcmBridge
 	}

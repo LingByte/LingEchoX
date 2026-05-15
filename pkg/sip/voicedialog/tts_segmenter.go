@@ -23,6 +23,8 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	"github.com/LinByte/VoiceServer/pkg/utils"
+	siptts "github.com/LinByte/VoiceServer/pkg/voice/tts"
 	"go.uber.org/zap"
 )
 
@@ -40,9 +42,14 @@ const (
 	// 攒 60ms 相当于 3 帧 jitter buffer，绝大多数情况下不会再饿死播放线程；
 	// 代价是首字节延迟 +60ms，对总体感（>1s）几乎不可察觉。
 	ttsJitterPrebufferMs = 60
-	// ttsUnderrunSilenceMaxMs drain 中游 pcmCh 暂时空了，最多用静音帧填充多久
-	// 维持 RTP 节拍。超过该上限说明上游真的卡死了，让 select 阻塞回退到正常等待。
-	ttsUnderrunSilenceMaxMs = 200
+	// ttsUnderrunSilenceMaxMs 已废弃：此前在 underrun 时插入「DC hold 帧」试图
+	// 维持 RTP 节拍，但 hold-frame → 真 PCM 重连那一刻会产生波形阶跃（hold 住
+	// 的最后样本值和下一块 PCM 首样本之间是任意 step），PCMA 编码后接收端听到
+	// 一个 click。一段回复里 SDK 推 PCM 节奏不均（典型 8-20 次 underrun），
+	// click 串叠起来就是用户反馈的"滋滋滋"电流音。VS 的 voice/tts/Pipeline 在
+	// underrun 时只是阻塞等下一块 PCM，从不合成兜底帧；实测对端 SIP UA 的
+	// jitter buffer (60-200ms) 完全能吸收这种短暂停顿。改为零兜底帧。
+	ttsUnderrunSilenceMaxMs = 0
 )
 
 // ttsSegmentJob 是上层 (loopback) 通过 tts.speak 入队的一段语音。
@@ -152,8 +159,41 @@ func (sess *dialogSession) startSegmentPrefetch(job *ttsSegmentJob) {
 	job.prefetchCancel = cancel
 	job.pcmCh = make(chan []byte, ttsSegmentPCMChanCap)
 
+	// Optional diagnostic tap: dump SDK's RAW PCM (before any framing/resample/encode/RTP)
+	// to .wav files so the user can listen and isolate "电流音" source. Set
+	// SIP_TTS_RAW_DUMP_DIR=/some/dir to enable; one file per segment named
+	// <call_id>__<utterance_id>__<cloudSR>hz.wav. If the dump itself sounds noisy →
+	// QCloud model fault (try a different voice/sample-rate). If clean → our pipeline
+	// is corrupting it downstream.
+	// utils.GetEnv 会同时查进程 env + 项目 .env 文件，且 key 自动大写归一化；
+	// 直接 os.Getenv 拿不到 .env 里写的变量（这是用户最常踩的坑）。
+	rawDumpDir := strings.TrimSpace(utils.GetEnv("SIP_TTS_RAW_DUMP_DIR"))
+	var rawDumpW *rawPCMDumper
+	if rawDumpDir != "" {
+		if d, err := newRawPCMDumper(rawDumpDir, sess.meta.CallID, job.utteranceID, sess.ttsCloudSR); err != nil {
+			logger.Warn("voicedialog tts raw dump open failed",
+				zap.String(KeyCallID, sess.meta.CallID), zap.Error(err))
+		} else {
+			rawDumpW = d
+			logger.Info("voicedialog tts raw dump active",
+				zap.String(KeyCallID, sess.meta.CallID),
+				zap.String(KeyUtteranceID, job.utteranceID),
+				zap.String("path", d.path),
+				zap.Int("cloud_sr", sess.ttsCloudSR),
+			)
+		}
+	}
+
 	go func() {
 		defer close(job.pcmCh)
+		defer func() {
+			if rawDumpW != nil {
+				if err := rawDumpW.Close(); err != nil {
+					logger.Warn("voicedialog tts raw dump close",
+						zap.String(KeyCallID, sess.meta.CallID), zap.Error(err))
+				}
+			}
+		}()
 		svc := sess.ttsService
 		if svc == nil {
 			job.setPrefetchErr(errors.New("voicedialog: nil tts service"))
@@ -165,6 +205,11 @@ func (sess *dialogSession) startSegmentPrefetch(job *ttsSegmentJob) {
 			}
 			cp := make([]byte, len(pcm))
 			copy(cp, pcm)
+			// Diagnostic dump: write the EXACT bytes QCloud delivered before our
+			// pipeline touches them. ".wav" wrapper for one-click playback.
+			if rawDumpW != nil {
+				_ = rawDumpW.Write(cp)
+			}
 			select {
 			case job.pcmCh <- cp:
 				return nil
@@ -314,164 +359,73 @@ func (sess *dialogSession) playSegment(
 	pipelineT0 := time.Now()
 	ttsT0 := time.Now()
 
-	// jitter buffer 预蓄阈值（字节）。bridgeSR=16k 时 60ms = 1920B = 3 帧。
-	prebufferBytes := bridgeSR * 2 * ttsJitterPrebufferMs / 1000
-	frameMs := int(ttsFrameDuration / time.Millisecond)
-	maxSilenceFrames := ttsUnderrunSilenceMaxMs / frameMs
-
-	var (
-		buffer          []byte
-		drainedClean    bool
-		aborted         bool
-		pcmChClosed     bool // 上游 prefetch 已经 close(pcmCh)，buffer 里剩余字节就是全部
-		firstFrameSent  bool // 用于 jitter prebuffer：首帧未出门前累积到 prebufferBytes 再发
-		silenceFrames   int  // 连续兜底帧数，达到 maxSilenceFrames 即停止补帧回退到阻塞等待
-		emittedAnyAudio bool // 仅 firstAudioHook 触发用
-		lastSampleLo    byte // 最近一帧末尾样本，underrun 时用作 sample-and-hold 兜底
-		lastSampleHi    byte
-	)
-	// 生成 underrun 兜底帧：持续最后一个样本（DC hold），比 0 静音更安静
-	// 且不会产生波形阶跃 → 不会出现"咔哒"点击音。
-	makeHoldFrame := func() []byte {
-		f := make([]byte, bytesPerFrame)
-		for i := 0; i+1 < bytesPerFrame; i += 2 {
-			f[i] = lastSampleLo
-			f[i+1] = lastSampleHi
-		}
-		return f
+	// 改造：丢掉自己写的 buffer/emitFrame/兜底帧那套，**完全复用 VS 的 voice/tts.Pipeline**。
+	// 原因：welcome.wav (playPCMFrames) 和上行用户录音都没有"电流音"，唯独 TTS 这条路径有；
+	// 唯一可定位的差异是 player loop 自己重新发明了一遍「分帧 + 节拍 + underrun 兜底」，并且
+	// emitFrame 用 time.After 而非 ticker，长话累计漂移 + chunk 边界不连续 + 之前的 DC-hold
+	// 兜底叠加产生周期 click → 听起来像电流音。VS 的 Pipeline:
+	//   - 帧从一个**连续 buffer** 切（chunk 边界天然安全）
+	//   - PaceRealtime + 单点 sleep，无漂移
+	//   - underrun 直接阻塞等下一块（不合成假帧）
+	//   - 残余尾字节用 Finalize() 单次 zero-pad，不会每段 cliff
+	// prefetch goroutine 这层不去掉：tts.Pipeline 的 Service 注入 chanReplayService，把 prefetch
+	// 已经写好的 pcmCh 直接 replay 给 Pipeline；段间 SDK 握手并行的优化继续保留。
+	chanSvc := &chanReplayService{
+		ch:           job.pcmCh,
+		ctxBlockChan: segCtx.Done(),
 	}
-
-	emitFrame := func(payload []byte) bool {
-		if job.gen != 0 && job.gen <= sess.ttsGenInvalidBefore.Load() {
-			aborted = true
-			return false
-		}
-		if segCtx.Err() != nil {
-			aborted = true
-			return false
-		}
-		if !emittedAnyAudio {
+	pipe, perr := siptts.New(siptts.Config{
+		Service:       chanSvc,
+		SampleRate:    bridgeSR,
+		Channels:      1,
+		FrameDuration: ttsFrameDuration,
+		PaceRealtime:  true,
+		SendPCMFrame: func(frame []byte) error {
+			if job.gen != 0 && job.gen <= sess.ttsGenInvalidBefore.Load() {
+				return context.Canceled
+			}
+			if segCtx.Err() != nil {
+				return segCtx.Err()
+			}
 			sess.fireAndClearFirstAudioHook()
-			emittedAnyAudio = true
+			ms.SendToOutput("voice-gateway-tts", &media.AudioPacket{
+				Payload:       frame,
+				IsSynthesized: true,
+			})
+			return nil
+		},
+	})
+	if perr != nil {
+		logger.Warn("voicedialog gateway tts pipeline init failed",
+			zap.String(KeyCallID, callID), zap.Error(perr))
+		// drain channel to unblock prefetch
+		for range job.pcmCh {
 		}
-		ms.SendToOutput("voice-gateway-tts", &media.AudioPacket{
-			Payload:       payload,
-			IsSynthesized: true,
-		})
-		// 记录最后一个样本（little-endian 16-bit），供 underrun 兜底使用。
-		if n := len(payload); n >= 2 {
-			lastSampleLo = payload[n-2]
-			lastSampleHi = payload[n-1]
-		}
-		select {
-		case <-segCtx.Done():
-			aborted = true
-			return false
-		case <-time.After(ttsFrameDuration):
-		}
-		return true
+		sess.emitGateway(event(EvTTSEnded, callID, map[string]any{
+			KeyUtteranceID: job.utteranceID,
+			KeyOK:          false,
+		}))
+		return
 	}
-
-	// 把一块 PCM（已经过重采样）追加到 buffer。
-	appendPCM := func(pcm []byte) {
-		if len(pcm) == 0 {
-			return
-		}
-		out := pcm
-		if cloudSR != bridgeSR && len(pcm) >= 2 {
-			if rs, err := media.ResamplePCM(pcm, cloudSR, bridgeSR); err == nil && len(rs) > 0 {
-				out = rs
-			}
-		}
-		buffer = append(buffer, out...)
+	if cloudSR != bridgeSR {
+		// chanReplayService will resample CONCATENATED bytes (not per-chunk) to avoid
+		// the InterpolatingConverter chunk-boundary phase reset. See its impl below.
+		chanSvc.cloudSR = cloudSR
+		chanSvc.bridgeSR = bridgeSR
 	}
+	pipe.Start(segCtx)
+	speakErr := pipe.Speak(job.text)
+	// Drain the residual sub-frame tail with a single zero-pad — same as VS pipeline's
+	// Finalize. Avoids losing the last <20ms of audio at segment end.
+	_ = pipe.Finalize()
+	pipe.Stop()
 
-drainLoop:
-	for {
-		// Pre-frame gen check so barge-in mid-segment exits promptly.
-		if job.gen != 0 && job.gen <= sess.ttsGenInvalidBefore.Load() {
-			aborted = true
-			break drainLoop
-		}
-
-		// ---- 阶段 A：决定是否要从 pcmCh 读 ----
-		// 必须读：buffer 不够发一帧；或首帧未出门、还没攒够 jitter 预蓄。
-		needRead := !pcmChClosed && (len(buffer) < bytesPerFrame ||
-			(!firstFrameSent && len(buffer) < prebufferBytes))
-
-		if needRead {
-			// 先尝试非阻塞读：如果 pcmCh 暂时没数据但已经在播放（firstFrameSent=true），
-			// 给一帧静音兜底，避免 RTP 节拍停顿造成对端音质卡顿。
-			select {
-			case <-segCtx.Done():
-				aborted = true
-				break drainLoop
-			case pcm, ok := <-job.pcmCh:
-				if !ok {
-					pcmChClosed = true
-				} else {
-					appendPCM(pcm)
-					silenceFrames = 0
-				}
-			default:
-				if firstFrameSent && silenceFrames < maxSilenceFrames {
-					// 用 sample-and-hold 兜底而非零静音，避免阶跃跳变 → 无点击音。
-					if !emitFrame(makeHoldFrame()) {
-						break drainLoop
-					}
-					silenceFrames++
-					continue drainLoop
-				}
-				// 阻塞等：要么真有数据，要么上游 close（短句已经全收完）。
-				select {
-				case <-segCtx.Done():
-					aborted = true
-					break drainLoop
-				case pcm, ok := <-job.pcmCh:
-					if !ok {
-						pcmChClosed = true
-					} else {
-						appendPCM(pcm)
-						silenceFrames = 0
-					}
-				}
-			}
-		}
-
-		// ---- 阶段 B：判断是否可以发帧 ----
-		// 首帧出门门槛：
-		//   - 已经攒够 prebufferBytes，或
-		//   - pcmCh 已 close（短句不足 prebufferBytes，全部 flush 出去）
-		canEmitFirst := firstFrameSent ||
-			len(buffer) >= prebufferBytes ||
-			pcmChClosed
-
-		for len(buffer) >= bytesPerFrame && canEmitFirst {
-			frame := make([]byte, bytesPerFrame)
-			copy(frame, buffer[:bytesPerFrame])
-			buffer = buffer[bytesPerFrame:]
-			if !emitFrame(frame) {
-				break drainLoop
-			}
-			firstFrameSent = true
-			silenceFrames = 0
-		}
-
-		// 上游 close + buffer 不足一帧 = 干净结束。
-		if pcmChClosed && len(buffer) < bytesPerFrame {
-			drainedClean = true
-			break drainLoop
-		}
-	}
-
-	// 段尾不足一帧的残余字节直接丢弃（<20ms）。
-	// 旧实现 zero-pad 到 bytesPerFrame 会在波形末尾插入从最后一个真实样本到 0
-	// 的阶跃跳变，跟下一段首样本拼起来 → 段边界"咔哒"点击音。损失 <20ms 听感
-	// 无差，避免点击更值得。
-
-	ttsMs := int(time.Since(ttsT0).Milliseconds())
+	aborted := segCtx.Err() != nil ||
+		(job.gen != 0 && job.gen <= sess.ttsGenInvalidBefore.Load())
 	prefetchErr := job.getPrefetchErr()
-	ok := drainedClean && prefetchErr == nil && !aborted
+	drainedClean := !aborted && speakErr == nil && prefetchErr == nil
+	ttsMs := int(time.Since(ttsT0).Milliseconds())
+	ok := drainedClean
 
 	sess.emitGateway(event(EvTTSEnded, callID, map[string]any{
 		KeyUtteranceID: job.utteranceID,
@@ -536,4 +490,185 @@ func parentUtteranceID(uid string) string {
 		}
 	}
 	return uid[:idx]
+}
+
+// chanReplayService adapts the prefetch goroutine's PCM channel to siptts.Service so the
+// VS-style Pipeline can frame/pace it. The Pipeline calls SynthesizeStream once per Speak;
+// we drain `ch` and forward bytes to its onPCMChunk. The TEXT argument is unused here (the
+// real synthesis already happened upstream in startSegmentPrefetch).
+//
+// Resample policy:
+//
+//   - cloudSR == bridgeSR: pass-through, Pipeline handles per-chunk concat into its own
+//     buffer (chunk-boundary alignment automatically safe).
+//
+//   - cloudSR == 2 * bridgeSR (the common 16k → 8k case for G.711 calls): use a streaming
+//     2-tap box-average decimation INLINE per chunk. Statelessly maps src[2k], src[2k+1]
+//     to one output sample (s2k + s2k+1) / 2. This is mild anti-alias filtering AND it
+//     produces NO chunk-boundary phase discontinuity (because every input sample-pair
+//     maps to exactly one output sample, no fractional carry). Far better than:
+//     a) `media.ResamplePCM` per-chunk linear interp (resets sourcePos=0 each call →
+//     chunk-boundary phase jump → broadband click train = "电流音")
+//     b) raw decimation (no LP filter → 4-8kHz content folded into [0,4kHz] band)
+//     This is the path that fixes the user-reported "TTS 电流音"； welcome.wav and uplink
+//     audio bypassed it because they were already at the bridge rate.
+//
+//   - cloudSR is otherwise unequal to bridgeSR (e.g. 24k → 8k): fall back to whole-segment
+//     buffer + single ResamplePCM call. Trades a little first-audio latency for clean
+//     boundaries. Rare path; QCloud rates are commonly 8/16/24/48 kHz.
+//
+// In all cases we defensively drop trailing odd byte from each chunk to guard against PCM16
+// sample mis-alignment (one odd byte would swap high/low bytes on every subsequent sample).
+type chanReplayService struct {
+	ch           <-chan []byte
+	ctxBlockChan <-chan struct{}
+	cloudSR      int // 0 means same as bridge — no resample
+	bridgeSR     int
+	// halfRem holds the trailing odd-sample-pair byte from the previous chunk in the
+	// 16k→8k streaming path (when a chunk ends mid-pair). Carries to next chunk so we
+	// never lose samples or split a pair across chunks. nil when no pending sample.
+	halfRem []byte
+}
+
+// streamingHalveDecimate16to8 averages every two consecutive int16 LE samples in `pcm` to
+// one output sample, with state from `c.halfRem` so chunk boundaries never split sample
+// pairs. Returns a freshly allocated output buffer at half the input sample count.
+func (c *chanReplayService) streamingHalveDecimate16to8(pcm []byte) []byte {
+	// Prepend any carry-over partial pair from previous chunk.
+	src := pcm
+	if len(c.halfRem) > 0 {
+		merged := make([]byte, 0, len(c.halfRem)+len(pcm))
+		merged = append(merged, c.halfRem...)
+		merged = append(merged, pcm...)
+		src = merged
+		c.halfRem = nil
+	}
+	// Each output sample = avg of 2 input samples = 4 input bytes → 2 output bytes.
+	pairs := len(src) / 4
+	tail := len(src) - pairs*4
+	if tail > 0 {
+		// Save trailing 1-3 bytes for next call (incomplete sample-pair).
+		c.halfRem = append(c.halfRem[:0], src[pairs*4:]...)
+	}
+	if pairs == 0 {
+		return nil
+	}
+	out := make([]byte, pairs*2)
+	for i := 0; i < pairs; i++ {
+		s1 := int32(int16(src[i*4]) | int16(src[i*4+1])<<8)
+		s2 := int32(int16(src[i*4+2]) | int16(src[i*4+3])<<8)
+		avg := int16((s1 + s2) >> 1)
+		out[i*2] = byte(avg)
+		out[i*2+1] = byte(avg >> 8)
+	}
+	return out
+}
+
+func (c *chanReplayService) SynthesizeStream(
+	ctx context.Context,
+	_ string,
+	onPCMChunk func([]byte) error,
+) error {
+	if c == nil || c.ch == nil || onPCMChunk == nil {
+		return errors.New("chanReplayService: nil deps")
+	}
+	if c.cloudSR <= 0 || c.bridgeSR <= 0 || c.cloudSR == c.bridgeSR {
+		return c.streamPassthrough(ctx, onPCMChunk)
+	}
+	if c.cloudSR == 2*c.bridgeSR {
+		return c.stream2to1Decimate(ctx, onPCMChunk)
+	}
+	return c.bufferAndResampleOnce(ctx, onPCMChunk)
+}
+
+func (c *chanReplayService) streamPassthrough(
+	ctx context.Context,
+	onPCMChunk func([]byte) error,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.ctxBlockChan:
+			return context.Canceled
+		case pcm, ok := <-c.ch:
+			if !ok {
+				return nil
+			}
+			if len(pcm) == 0 {
+				continue
+			}
+			if len(pcm)&1 != 0 {
+				pcm = pcm[:len(pcm)-1]
+				if len(pcm) == 0 {
+					continue
+				}
+			}
+			if err := onPCMChunk(pcm); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (c *chanReplayService) stream2to1Decimate(
+	ctx context.Context,
+	onPCMChunk func([]byte) error,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.ctxBlockChan:
+			return context.Canceled
+		case pcm, ok := <-c.ch:
+			if !ok {
+				// Drop any final unpaired sample (<2ms at 16k). Loss is sub-perceptual.
+				c.halfRem = nil
+				return nil
+			}
+			if len(pcm) == 0 {
+				continue
+			}
+			out := c.streamingHalveDecimate16to8(pcm)
+			if len(out) == 0 {
+				continue
+			}
+			if err := onPCMChunk(out); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (c *chanReplayService) bufferAndResampleOnce(
+	ctx context.Context,
+	onPCMChunk func([]byte) error,
+) error {
+	var all []byte
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.ctxBlockChan:
+			return context.Canceled
+		case pcm, ok := <-c.ch:
+			if !ok {
+				if len(all) == 0 {
+					return nil
+				}
+				if len(all)&1 != 0 {
+					all = all[:len(all)-1]
+				}
+				out, err := media.ResamplePCM(all, c.cloudSR, c.bridgeSR)
+				if err != nil || len(out) == 0 {
+					return err
+				}
+				return onPCMChunk(out)
+			}
+			if len(pcm) > 0 {
+				all = append(all, pcm...)
+			}
+		}
+	}
 }

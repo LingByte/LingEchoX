@@ -20,6 +20,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"github.com/LinByte/VoiceServer/pkg/sip/transaction"
 	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
+	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 	"go.uber.org/zap"
 )
 
@@ -93,6 +94,26 @@ type SIPServer struct {
 
 	inviteBriefMu sync.RWMutex
 	inviteBrief   map[string]inviteBrief // inbound Call-ID -> INVITE snapshot for dialog WS meta
+
+	// VoiceServer-style decoupled handler interfaces (additive; nil-safe).
+	// Registered via Set{Invite,DTMFSink,Transfer,CallLifecycle}Handler.
+	// When nil, the existing direct calls into pkg/sip/conversation /
+	// pkg/sip/voicedialog remain authoritative — these only take effect when
+	// business code opts in. See pkg/sip/server/compat.go.
+	inviteHandlerMu sync.RWMutex
+	inviteHandler   InviteHandler
+
+	dtmfSinkMu sync.RWMutex
+	dtmfSink   DTMFSink
+
+	transferHandlerMu sync.RWMutex
+	transferHandler   TransferHandler
+
+	callObserverMu sync.RWMutex
+	callObserver   CallLifecycleObserver
+
+	terminateMu    sync.Mutex
+	terminateHooks map[string]func(reason string)
 }
 
 var (
@@ -1094,6 +1115,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	var raw []byte
 	var codec string
 	var recSR, recOpusCh int
+	var wavRec gateway.RecordingInfo
 	if cs != nil {
 		raw = cs.TakeRecording()
 		codec = cs.NegotiatedCodec().Name
@@ -1102,6 +1124,13 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 		recOpusCh = src.OpusDecodeChannels
 		if recOpusCh < 1 {
 			recOpusCh = src.Channels
+		}
+		// Flush the new stereo PCM recorder before stopping the call
+		// session — its goroutine relies on session-owned context being
+		// alive while the final WAV is built and uploaded. Best-effort:
+		// fall through to legacy SN3 path on any failure.
+		if info, ok := cs.FlushRecorder(context.Background()); ok {
+			wavRec = info
 		}
 		cs.Stop()
 	}
@@ -1113,6 +1142,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 			Initiator:          "remote",
 			RecordSampleRate:   recSR,
 			RecordOpusChannels: recOpusCh,
+			WAVRecording:       wavRec,
 		})
 	}
 	s.forgetUASDialog(callID)

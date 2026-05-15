@@ -21,6 +21,22 @@ type pcmBridgeLeg interface {
 	WakeupRead()
 }
 
+// BridgeDirection indicates which half of a two-leg bridge a tap observes.
+type BridgeDirection int
+
+const (
+	// DirectionCallerToAgent is the caller → agent half (caller Rx → agent Tx).
+	DirectionCallerToAgent BridgeDirection = iota
+	// DirectionAgentToCaller is the agent → caller half (agent Rx → caller Tx).
+	DirectionAgentToCaller
+)
+
+// PCMTapFunc receives decoded mono PCM frames at the bridge mid-sample-rate.
+// dir lets observers separate the two halves (e.g. stereo WAV recording with
+// caller on left channel and agent on right). Implementations must copy pcm
+// before retaining it beyond the call — the buffer is re-used on the hot path.
+type PCMTapFunc func(dir BridgeDirection, pcm []byte)
+
 // TwoLegPCMBridge transcodes between two SIP legs. Transfer agent leg is PCMU/8k; inbound may be Opus, G.722, etc.
 // Mid PCM is 8 kHz mono for dual G.711, otherwise 16 kHz mono (typical Opus/PCMU bridge).
 type TwoLegPCMBridge struct {
@@ -31,7 +47,8 @@ type TwoLegPCMBridge struct {
 	c2aDec, c2aEnc, a2cDec, a2cEnc       media.EncoderFunc
 	midSampleRate                        int
 	tapMu                                sync.Mutex
-	tap                                  func([]byte) // mono PCM at midSampleRate (decoded bridge tap)
+	tap                                  func([]byte) // legacy merged tap (both directions)
+	dirTap                               PCMTapFunc   // direction-aware tap
 	startOnce                            sync.Once
 	stopOnce                             sync.Once
 }
@@ -105,19 +122,36 @@ func (b *TwoLegPCMBridge) SetPCMRecordTap(fn func([]byte)) {
 	b.tapMu.Unlock()
 }
 
-func (b *TwoLegPCMBridge) invokeTap(pcm []byte) {
+// SetDirectionalPCMTap registers a tap that receives mono PCM frames with
+// explicit direction (caller→agent or agent→caller). Prefer this over
+// SetPCMRecordTap when you need to separate the two halves, e.g. for stereo
+// WAV recording. Pass nil to unregister.
+func (b *TwoLegPCMBridge) SetDirectionalPCMTap(fn PCMTapFunc) {
+	if b == nil {
+		return
+	}
+	b.tapMu.Lock()
+	b.dirTap = fn
+	b.tapMu.Unlock()
+}
+
+func (b *TwoLegPCMBridge) invokeTap(dir BridgeDirection, pcm []byte) {
 	if b == nil || len(pcm) == 0 {
 		return
 	}
 	b.tapMu.Lock()
-	fn := b.tap
+	merged := b.tap
+	directional := b.dirTap
 	b.tapMu.Unlock()
-	if fn != nil {
-		fn(append([]byte(nil), pcm...))
+	if merged != nil {
+		merged(append([]byte(nil), pcm...))
+	}
+	if directional != nil {
+		directional(dir, append([]byte(nil), pcm...))
 	}
 }
 
-func tapPCMFromDecodedMedia(dp media.MediaPacket, tap func([]byte)) {
+func tapPCMFromDecodedMedia(dir BridgeDirection, dp media.MediaPacket, tap func(BridgeDirection, []byte)) {
 	if tap == nil || dp == nil {
 		return
 	}
@@ -126,12 +160,12 @@ func tapPCMFromDecodedMedia(dp media.MediaPacket, tap func([]byte)) {
 		return
 	case *media.AudioPacket:
 		if len(v.Payload) > 0 {
-			tap(v.Payload)
+			tap(dir, v.Payload)
 		}
 	}
 }
 
-func runPCMBridgeHalf(ctx context.Context, rx, tx pcmBridgeLeg, dec, enc media.EncoderFunc, tap func([]byte)) {
+func runPCMBridgeHalf(ctx context.Context, dir BridgeDirection, rx, tx pcmBridgeLeg, dec, enc media.EncoderFunc, tap func(BridgeDirection, []byte)) {
 	if rx == nil || tx == nil || dec == nil || enc == nil {
 		return
 	}
@@ -155,7 +189,7 @@ func runPCMBridgeHalf(ctx context.Context, rx, tx pcmBridgeLeg, dec, enc media.E
 				continue
 			}
 			if tap != nil {
-				tapPCMFromDecodedMedia(dp, tap)
+				tapPCMFromDecodedMedia(dir, dp, tap)
 			}
 			eps, err := enc(dp)
 			if err != nil {
@@ -201,11 +235,11 @@ func (b *TwoLegPCMBridge) Start() {
 		b.wg.Add(2)
 		go func() {
 			defer b.wg.Done()
-			runPCMBridgeHalf(b.ctx, b.callerRx, b.agentTx, b.c2aDec, b.c2aEnc, b.invokeTap)
+			runPCMBridgeHalf(b.ctx, DirectionCallerToAgent, b.callerRx, b.agentTx, b.c2aDec, b.c2aEnc, b.invokeTap)
 		}()
 		go func() {
 			defer b.wg.Done()
-			runPCMBridgeHalf(b.ctx, b.agentRx, b.callerTx, b.a2cDec, b.a2cEnc, b.invokeTap)
+			runPCMBridgeHalf(b.ctx, DirectionAgentToCaller, b.agentRx, b.callerTx, b.a2cDec, b.a2cEnc, b.invokeTap)
 		}()
 	})
 }
