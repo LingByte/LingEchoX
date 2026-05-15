@@ -7,11 +7,11 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/cmd/bootstrap"
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/response"
-	"github.com/LingByte/SoulNexus/pkg/utils"
-	"github.com/LingByte/SoulNexus/pkg/utils/access"
+	"github.com/LinByte/VoiceServer/cmd/bootstrap"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/response"
+	"github.com/LinByte/VoiceServer/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

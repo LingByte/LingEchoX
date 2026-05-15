@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 )
 
 var sipTurnPersist func(ctx context.Context, callID string, turn DialogTurn)

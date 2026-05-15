@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // NewResponse builds a SIP response with common headers copied from the request (From, To, Call-ID, CSeq, Via).

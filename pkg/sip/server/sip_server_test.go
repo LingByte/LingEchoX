@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 func TestSIPServer_HandleInvite_Builds200OKWithSDP(t *testing.T) {

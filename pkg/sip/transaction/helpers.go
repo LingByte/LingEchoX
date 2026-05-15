@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // TopVia returns the first Via header field-value (SIP message order: top-most Via).

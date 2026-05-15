@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/media/encoder"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media/encoder"
 )
 
 // pcmBridgeLeg is the minimal read/write + codec surface for PCM bridging (SIP RTP or WebRTC).

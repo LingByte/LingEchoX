@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/qiniu/go-sdk/v7/auth/qbox"
 	"github.com/qiniu/go-sdk/v7/storage"
 )

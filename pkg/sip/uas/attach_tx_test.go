@@ -5,8 +5,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/transaction"
 )
 
 func TestWrapHandlersWithTransaction_NoMgr(t *testing.T) {

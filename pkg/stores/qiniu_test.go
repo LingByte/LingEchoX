@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 
 func readAll(t *testing.T, r io.Reader) string {

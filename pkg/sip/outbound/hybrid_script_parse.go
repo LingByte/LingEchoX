@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 )
 
 // HybridScript is a deterministic skeleton where each step has bounded retries/timeouts.

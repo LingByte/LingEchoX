@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
-	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	sipServer "github.com/LingByte/SoulNexus/pkg/sip/server"
-	"github.com/LingByte/SoulNexus/pkg/stores"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/scriptlisten"
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	sipServer "github.com/LinByte/VoiceServer/pkg/sip/server"
+	"github.com/LinByte/VoiceServer/pkg/stores"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

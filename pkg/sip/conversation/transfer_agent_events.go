@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
-	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
+	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"go.uber.org/zap"
 )
 

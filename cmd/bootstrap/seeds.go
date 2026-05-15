@@ -4,12 +4,12 @@ package bootstrap
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/constants"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/utils"
-	"github.com/LingByte/SoulNexus/pkg/utils/access"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils/access"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

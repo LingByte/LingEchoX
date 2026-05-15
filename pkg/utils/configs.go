@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -364,7 +364,7 @@ func LoadEnv(env string) error {
 		if strings.HasPrefix(strings.ToLower(key), "export ") {
 			key = strings.TrimSpace(key[len("export "):])
 		}
-	value := trimEnvValue(strings.TrimSpace(parts[1]))
+		value := trimEnvValue(strings.TrimSpace(parts[1]))
 		os.Setenv(key, value)
 	}
 

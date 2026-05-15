@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // inviteServerTx tracks a UAS INVITE transaction after a final response was sent (RFC 3261 §17.2.1).

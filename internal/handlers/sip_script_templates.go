@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/middleware"
-	"github.com/LingByte/SoulNexus/pkg/response"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/middleware"
+	"github.com/LinByte/VoiceServer/pkg/response"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 

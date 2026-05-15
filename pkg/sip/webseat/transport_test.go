@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media"
 )
 
 func TestTransport_StringAndNilTracks(t *testing.T) {

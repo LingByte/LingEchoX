@@ -5,10 +5,10 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
-	"github.com/LingByte/SoulNexus/pkg/sip/uas"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/transaction"
+	"github.com/LinByte/VoiceServer/pkg/sip/uas"
 	"go.uber.org/zap"
 )
 

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // nonInviteServerTx absorbs UDP retransmissions of a non-INVITE request after a final was sent (RFC 3261 §17.2.2 Timer J window).

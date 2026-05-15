@@ -10,7 +10,7 @@ import (
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
-	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )

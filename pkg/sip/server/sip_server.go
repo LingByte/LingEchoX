@@ -12,14 +12,14 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
-	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/transaction"
+	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
 	"go.uber.org/zap"
 )
 
@@ -33,7 +33,7 @@ import (
 type SIPServer struct {
 	ep *stack.Endpoint
 
-	txMgr       *transaction.Manager
+	txMgr        *transaction.Manager
 	pendingInvMu sync.Mutex
 	pendingInv   map[string]pendingInviteSnap
 
@@ -56,7 +56,7 @@ type SIPServer struct {
 
 	inboundCapMu sync.RWMutex
 	// Optional: per-DID inbound capacity for this process (see TrunkCapacityTracker). Return ok=false to reject INVITE.
-	inboundCapacityGate func(callID, calledUser string) (ok bool, sipStatus int, reason string)
+	inboundCapacityGate    func(callID, calledUser string) (ok bool, sipStatus int, reason string)
 	inboundCapacityRelease func(callID string)
 
 	// Default false: reject INVITE when inbound DID binding yields tenant_id=0 (unknown DID). Set true for demo / legacy single-tenant passthrough.

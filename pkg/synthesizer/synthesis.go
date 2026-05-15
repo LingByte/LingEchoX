@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/media/encoder"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media/encoder"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/sirupsen/logrus"
 )
 

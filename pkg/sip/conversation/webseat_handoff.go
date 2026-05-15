@@ -3,8 +3,8 @@ package conversation
 import (
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
 	"go.uber.org/zap"
 )
 

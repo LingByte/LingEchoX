@@ -13,10 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
-	"github.com/LingByte/SoulNexus/pkg/llm"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
+	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/llm"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )

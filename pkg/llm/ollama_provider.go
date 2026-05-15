@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"go.uber.org/zap"
 )
 

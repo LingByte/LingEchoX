@@ -5,15 +5,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // Manager routes SIP responses to UAC client transactions and tracks UAS INVITE / non-INVITE server transactions.
 type Manager struct {
-	mu           sync.Mutex
-	inviteTx     map[string]*inviteClientTx
-	inviteServer map[string]*inviteServerTx
-	nonInvite    map[string]*nonInviteServerTx
+	mu              sync.Mutex
+	inviteTx        map[string]*inviteClientTx
+	inviteServer    map[string]*inviteServerTx
+	nonInvite       map[string]*nonInviteServerTx
 	nonInviteClient map[string]*nonInviteClientTx
 
 	// pendingInviteByCall tracks INVITEs not yet answered with a final (for CANCEL matching by Call-ID + CSeq).

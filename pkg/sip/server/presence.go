@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // Minimal in-memory presence broker: SUBSCRIBE (Event: presence) + PUBLISH (application/pidf+xml)

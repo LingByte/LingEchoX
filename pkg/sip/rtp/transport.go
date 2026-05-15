@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/sip/dtmf"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/sip/dtmf"
 )
 
 // DefaultJitterPlaybackDelay is the default inbound playout delay (reorder + smoothing).

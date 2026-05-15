@@ -4,7 +4,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 
 // Copyright (c) 2026 LingByte

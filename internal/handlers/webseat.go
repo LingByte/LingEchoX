@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
 	"github.com/gin-gonic/gin"
 )
 

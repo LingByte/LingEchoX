@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/sashabaranov/go-openai"
 	"go.uber.org/zap"
 )

@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
 	"go.uber.org/zap"
 )
 

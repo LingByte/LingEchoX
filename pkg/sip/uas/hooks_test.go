@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 func TestHandlers_AttachNilEndpoint(t *testing.T) {

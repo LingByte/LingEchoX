@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // RegisterPendingInviteServer records an inbound INVITE before a final response is sent, so CANCEL

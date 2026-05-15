@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )

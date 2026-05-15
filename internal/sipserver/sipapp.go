@@ -7,17 +7,17 @@ import (
 	"os"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
-	"github.com/LingByte/SoulNexus/pkg/sip/persist"
-	"github.com/LingByte/SoulNexus/pkg/sip/server"
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
-	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
+	"github.com/LinByte/VoiceServer/pkg/sip/persist"
+	"github.com/LinByte/VoiceServer/pkg/sip/server"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
+	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -234,10 +234,10 @@ func Start(cfg Config) (*Embedded, error) {
 	})
 
 	sipServerPtr = server.New(server.Config{
-		Host:          cfg.Host,
-		Port:          cfg.Port,
-		LocalIP:       localIP,
-		OnSIPResponse: outMgr.HandleSIPResponse,
+		Host:                              cfg.Host,
+		Port:                              cfg.Port,
+		LocalIP:                           localIP,
+		OnSIPResponse:                     outMgr.HandleSIPResponse,
 		OutboundBYELegCleanup:             outMgr.CleanupLegIfPresent,
 		TransferBridgeInboundFromOutbound: outMgr.InboundCallIDForEstablishedTransferBridge,
 	})

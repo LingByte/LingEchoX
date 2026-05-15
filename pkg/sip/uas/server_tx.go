@@ -4,8 +4,8 @@ import (
 	"context"
 	"net"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/transaction"
 )
 
 // ChainInviteServerTx wraps an INVITE handler: duplicate INVITE retransmissions are absorbed by mgr

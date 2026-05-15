@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/gorm"
 )
 

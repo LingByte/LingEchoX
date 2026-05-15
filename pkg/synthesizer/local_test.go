@@ -7,7 +7,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/stretchr/testify/assert"
 )
 

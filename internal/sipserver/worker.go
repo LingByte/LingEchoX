@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
-	"github.com/LingByte/SoulNexus/pkg/sip/persist"
-	"github.com/LingByte/SoulNexus/pkg/task"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
+	"github.com/LinByte/VoiceServer/pkg/sip/persist"
+	"github.com/LinByte/VoiceServer/pkg/task"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

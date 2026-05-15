@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 
 func tsRFC3339Nano() string {

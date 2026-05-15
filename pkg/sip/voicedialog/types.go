@@ -5,9 +5,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	"github.com/LingByte/SoulNexus/pkg/synthesizer"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	"github.com/gorilla/websocket"
 )
 

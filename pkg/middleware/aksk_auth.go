@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -137,4 +137,3 @@ func readBodyForSigning(c *gin.Context) ([]byte, error) {
 func abortAuthJSON(c *gin.Context, httpStatus, code int, msg string) {
 	c.AbortWithStatusJSON(httpStatus, gin.H{"code": code, "msg": msg, "data": nil})
 }
-

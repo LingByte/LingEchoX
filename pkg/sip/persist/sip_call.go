@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )

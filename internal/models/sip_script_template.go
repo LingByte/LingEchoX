@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )

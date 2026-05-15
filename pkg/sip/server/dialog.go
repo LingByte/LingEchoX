@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 type uasDialogState struct {

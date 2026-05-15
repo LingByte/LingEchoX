@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"go.uber.org/zap"
 )
 

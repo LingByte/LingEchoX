@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 )
 
 // CanRawDatagramRelay is true when both legs share the same codec clock/channels so RTP payloads
@@ -84,7 +84,7 @@ type TwoLegPayloadRelay struct {
 	agentDTMF  uint8
 
 	// Baseline from SDP at Start(); refreshed from each ReadFromUDP (symmetric RTP), like legacy startRTPBridge addr learning.
-	mu sync.Mutex
+	mu            sync.Mutex
 	lastCallerRTP *net.UDPAddr
 	lastAgentRTP  *net.UDPAddr
 
@@ -290,4 +290,3 @@ func mapRelayPayloadType(cur uint8, srcAudioPT, srcDTMF, dstAudioPT, dstDTMF uin
 	}
 	return 0, false
 }
-

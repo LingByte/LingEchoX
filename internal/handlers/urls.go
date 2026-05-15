@@ -4,13 +4,13 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"github.com/LingByte/SoulNexus/cmd/bootstrap"
-	"github.com/LingByte/SoulNexus/internal/sipserver"
-	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/constants"
-	"github.com/LingByte/SoulNexus/pkg/middleware"
-	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/cmd/bootstrap"
+	"github.com/LinByte/VoiceServer/internal/sipserver"
+	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/middleware"
+	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

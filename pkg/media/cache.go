@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"go.uber.org/zap"
 )
 

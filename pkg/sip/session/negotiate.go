@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 )
 
 // NegotiateOffer picks the first supported audio codec from a remote SDP offer (ordered by preference).

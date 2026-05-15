@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/media/encoder"
-	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media/encoder"
+	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 	"go.uber.org/zap"
 )
 

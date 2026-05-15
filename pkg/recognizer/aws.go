@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/sirupsen/logrus"

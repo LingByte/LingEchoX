@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/scriptlisten"
-	sipdtmf "github.com/LingByte/SoulNexus/pkg/sip/dtmf"
-	"github.com/LingByte/SoulNexus/pkg/sip/outbound"
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
-	"github.com/LingByte/SoulNexus/pkg/sip/webseat"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/scriptlisten"
+	sipdtmf "github.com/LinByte/VoiceServer/pkg/sip/dtmf"
+	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"go.uber.org/zap"
 )
 

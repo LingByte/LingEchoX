@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/uas"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/uas"
 )
 
 type digestNonce struct {
@@ -18,9 +18,9 @@ type digestNonce struct {
 }
 
 type sipDigestAuth struct {
-	realm string
-	user  string
-	pass  string
+	realm  string
+	user   string
+	pass   string
 	mu     sync.Mutex
 	nonces map[string]digestNonce
 }

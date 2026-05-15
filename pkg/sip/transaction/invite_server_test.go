@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 func uasInvite(t *testing.T) *stack.Message {

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/carlmjohnson/requests"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"

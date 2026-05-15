@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/utils/access"
+	"github.com/LinByte/VoiceServer/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 )
 

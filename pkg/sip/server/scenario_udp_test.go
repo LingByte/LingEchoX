@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 func TestSIPServer_UDP_RegisterInviteAckRTPBye(t *testing.T) {

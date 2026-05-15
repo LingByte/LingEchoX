@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

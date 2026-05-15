@@ -3,7 +3,7 @@ package transaction
 import (
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // RouteHeadersForDialog returns Route header field-values for a subsequent in-dialog request,

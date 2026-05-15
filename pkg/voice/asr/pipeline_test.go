@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/recognizer"
+	"github.com/LinByte/VoiceServer/pkg/recognizer"
 )
 
 type fakeASR struct {
@@ -23,10 +23,10 @@ func (f *fakeASR) Init(onResult recognizer.TranscribeResult, onError recognizer.
 	f.onErr = onError
 }
 
-func (f *fakeASR) Vendor() string { return "fake" }
+func (f *fakeASR) Vendor() string                { return "fake" }
 func (f *fakeASR) ConnAndReceive(_ string) error { return nil }
-func (f *fakeASR) Activity() bool { return true }
-func (f *fakeASR) RestartClient() {}
+func (f *fakeASR) Activity() bool                { return true }
+func (f *fakeASR) RestartClient()                {}
 
 func (f *fakeASR) SendAudioBytes(pcmData []byte) error {
 	f.mu.Lock()
@@ -93,4 +93,3 @@ func TestPipeline_ProcessPCM_EmitsText(t *testing.T) {
 		t.Fatalf("expected metrics to record audio bytes")
 	}
 }
-

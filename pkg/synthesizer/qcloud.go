@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/sirupsen/logrus"
 	"github.com/tencentcloud/tencentcloud-speech-sdk-go/common"
 	"github.com/tencentcloud/tencentcloud-speech-sdk-go/tts"

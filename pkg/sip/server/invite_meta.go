@@ -3,7 +3,7 @@ package server
 import (
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/voicedialog"
+	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
 )
 
 // inviteBrief captures INVITE headers + signaling source for HTTP/dialog bridges (WebSocket meta).

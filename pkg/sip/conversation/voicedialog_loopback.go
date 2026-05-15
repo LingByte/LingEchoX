@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/llm"
-	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/llm"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"go.uber.org/zap"
 )
 

@@ -3,7 +3,7 @@ package outbound
 import (
 	"context"
 
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 )
 
 // TransferCoordinator bridges an inbound caller to an agent reached via a second SIP leg.

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -44,7 +44,6 @@ func RandText(n int) string {
 func RandNumberText(n int) string {
 	return randRunes(n, numberRunes)
 }
-
 
 func SafeCall(f func() error, failHandle func(error)) error {
 	defer func() {

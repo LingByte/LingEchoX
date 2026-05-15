@@ -1,4 +1,4 @@
-module github.com/LingByte/SoulNexus
+module github.com/LinByte/VoiceServer
 
 go 1.25
 

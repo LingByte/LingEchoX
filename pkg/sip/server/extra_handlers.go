@@ -4,7 +4,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 func (s *SIPServer) handleNotify(msg *stack.Message, addr *net.UDPAddr) *stack.Message {

@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // inviteParams carries dialog fields needed for INVITE and later ACK.

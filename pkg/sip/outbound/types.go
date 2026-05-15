@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 )
 
 // Scenario classifies why an outbound leg exists. Extensible without changing core SIP types.

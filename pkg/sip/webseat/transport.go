@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/pion/webrtc/v3"
 	pionmedia "github.com/pion/webrtc/v3/pkg/media"
 )
@@ -17,9 +17,9 @@ import (
 // - This does not expose ICE/SDP signaling; it's a media transport only.
 // - Duration calculation is approximate and depends on codec + payload framing.
 type Transport struct {
-	rxTrack  *webrtc.TrackRemote
-	txTrack  *webrtc.TrackLocalStaticSample
-	codec    media.CodecConfig
+	rxTrack *webrtc.TrackRemote
+	txTrack *webrtc.TrackLocalStaticSample
+	codec   media.CodecConfig
 }
 
 func NewTransport(rx *webrtc.TrackRemote, tx *webrtc.TrackLocalStaticSample, codec media.CodecConfig) *Transport {

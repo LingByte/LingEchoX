@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/media/encoder"
+	"github.com/LinByte/VoiceServer/pkg/media/encoder"
 )
 
 // recMixPeakThreshold mirrors sip/server recording mix: gentle peak scaling before hard clip.

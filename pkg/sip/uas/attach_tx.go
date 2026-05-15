@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
-	"github.com/LingByte/SoulNexus/pkg/sip/transaction"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/transaction"
 )
 
 // TransactionBinding wires a transaction.Manager and signaling Send path for UAS server-tx behavior.

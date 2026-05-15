@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 // InviteHandler handles an inbound INVITE. Return nil, nil to send nothing (rare); return an error to answer 500.

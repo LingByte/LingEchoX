@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/conversation"
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )

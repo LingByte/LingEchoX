@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/config"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	sipPersist "github.com/LingByte/SoulNexus/pkg/sip/persist"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	sipPersist "github.com/LinByte/VoiceServer/pkg/sip/persist"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

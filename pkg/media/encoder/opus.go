@@ -8,7 +8,7 @@ package encoder
 //	"runtime"
 //	"strings"
 //
-//	"github.com/LingByte/SoulNexus/pkg/media"
+//	"github.com/LinByte/VoiceServer/pkg/media"
 //	"github.com/hraban/opus"
 //)
 //

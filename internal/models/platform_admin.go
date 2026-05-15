@@ -4,8 +4,8 @@ package models
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"github.com/LingByte/SoulNexus/pkg/constants"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/gorm"
 )
 

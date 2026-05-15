@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/driver/sqlite"

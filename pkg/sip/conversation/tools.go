@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/llm"
+	"github.com/LinByte/VoiceServer/pkg/llm"
 	"go.uber.org/zap"
 )
 

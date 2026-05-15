@@ -3,7 +3,7 @@ package stores
 import (
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 
 // PublicObjectURL returns a fetchable URL for an uploaded object. Cloud backends usually return an absolute

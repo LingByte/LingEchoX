@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
 

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/config"
 	"github.com/gin-gonic/gin"
 )
 

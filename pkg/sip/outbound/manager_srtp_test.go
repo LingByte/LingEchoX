@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/rtp"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 )
 
 func TestApplyOutboundAnswerSRTP_downgradesToPlainRTP(t *testing.T) {

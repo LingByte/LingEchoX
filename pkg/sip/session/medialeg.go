@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/media/encoder"
-	siprtp "github.com/LingByte/SoulNexus/pkg/sip/rtp"
-	"github.com/LingByte/SoulNexus/pkg/sip/sdp"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media/encoder"
+	siprtp "github.com/LinByte/VoiceServer/pkg/sip/rtp"
+	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 )
 
 const defaultOutputQueue = 512

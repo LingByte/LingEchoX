@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media"
 )
 
 // LoadWAVAsPCM16Mono reads a PCM WAV file and returns mono s16le PCM at targetSampleRate.

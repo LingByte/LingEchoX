@@ -4,7 +4,7 @@ package encoder
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"github.com/LingByte/SoulNexus/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media"
 )
 
 func createPCMADecode(src, pcm media.CodecConfig) media.EncoderFunc {

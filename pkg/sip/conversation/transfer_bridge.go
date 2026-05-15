@@ -4,11 +4,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/media"
-	"github.com/LingByte/SoulNexus/pkg/sip/bridge"
-	siprtp "github.com/LingByte/SoulNexus/pkg/sip/rtp"
-	sipSession "github.com/LingByte/SoulNexus/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/sip/bridge"
+	siprtp "github.com/LinByte/VoiceServer/pkg/sip/rtp"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"go.uber.org/zap"
 )
 

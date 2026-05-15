@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 )
 
 type inMemoryRecorder struct {

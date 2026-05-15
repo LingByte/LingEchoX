@@ -3,7 +3,7 @@ package persist
 import (
 	"time"
 
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 
 // EnvRegisterFreshSeconds is the process env key for REGISTER binding staleness (seconds).

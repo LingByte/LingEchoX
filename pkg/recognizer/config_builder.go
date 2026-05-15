@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"cloud.google.com/go/speech/apiv1/speechpb"
-	"github.com/LingByte/SoulNexus/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 
 // ConfigReader 配置读取器 - 简化配置读取逻辑

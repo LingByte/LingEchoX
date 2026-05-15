@@ -3,7 +3,7 @@ package models
 import (
 	"errors"
 
-	"github.com/LingByte/SoulNexus/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"gorm.io/gorm"
 )
 

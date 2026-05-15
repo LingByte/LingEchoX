@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LingByte/SoulNexus/internal/models"
-	"github.com/LingByte/SoulNexus/pkg/logger"
-	"github.com/LingByte/SoulNexus/pkg/sip/persist"
+	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/persist"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -90,4 +90,3 @@ func (c *SIPUserOnlineCleaner) sweep() {
 		logger.Lg.Info("acd shift cleaner marked seats offline", zap.Int64("rows", shiftRows))
 	}
 }
-

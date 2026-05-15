@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LingByte/SoulNexus/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
 func buildBYE(inv inviteParams, toHeader200, requestURI string, cseq int, branch string) *stack.Message {
