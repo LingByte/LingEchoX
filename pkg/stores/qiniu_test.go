@@ -59,18 +59,16 @@ func TestQiNiuCRUD(t *testing.T) {
 		Private:    private,
 		Region:     utils.GetEnv("QINIU_REGION"),
 	}
-
-	bucketName := store.BucketName
 	key := "test-go-lingecho/" + time.Now().Format("20060102-150405") + ".txt"
 	content := "hello-from-integration"
 
 	// 1) Write
-	if err := store.Write(bucketName, key, bytes.NewBufferString(content)); err != nil {
+	if err := store.Write(key, bytes.NewBufferString(content)); err != nil {
 		t.Fatalf("Write err: %v", err)
 	}
 
 	// 2) Exists should be true
-	ok, err := store.Exists(bucketName, key)
+	ok, err := store.Exists(key)
 	if err != nil {
 		t.Fatalf("Exists err: %v", err)
 	}
@@ -79,7 +77,7 @@ func TestQiNiuCRUD(t *testing.T) {
 	}
 
 	// 3) Read
-	rc, _, err := store.Read(bucketName, key)
+	rc, _, err := store.Read(key)
 	if err != nil {
 		t.Fatalf("Read err: %v", err)
 	}
@@ -90,7 +88,7 @@ func TestQiNiuCRUD(t *testing.T) {
 	}
 
 	// 4) PublicURL
-	u := store.PublicURL(bucketName, key)
+	u := store.PublicURL(key)
 	if !strings.HasPrefix(u, "http") {
 		t.Fatalf("PublicURL invalid: %s", u)
 	}
@@ -99,12 +97,12 @@ func TestQiNiuCRUD(t *testing.T) {
 	}
 
 	// 5) Delete
-	if err := store.Delete(bucketName, key); err != nil {
+	if err := store.Delete(key); err != nil {
 		t.Fatalf("Delete err: %v", err)
 	}
 
 	// 6) Exists should be false
-	ok, err = store.Exists(bucketName, key)
+	ok, err = store.Exists(key)
 	if err != nil {
 		// 删除后 Stat 可能返回 612，我们在 Exists 里已处理为 false,nil
 		// 如果这里仍返回错误，说明 SDK 行为变更或网络异常

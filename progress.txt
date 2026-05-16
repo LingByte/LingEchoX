@@ -75,6 +75,64 @@ HandleSIPINFODTMF、TriggerTransferFromReferTo 需要逐一映射。
 - [x] voice.go：resample 失败时不再以错误采样率写 recorder（避免 pitch-shift 静电）
 - [x] voice.go：playWelcomeWav 接入 recordTap，欢迎语不再录音缺失
 - [x] voice.go：streamPlainTextToTTS 同步接入 cs.WriteAIPCM
+- [x] **录音分片上传 + 流式合并 Flush（C 方案）**
+        2026-05-16。彻底重构 pkg/voice/recorder 的录音存储路径：
+        ① **Session-wide 共享 base + per-leg 持久化 pen**：新增 `legPlacer`
+          流式放置器，跨多次 chunker tick 维护连续 per-leg 时间轴；
+          `sessionBaseNs` 在第一帧 lazy-set，所有后续 chunk 共享 t=0。
+        ② **每 chunk 三文件**：wav (playable, ops afplay 可直接听) +
+          -L.pcm (raw mono) + -R.pcm (raw mono)，前者独立可播放，后两者
+          为最终合并提供按字节顺序拼接源。manifest (`chunkManifest`) 在
+          内存维护，按 seq 排序。
+        ③ **真帧驱逐**：chunker 上传成功后 `trimFramesFront` 重新分配
+          inSegs/outSegs 切片，释放底层数组让 GC 回收已放置的 PCM 字节。
+          对 1 小时通话 (16k 立体声) 内存峰值从 ~230MB→~O(ChunkInterval)。
+        ④ **流式 Flush**：通过 `io.Pipe` + writer goroutine：
+            - dry-pass 累计 manifest+tail 算总长度，写 WAV header；
+            - `partReaderChain` 懒打开每个 part PCM (任意时刻只有 1 个
+              HTTP body 流)，按 lKey/rKey 顺序拼成 leftReader/rightReader；
+            - `streamInterleave` 按 1024-sample block 交错合并 L/R 写入
+              pipe，`io.MultiWriter` 同步喂给 sha256 hasher 和 byte counter；
+            - `store.Write(key, pipeReader)` 并发消费——S3/COS 等支持
+              multipart 的后端会自动分片上传，本地盘流式落文件。
+            - 失败回退：`pr.CloseWithError` 优雅取消 writer goroutine 防泄漏。
+        ⑤ **并发安全**：chunker 与 Flush 竞态用 `r.flushed` 标志保护——
+          Flush 期间 chunker 上传完检测到 flushed=true 自删 3 个 orphan
+          文件，不会双放置/丢帧；Flush 自己用最新 placer state 处理 tail
+          frames，效果完全等价于 chunker 接力。
+        ⑥ **新增回归测试 3 个**：
+          - `TestRecorder_ChunkedFlushEqualsMonolithic`：分片+流式 Flush
+            vs 单次内存 Flush 在相同输入下输出大小 ±2% 一致；
+          - `TestRecorder_FrameEvictionBoundedMemory`：50 帧/500ms 输入，
+            chunker 跑完 inSegs/outSegs 残留 ≤10 帧（验证驱逐生效）；
+          - `TestRecorder_StreamMergeFromExistingParts`：白盒构造 manifest
+            + 手塞 part PCM，验证 partReaderChain 在 chunk 边界、leg-长度
+            不等、L 提前耗尽等场景下逐 sample 拼接正确。
+        memStore 同步加 sync.Mutex 防 chunker/Flush 并发竞态，Read 实装
+        从 map 取字节流（之前是 no-op，现在 Flush 真要调）。
+        全量 `go test ./pkg/voice/recorder/...` PASS；除一例与本次改动
+        无关的 pkg/response/TestFriendlyErrorMessages/未知错误外全 PASS。
+- [x] **存储栈瘦身：移除 typed StorageConfig / 全部 bucket 参数**
+        2026-05-16。pkg/stores Store 接口已改为 `Write(key, r) / Read(key) /
+        Delete(key) / Exists(key) / PublicURL(key)` —— 后端 (cos/s3/oss/minio
+        /qiniu/local) 自己持有 BucketName 字段从环境变量读取，调用方一律不
+        再传 bucket。同步清理：
+        - pkg/config/config.go 删除 `StorageConfig` 结构体与 ServicesConfig
+          里对应字段，同时去掉 GlobalConfig → os.Setenv 的双向 mirroring；
+        - pkg/voice/recorder.Config 删除 Bucket 字段（包括默认 bucket fallback
+          "voiceserver-recordings"），Flush 改用 stores.PublicObjectURL 解析
+          URL，找不到 PublicURL 时回退到 raw key；
+        - pkg/voice/gateway.RecordingInfo 删除 Bucket 字段；
+        - pkg/sip/persist/call_store.go 去掉 STORAGE_BUCKET env 桥接、
+          所有 store.Write / PublicObjectURL 调用改单参；
+        - pkg/sip/conversation/voice.go 删除 SIP_RECORDER_BUCKET 处理；
+        - pkg/stores/{object_url,resolve_upload}.go 函数签名删 bucketName；
+        - internal/handlers/tenant_users.go 上传头像同步收敛；
+        - 测试侧：pkg/voice/recorder/recorder_test.go 的 memStore、
+          pkg/sip/session/recorder_test.go 的 fakeStore 接口签名同步更新；
+          pkg/sip/webseat/hub_test.go 不再断言 wav.Bucket。
+        全量 `go build ./...` 通过；除一例与本次改动无关的
+        TestFriendlyErrorMessages/未知错误（pkg/response）外所有测试 PASS。
 - [x] **录音 jitter snap 阈值环境变量化 + 采样率运行时校验（小修）**
         2026-05-16。两个改进合并交付：
         ① 抽出 `utils.RecordingJitterSnapNs()` 共享 helper（默认 80ms，

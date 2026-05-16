@@ -2,7 +2,6 @@ package outbound
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -28,9 +27,12 @@ func TestFormatOutboundFromHeader_CallerID(t *testing.T) {
 	if noDisp != wantNo {
 		t.Fatalf("no display: got %q want %q", noDisp, wantNo)
 	}
+	// 中文 display name 走 RFC 2047 MIME encoded-word（国内运营商 SBC 兼容）。
+	// "客服热线" 的 UTF-8 base64 = "5a6i5pyN54Ot57q/"。
 	withDisp := formatOutboundFromHeader("客服热线", "4001880771", "192.0.2.1", 6050, tag)
-	if !strings.HasPrefix(withDisp, `"客服热线" <sip:4001880771@192.0.2.1:6050>;tag=`+tag) {
-		t.Fatalf("with display: %q", withDisp)
+	want := "=?UTF-8?B?5a6i5pyN54Ot57q/?= <sip:4001880771@192.0.2.1:6050>;tag=" + tag
+	if withDisp != want {
+		t.Fatalf("with display: got %q want %q", withDisp, want)
 	}
 }
 

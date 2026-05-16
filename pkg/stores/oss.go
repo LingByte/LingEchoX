@@ -19,7 +19,7 @@ type OSSStore struct {
 }
 
 // Delete implements Store.
-func (o *OSSStore) Delete(bucketName string, key string) error {
+func (o *OSSStore) Delete(key string) error {
 	if o.AccessKeyID == "" || o.AccessKeySecret == "" || o.Endpoint == "" {
 		return fmt.Errorf("OSS credentials not configured")
 	}
@@ -29,11 +29,7 @@ func (o *OSSStore) Delete(bucketName string, key string) error {
 		return fmt.Errorf("failed to create OSS client: %v", err)
 	}
 
-	if bucketName == "" {
-		bucketName = o.BucketName
-	}
-
-	bucket, err := client.Bucket(bucketName)
+	bucket, err := client.Bucket(o.BucketName)
 	if err != nil {
 		return fmt.Errorf("failed to get bucket: %v", err)
 	}
@@ -43,7 +39,7 @@ func (o *OSSStore) Delete(bucketName string, key string) error {
 }
 
 // Exists implements Store.
-func (o *OSSStore) Exists(bucketName string, key string) (bool, error) {
+func (o *OSSStore) Exists(key string) (bool, error) {
 	if o.AccessKeyID == "" || o.AccessKeySecret == "" || o.Endpoint == "" {
 		return false, fmt.Errorf("OSS credentials not configured")
 	}
@@ -53,11 +49,7 @@ func (o *OSSStore) Exists(bucketName string, key string) (bool, error) {
 		return false, fmt.Errorf("failed to create OSS client: %v", err)
 	}
 
-	if bucketName == "" {
-		bucketName = o.BucketName
-	}
-
-	bucket, err := client.Bucket(bucketName)
+	bucket, err := client.Bucket(o.BucketName)
 	if err != nil {
 		return false, fmt.Errorf("failed to get bucket: %v", err)
 	}
@@ -67,7 +59,7 @@ func (o *OSSStore) Exists(bucketName string, key string) (bool, error) {
 }
 
 // Read implements Store.
-func (o *OSSStore) Read(bucketName string, key string) (io.ReadCloser, int64, error) {
+func (o *OSSStore) Read(key string) (io.ReadCloser, int64, error) {
 	if o.AccessKeyID == "" || o.AccessKeySecret == "" || o.Endpoint == "" {
 		return nil, 0, fmt.Errorf("OSS credentials not configured")
 	}
@@ -77,11 +69,7 @@ func (o *OSSStore) Read(bucketName string, key string) (io.ReadCloser, int64, er
 		return nil, 0, fmt.Errorf("failed to create OSS client: %v", err)
 	}
 
-	if bucketName == "" {
-		bucketName = o.BucketName
-	}
-
-	bucket, err := client.Bucket(bucketName)
+	bucket, err := client.Bucket(o.BucketName)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to get bucket: %v", err)
 	}
@@ -109,7 +97,7 @@ func (o *OSSStore) Read(bucketName string, key string) (io.ReadCloser, int64, er
 }
 
 // Write implements Store.
-func (o *OSSStore) Write(bucketName string, key string, r io.Reader) error {
+func (o *OSSStore) Write(key string, r io.Reader) error {
 	if o.AccessKeyID == "" || o.AccessKeySecret == "" || o.Endpoint == "" {
 		return fmt.Errorf("OSS credentials not configured")
 	}
@@ -119,11 +107,7 @@ func (o *OSSStore) Write(bucketName string, key string, r io.Reader) error {
 		return fmt.Errorf("failed to create OSS client: %v", err)
 	}
 
-	if bucketName == "" {
-		bucketName = o.BucketName
-	}
-
-	bucket, err := client.Bucket(bucketName)
+	bucket, err := client.Bucket(o.BucketName)
 	if err != nil {
 		return fmt.Errorf("failed to get bucket: %v", err)
 	}
@@ -132,16 +116,13 @@ func (o *OSSStore) Write(bucketName string, key string, r io.Reader) error {
 	return err
 }
 
-func (o *OSSStore) PublicURL(bucketName string, key string) string {
-	if bucketName == "" {
-		bucketName = o.BucketName
-	}
+func (o *OSSStore) PublicURL(key string) string {
 	if o.baseURL != "" {
 		return fmt.Sprintf("%s/%s", strings.TrimRight(o.baseURL, "/"), key)
 	}
 	endpoint := strings.TrimPrefix(o.Endpoint, "http://")
 	endpoint = strings.TrimPrefix(endpoint, "https://")
-	return fmt.Sprintf("https://%s.%s/%s", bucketName, endpoint, key)
+	return fmt.Sprintf("https://%s.%s/%s", o.BucketName, endpoint, key)
 }
 
 func NewOSSStore() Store {

@@ -880,7 +880,12 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 	if addr != nil {
 		remoteSig = addr.String()
 	}
-	s.storeInviteBrief(callID, msg.GetHeader("From"), msg.GetHeader("To"), remoteSig)
+	fromHdr := msg.GetHeader("From")
+	s.storeInviteBrief(callID, fromHdr, msg.GetHeader("To"), remoteSig)
+	// Hand the raw From over to the CallSession so transfer-to-agent can
+	// display the original PSTN caller's number on the agent's phone
+	// instead of the platform's trunk number (e.g. 400-xxx).
+	cs.SetRemoteFromHeader(fromHdr)
 
 	// IMPORTANT: Do not start media until ACK (call established).
 

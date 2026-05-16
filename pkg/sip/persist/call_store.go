@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/config"
 	"github.com/LinByte/VoiceServer/pkg/scriptlisten"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
 	sipServer "github.com/LinByte/VoiceServer/pkg/sip/server"
@@ -112,7 +111,7 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	// resulting URL/Bytes and skip the SN3 → WAV decode below entirely.
 	// SN3 RawPayload remains stored as recording_raw_bytes for now in case
 	// dashboards still want the per-frame timeline; it is not re-uploaded.
-	if wav := p.WAVRecording; wav.URL != "" || (wav.Bucket != "" && wav.Key != "") {
+	if wav := p.WAVRecording; wav.URL != "" || wav.Key != "" {
 		if wav.URL != "" {
 			updates["recording_url"] = wav.URL
 		}
@@ -142,10 +141,6 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 
 	c := strings.ToLower(codecName)
 	store := stores.Default()
-	bucket := ""
-	if config.GlobalConfig != nil {
-		bucket = strings.TrimSpace(config.GlobalConfig.Services.Storage.Bucket)
-	}
 	var wav []byte
 	if len(raw) > 0 && store != nil {
 		switch {
@@ -198,18 +193,18 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				updates["duration_sec"] = wavSec
 			}
 			key := fmt.Sprintf("sip/recordings/%s_%d.wav", sanitizeRecordingKey(callID), now.Unix())
-			if err := store.Write(bucket, key, bytes.NewReader(wav)); err != nil {
+			if err := store.Write(key, bytes.NewReader(wav)); err != nil {
 				s.lg.Warn("sippersist recording upload", zap.String("call_id", callID), zap.Error(err))
-			} else if pub := strings.TrimSpace(stores.PublicObjectURL(store, bucket, key)); pub != "" {
+			} else if pub := strings.TrimSpace(stores.PublicObjectURL(store, key)); pub != "" {
 				updates["recording_url"] = pub
 				updates["recording_wav_bytes"] = len(wav)
 				s.lg.Info("sippersist recording uploaded", zap.String("call_id", callID), zap.String("codec", codecName))
 			}
 		} else if len(raw) >= 3 && raw[0] == 'S' && raw[1] == 'N' && (raw[2] == '3' || raw[2] == '2' || raw[2] == '1') {
 			snKey := fmt.Sprintf("sip/recordings/%s_%d.sn2", sanitizeRecordingKey(callID), now.Unix())
-			if err := store.Write(bucket, snKey, bytes.NewReader(raw)); err != nil {
+			if err := store.Write(snKey, bytes.NewReader(raw)); err != nil {
 				s.lg.Warn("sippersist raw recording upload", zap.String("call_id", callID), zap.Error(err))
-			} else if pub := strings.TrimSpace(stores.PublicObjectURL(store, bucket, snKey)); pub != "" {
+			} else if pub := strings.TrimSpace(stores.PublicObjectURL(store, snKey)); pub != "" {
 				updates["recording_url"] = pub
 				s.lg.Info("sippersist raw SN recording uploaded (no WAV)", zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 			}

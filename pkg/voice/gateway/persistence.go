@@ -57,7 +57,6 @@ type MediaStatsSample struct {
 // emit this once per recording (typically at teardown) so the persister
 // can write a row into call_recording.
 type RecordingInfo struct {
-	Bucket     string
 	Key        string
 	URL        string
 	Format     string // "wav", "opus", …

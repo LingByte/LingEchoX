@@ -68,31 +68,25 @@ func (q *QiNiuStore) uploadToken(bucketName string) string {
 }
 
 // Write: 使用表单上传（将 r 读入内存以得到内容长度，适合中小文件；大文件建议换分片上传）
-func (q *QiNiuStore) Write(bucketName, key string, r io.Reader) error {
-	if bucketName == "" {
-		bucketName = q.BucketName
-	}
+func (q *QiNiuStore) Write(key string, r io.Reader) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
-	cfg := q.makeConfig(bucketName)
+	cfg := q.makeConfig(q.BucketName)
 	uploader := storage.NewFormUploader(&cfg)
 	ret := storage.PutRet{}
 	extra := storage.PutExtra{}
-	token := q.uploadToken(bucketName)
+	token := q.uploadToken(q.BucketName)
 	ctx := context.Background()
 	return uploader.Put(ctx, &ret, token, key, bytes.NewReader(data), int64(len(data)), &extra)
 }
 
 // Exists: 通过 Stat 判断（612 表示不存在）
-func (q *QiNiuStore) Exists(bucketName, key string) (bool, error) {
-	if bucketName == "" {
-		bucketName = q.BucketName
-	}
-	cfg := q.makeConfig(bucketName)
+func (q *QiNiuStore) Exists(key string) (bool, error) {
+	cfg := q.makeConfig(q.BucketName)
 	bm := storage.NewBucketManager(q.getMac(), &cfg)
-	_, err := bm.Stat(bucketName, key)
+	_, err := bm.Stat(q.BucketName, key)
 	if err == nil {
 		return true, nil
 	}
@@ -103,18 +97,15 @@ func (q *QiNiuStore) Exists(bucketName, key string) (bool, error) {
 }
 
 // Delete: 直接删除
-func (q *QiNiuStore) Delete(bucketName, key string) error {
-	if bucketName == "" {
-		bucketName = q.BucketName
-	}
-	cfg := q.makeConfig(bucketName)
+func (q *QiNiuStore) Delete(key string) error {
+	cfg := q.makeConfig(q.BucketName)
 	bm := storage.NewBucketManager(q.getMac(), &cfg)
-	return bm.Delete(bucketName, key)
+	return bm.Delete(q.BucketName, key)
 }
 
 // Read: 通过 PublicURL（公有或带签名的私有）发起 HTTP GET
-func (q *QiNiuStore) Read(bucketName string, key string) (io.ReadCloser, int64, error) {
-	u := q.PublicURL(bucketName, key)
+func (q *QiNiuStore) Read(key string) (io.ReadCloser, int64, error) {
+	u := q.PublicURL(key)
 	if u == "" {
 		return nil, 0, ErrInvalidPath
 	}
@@ -136,7 +127,7 @@ func (q *QiNiuStore) Read(bucketName string, key string) (io.ReadCloser, int64, 
 }
 
 // PublicURL: 公有空间返回公开 URL；私有空间返回带有效期签名的 URL（默认 1 小时）
-func (q *QiNiuStore) PublicURL(bucketName string, key string) string {
+func (q *QiNiuStore) PublicURL(key string) string {
 	if q.Domain == "" {
 		return ""
 	}

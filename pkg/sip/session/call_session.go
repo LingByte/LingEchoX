@@ -70,6 +70,39 @@ type CallSession struct {
 	// a stereo WAV directly at flush time — bypassing the SN3 → WAV
 	// post-processing step that used to live in pkg/utils.
 	rec *recorder.Recorder
+
+	// remoteFromHeader 保存呼入 INVITE 的原始 From header（含 display-name +
+	// SIP URI），由 sip/server 在创建 CallSession 后立刻 SetRemoteFromHeader
+	// 注入。给转接路径用——转接时希望坐席话机上显示的是【真实主叫的手机号】，
+	// 而不是平台 400 中继号；从这里取出 user 部分回写到外呼 DialRequest 的
+	// CallerDisplayName 即可。出局 / 主动 Dial 的 CallSession 这里就是空。
+	metaMu           sync.RWMutex
+	remoteFromHeader string
+}
+
+// SetRemoteFromHeader 由 sip/server 在 INVITE 入站时调用，记录 PSTN 主叫
+// 的原始 From header 供转接路径回显。nil-safe / 空值跳过。
+func (cs *CallSession) SetRemoteFromHeader(v string) {
+	if cs == nil {
+		return
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return
+	}
+	cs.metaMu.Lock()
+	cs.remoteFromHeader = v
+	cs.metaMu.Unlock()
+}
+
+// RemoteFromHeader 返回入站 INVITE 的 From header；nil 或未注入时返回 ""。
+func (cs *CallSession) RemoteFromHeader() string {
+	if cs == nil {
+		return ""
+	}
+	cs.metaMu.RLock()
+	defer cs.metaMu.RUnlock()
+	return cs.remoteFromHeader
 }
 
 // NewCallSession creates a call session with codec negotiation from SDP.

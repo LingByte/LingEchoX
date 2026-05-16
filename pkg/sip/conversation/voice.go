@@ -365,24 +365,21 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	}
 
 	// Stereo PCM recorder (replaces SN3 inline recording for new calls).
-	// Disable via SIP_RECORDER_DISABLE=1; tune chunk-rolling-upload via
-	// SIP_RECORDER_CHUNK_SECS (0 = full call only). Bucket override via
-	// SIP_RECORDER_BUCKET (defaults to recorder package's "voiceserver-recordings").
-	if strings.TrimSpace(os.Getenv("SIP_RECORDER_DISABLE")) != "1" {
-		recCfg := siprecorder.Config{
-			Bucket: strings.TrimSpace(os.Getenv("SIP_RECORDER_BUCKET")),
-			Logger: lg,
-		}
-		if secs, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SIP_RECORDER_CHUNK_SECS"))); err == nil && secs > 0 {
-			recCfg.ChunkInterval = time.Duration(secs) * time.Second
-		}
-		if cs.EnableRecorder(recCfg) {
-			lg.Info("sip voice: stereo PCM recorder enabled",
-				zap.String("call_id", cs.CallID),
-				zap.Int("sample_rate", pcmBridgeSR),
-				zap.Duration("chunk_interval", recCfg.ChunkInterval),
-			)
-		}
+	// 录音始终启用 —— 通话录音是平台基线能力，不再提供开关。
+	// SIP_RECORDER_CHUNK_SECS 调节滚动分片上传周期（0 = 通话结束一次性写）。
+	// 存储桶由 pkg/stores 后端自己读取（COS_BUCKET_NAME / S3_BUCKET / …）。
+	recCfg := siprecorder.Config{
+		Logger: lg,
+	}
+	if secs, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SIP_RECORDER_CHUNK_SECS"))); err == nil && secs > 0 {
+		recCfg.ChunkInterval = time.Duration(secs) * time.Second
+	}
+	if cs.EnableRecorder(recCfg) {
+		lg.Info("sip voice: stereo PCM recorder enabled",
+			zap.String("call_id", cs.CallID),
+			zap.Int("sample_rate", pcmBridgeSR),
+			zap.Duration("chunk_interval", recCfg.ChunkInterval),
+		)
 	}
 
 	voiceType := env.TTSVoiceType

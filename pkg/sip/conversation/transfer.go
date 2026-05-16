@@ -157,13 +157,30 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	startTransferRinging(ctx, inboundCallID, lg)
 	notifyTransferPhase(inboundCallID, "ringing", nil)
 
+	// 转接坐席时，From 的 SIP URI user 部分仍走中继配置的主叫号（避免运营商
+	// ANI 校验拒接），但把 display-name 改成真实主叫（PSTN 用户）的手机号
+	// —— 坐席话机屏幕上看到的是【谁打来的】，而不是 400 中继。
+	// 出局 / 主动 dial（campaign）的 CallSession remoteFromHeader 是空，
+	// 这种情况维持 Target.CallerDisplayName 默认值不动。
+	agentDisplayOverride := extractInboundCallerNumber(inboundCallID)
+
 	go func() {
-		cid, err := d.Dial(ctx, outbound.DialRequest{
+		req := outbound.DialRequest{
 			Scenario:      outbound.ScenarioTransferAgent,
 			Target:        tgt,
 			CorrelationID: inboundCallID,
 			MediaProfile:  outbound.MediaProfileTransferBridge,
-		})
+		}
+		if agentDisplayOverride != "" {
+			// outbound.manager 的优先级是「DialRequest.CallerUser 非空 →
+			// 用 DialRequest 的 user+display；否则 fallback 到 Target.*」，
+			// 单独设 CallerDisplayName 会被丢弃。所以这里把 user 部分显式
+			// 写成 Target.CallerUser（保留中继外显号通过 ANI 校验），同时
+			// 把 display 改成主叫真实手机号。
+			req.CallerUser = strings.TrimSpace(tgt.CallerUser)
+			req.CallerDisplayName = agentDisplayOverride
+		}
+		cid, err := d.Dial(ctx, req)
 		if err != nil {
 			stopTransferRinging(inboundCallID)
 			transferStarted.Delete(inboundCallID)
@@ -173,6 +190,58 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		}
 		lg.Info("sip transfer: agent leg INVITE sent", zap.String("inbound_call_id", inboundCallID), zap.String("outbound_call_id", cid))
 	}()
+}
+
+// extractInboundCallerNumber 取该入站通话的 SIP From URI 的 user 部分（即
+// 真实主叫的手机号），用于转接坐席时覆盖外呼 display-name。流程：
+//
+//  1. 从 CallSession.RemoteFromHeader() 拿到 INVITE 原始 From（含 display +
+//     URI），sip/server 在收到 INVITE 时已经注入。
+//  2. 解析出 `<sip:USER@host>` 或 `sip:USER@host` 里的 USER。
+//
+// 任一步失败返回 ""，调用方维持中继默认 CallerDisplayName 不动。
+func extractInboundCallerNumber(inboundCallID string) string {
+	inbound := lookupInboundSession(inboundCallID)
+	if inbound == nil {
+		return ""
+	}
+	hdr := inbound.RemoteFromHeader()
+	if hdr == "" {
+		return ""
+	}
+	return parseSIPUserPart(hdr)
+}
+
+// parseSIPUserPart 是 pkg/sip/persist.ExtractSIPUserPart 的精简同款实现，
+// 内联以避免 conversation → persist 反向 import 依赖。支持常见三种形态：
+//
+//	"Bob" <sip:bob@host>;tag=...
+//	<sip:bob@host:5060>
+//	sip:bob@host
+func parseSIPUserPart(header string) string {
+	s := strings.TrimSpace(header)
+	if s == "" {
+		return ""
+	}
+	// 截掉 name-addr 外层的 <...>;params。
+	if lt := strings.Index(s, "<"); lt >= 0 {
+		if gt := strings.Index(s[lt:], ">"); gt > 0 {
+			s = s[lt+1 : lt+gt]
+		}
+	}
+	// 去掉 sip:/sips: scheme。
+	if i := strings.Index(s, ":"); i >= 0 && (strings.EqualFold(s[:i], "sip") || strings.EqualFold(s[:i], "sips")) {
+		s = s[i+1:]
+	}
+	// 截 user@host 的 user。
+	if at := strings.Index(s, "@"); at >= 0 {
+		s = s[:at]
+	}
+	// 去掉 ;params 等尾巴。
+	if i := strings.IndexAny(s, ";?"); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 func startTransferRinging(ctx context.Context, inboundCallID string, lg *zap.Logger) {

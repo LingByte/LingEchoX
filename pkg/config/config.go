@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
@@ -76,8 +75,7 @@ type AuthConfig struct {
 
 // ServicesConfig services configuration
 type ServicesConfig struct {
-	LLM     LLMConfig     `mapstructure:"llm"`
-	Storage StorageConfig `mapstructure:"storage"`
+	LLM LLMConfig `mapstructure:"llm"`
 }
 
 // LLMConfig LLM service configuration
@@ -85,13 +83,6 @@ type LLMConfig struct {
 	APIKey  string `env:"LLM_API_KEY"`
 	BaseURL string `env:"LLM_BASE_URL"`
 	Model   string `env:"LLM_MODEL"`
-}
-
-// StorageConfig selects pkg/stores backend (STORAGE_KIND) and optional bucket / public URL overrides for recordings.
-type StorageConfig struct {
-	Kind       string `env:"STORAGE_KIND"`
-	Bucket     string `env:"STORAGE_BUCKET"`
-	PublicBase string `env:"STORAGE_PUBLIC_BASE_URL"`
 }
 
 // FeaturesConfig feature flags configuration
@@ -196,11 +187,6 @@ func Load() error {
 				BaseURL: getStringOrDefault("LLM_BASE_URL", "https://api.openai.com/v1"),
 				Model:   getStringOrDefault("LLM_MODEL", "gpt-3.5-turbo"),
 			},
-			Storage: StorageConfig{
-				Kind:       getStringOrDefault("STORAGE_KIND", "local"),
-				Bucket:     getStringOrDefault("STORAGE_BUCKET", ""),
-				PublicBase: getStringOrDefault("STORAGE_PUBLIC_BASE_URL", ""),
-			},
 		},
 		Features: FeaturesConfig{
 			BackupEnabled:  getBoolOrDefault("BACKUP_ENABLED", false),
@@ -220,13 +206,6 @@ func Load() error {
 			KeepOldKeys:  getIntOrDefault("JWT_KEEP_OLD_KEYS", 2),
 		},
 	}
-	if s := strings.TrimSpace(GlobalConfig.Services.Storage.PublicBase); s != "" {
-		_ = os.Setenv("STORAGE_PUBLIC_BASE_URL", s)
-	}
-	if s := strings.TrimSpace(GlobalConfig.Services.Storage.Kind); s != "" {
-		_ = os.Setenv("STORAGE_KIND", s)
-	}
-
 	return nil
 }
 

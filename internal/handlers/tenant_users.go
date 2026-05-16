@@ -636,19 +636,28 @@ func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 
 	key := path.Join("avatars", "t"+strconv.FormatUint(uint64(u.TenantID), 10), "u"+strconv.FormatUint(uint64(u.ID), 10)+ext)
 	st := stores.Default()
-	bucket := strings.TrimSpace(config.GlobalConfig.Services.Storage.Bucket)
-	if err := st.Write(bucket, key, bytes.NewReader(body)); err != nil {
+	if err := st.Write(key, bytes.NewReader(body)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	proto := c.Request.Header.Get("X-Forwarded-Proto")
-	if proto == "" {
-		proto = "http"
-		if c.Request.TLS != nil {
-			proto = "https"
+	// 头像可下载 URL 解析顺序：
+	//   1) 后端自带绝对 URL（含 STORAGE_PUBLIC_BASE_URL 兜底）；
+	//   2) 落到 /uploads/<key> 由网关回源。
+	url := strings.TrimPrefix(strings.TrimSpace(stores.PublicObjectURL(st, key)), "/")
+	if lower := strings.ToLower(url); !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		proto := c.Request.Header.Get("X-Forwarded-Proto")
+		if proto == "" {
+			proto = "http"
+			if c.Request.TLS != nil {
+				proto = "https"
+			}
+		}
+		if host := strings.TrimSpace(c.Request.Host); host != "" {
+			url = proto + "://" + host + "/uploads/" + strings.TrimPrefix(key, "/")
+		} else {
+			url = "/uploads/" + strings.TrimPrefix(key, "/")
 		}
 	}
-	url := stores.ResolveUploadPublicURL(st, bucket, key, config.GlobalConfig.Services.Storage.PublicBase, proto, c.Request.Host)
 	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{"avatar_url": url}, acdOperator(c)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return

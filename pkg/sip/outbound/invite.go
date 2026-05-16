@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,7 +27,44 @@ type inviteParams struct {
 	FromDisplayName string // optional; quoted display-name in From
 }
 
-func sipEscapeQuotedDisplay(s string) string {
+// sipFormatDisplayName renders a SIP From display-name in a wire format
+// every reasonable SBC / carrier will accept.
+//
+// Two encodings:
+//
+//   - 纯 ASCII (token / quoted-string)：原样 quoted-string，反斜杠转义引号/反斜杠，
+//     回车换行折叠为空格。
+//   - 含任意非 ASCII（中文 / emoji 等）：RFC 2047 §5 MIME encoded-word
+//     `=?UTF-8?B?<base64>?=` 形式，整个 token 不再加引号。
+//
+// 为什么不直接把 UTF-8 quoted-string 塞进去？—— RFC 3261 §25.1 BNF 仍然
+// 严格遵守 RFC 2822 的 quoted-string ASCII 范围，国内运营商 SBC（移动 /
+// 联通 / 电信 NGN 网关）经常按字面执行，发现 `"牛牛科技无限公司"` 这种
+// 高位字节直接 strip 整个 From display-name 或 400 Bad Request 退回。
+// MIME encoded-word 是这些设备公认能透传的中文显示名编码。
+func sipFormatDisplayName(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if isASCIIOnly(s) {
+		return sipQuotedASCIIDisplay(s)
+	}
+	return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(s)) + "?="
+}
+
+// isASCIIOnly 仅检测是否含非 ASCII（即 UTF-8 多字节）字符；ASCII 控制字符
+// （\r\n\t 等）由 quoted-string 路径自行折叠，不必跳到 MIME 编码。
+func isASCIIOnly(s string) bool {
+	for _, r := range s {
+		if r > 0x7E {
+			return false
+		}
+	}
+	return true
+}
+
+func sipQuotedASCIIDisplay(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
 	for _, r := range s {
@@ -50,11 +88,11 @@ func formatOutboundFromHeader(displayName, user, host string, port int, tag stri
 	host = nonEmpty(host, "127.0.0.1")
 	port = nonZero(port, 6050)
 	uri := fmt.Sprintf("<sip:%s@%s:%d>", user, host, port)
-	dn := strings.TrimSpace(displayName)
+	dn := sipFormatDisplayName(displayName)
 	if dn == "" {
 		return uri + ";tag=" + tag
 	}
-	return sipEscapeQuotedDisplay(dn) + " " + uri + ";tag=" + tag
+	return dn + " " + uri + ";tag=" + tag
 }
 
 func formatOutboundContact(user, host string, port int) string {

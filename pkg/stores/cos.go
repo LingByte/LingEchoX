@@ -19,42 +19,37 @@ type CosStore struct {
 }
 
 // Delete implements Store.
-func (c *CosStore) Delete(bucketName string, key string) error {
+func (c *CosStore) Delete(key string) error {
 	if c.SecretID == "" || c.SecretKey == "" || c.Region == "" {
 		return fmt.Errorf("COS credentials not configured")
 	}
 
-	cClient := InitCos(bucketName, c)
+	cClient := InitCos(c.BucketName, c)
 	_, err := cClient.Object.Delete(context.Background(), key)
 	return err
 }
 
 // Exists implements Store.
-func (c *CosStore) Exists(bucketName string, key string) (bool, error) {
+func (c *CosStore) Exists(key string) (bool, error) {
 	if c.SecretID == "" || c.SecretKey == "" || c.Region == "" {
 		return false, fmt.Errorf("COS credentials not configured")
 	}
 
-	cClient := InitCos(bucketName, c)
+	cClient := InitCos(c.BucketName, c)
 	ok, err := cClient.Object.IsExist(context.Background(), key)
 	return ok, err
 }
 
 // Read implements Store.
-func (c *CosStore) Read(bucketName string, key string) (io.ReadCloser, int64, error) {
+func (c *CosStore) Read(key string) (io.ReadCloser, int64, error) {
 	if c.SecretID == "" || c.SecretKey == "" || c.Region == "" {
 		return nil, 0, fmt.Errorf("COS credentials not configured")
 	}
-
-	cClient := InitCos(bucketName, c)
-
-	// 直接获取对象
+	cClient := InitCos(c.BucketName, c)
 	resp, err := cClient.Object.Get(context.Background(), key, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-
-	// 获取内容长度
 	var size int64 = -1
 	if cl := resp.Header.Get("Content-Length"); cl != "" {
 		if v, err := fmt.Sscanf(cl, "%d", &size); err != nil || v != 1 {
@@ -66,21 +61,18 @@ func (c *CosStore) Read(bucketName string, key string) (io.ReadCloser, int64, er
 }
 
 // Write implements Store.
-func (c *CosStore) Write(bucketName string, key string, r io.Reader) error {
+func (c *CosStore) Write(key string, r io.Reader) error {
 	if c.SecretID == "" || c.SecretKey == "" || c.Region == "" {
 		return fmt.Errorf("COS credentials not configured")
 	}
 
-	cClient := InitCos(bucketName, c)
+	cClient := InitCos(c.BucketName, c)
 	_, err := cClient.Object.Put(context.Background(), key, r, nil)
 	return err
 }
 
-func (c *CosStore) PublicURL(bucketName string, key string) string {
-	if bucketName == "" {
-		bucketName = c.BucketName
-	}
-	return fmt.Sprintf("https://%s.cos.%s.myqcloud.com/%s", bucketName, c.Region, key)
+func (c *CosStore) PublicURL(key string) string {
+	return fmt.Sprintf("https://%s.cos.%s.myqcloud.com/%s", c.BucketName, c.Region, key)
 }
 
 func NewCosStore() Store {

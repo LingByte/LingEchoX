@@ -61,12 +61,12 @@ func TestIntegration_S3_CRUD(t *testing.T) {
 	content := "hello-from-s3-integration-test"
 
 	// 1) Write
-	if err := store.Write(s3MustEnv("S3_BUCKET"), key, bytes.NewBufferString(content)); err != nil {
+	if err := store.Write(key, bytes.NewBufferString(content)); err != nil {
 		t.Fatalf("Write err: %v", err)
 	}
 
 	// 2) Exists should be true
-	ok, err := store.Exists(s3MustEnv("S3_BUCKET"), key)
+	ok, err := store.Exists(key)
 	if err != nil {
 		t.Fatalf("Exists err: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestIntegration_S3_CRUD(t *testing.T) {
 	}
 
 	// 3) Read
-	rc, size, err := store.Read(s3MustEnv("S3_BUCKET"), key)
+	rc, size, err := store.Read(key)
 	if err != nil {
 		t.Fatalf("Read err: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestIntegration_S3_CRUD(t *testing.T) {
 	}
 
 	// 4) PublicURL
-	u := store.PublicURL(s3MustEnv("S3_BUCKET"), key)
+	u := store.PublicURL(key)
 	if u == "" {
 		t.Fatalf("PublicURL returned empty string")
 	}
@@ -103,12 +103,12 @@ func TestIntegration_S3_CRUD(t *testing.T) {
 	}
 
 	// 5) Delete
-	if err := store.Delete(s3MustEnv("S3_BUCKET"), key); err != nil {
+	if err := store.Delete(key); err != nil {
 		t.Fatalf("Delete err: %v", err)
 	}
 
 	// 6) Exists should be false
-	ok, err = store.Exists(s3MustEnv("S3_BUCKET"), key)
+	ok, err = store.Exists(key)
 	if err != nil {
 		t.Fatalf("Exists after delete err: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestS3Store_PublicURL(t *testing.T) {
 		BucketName: "test-bucket",
 		Domain:     "https://cdn.example.com",
 	}
-	u1 := store1.PublicURL(s3MustEnv("S3_BUCKET"), "path/to/file.txt")
+	u1 := store1.PublicURL("path/to/file.txt")
 	expected1 := "https://cdn.example.com/path/to/file.txt"
 	if u1 != expected1 {
 		t.Fatalf("PublicURL with custom domain got %q, want %q", u1, expected1)
@@ -137,7 +137,7 @@ func TestS3Store_PublicURL(t *testing.T) {
 		BucketName: "test-bucket",
 		Domain:     "cdn.example.com",
 	}
-	u2 := store2.PublicURL(s3MustEnv("S3_BUCKET"), "file.txt")
+	u2 := store2.PublicURL("file.txt")
 	if !strings.HasPrefix(u2, "https://") {
 		t.Fatalf("PublicURL should add https:// prefix, got: %s", u2)
 	}
@@ -149,7 +149,7 @@ func TestS3Store_PublicURL(t *testing.T) {
 		Endpoint:     "https://s3.example.com",
 		UsePathStyle: true,
 	}
-	u3 := store3.PublicURL(s3MustEnv("S3_BUCKET"), "path/file.txt")
+	u3 := store3.PublicURL("path/file.txt")
 	expected3 := "https://s3.example.com/test-bucket/path/file.txt"
 	if u3 != expected3 {
 		t.Fatalf("PublicURL with custom endpoint and path style got %q, want %q", u3, expected3)
@@ -162,7 +162,7 @@ func TestS3Store_PublicURL(t *testing.T) {
 		Endpoint:     "https://s3.example.com",
 		UsePathStyle: false,
 	}
-	u4 := store4.PublicURL(s3MustEnv("S3_BUCKET"), "file.txt")
+	u4 := store4.PublicURL("file.txt")
 	expected4 := "https://s3.example.com/file.txt"
 	if u4 != expected4 {
 		t.Fatalf("PublicURL with custom endpoint without path style got %q, want %q", u4, expected4)
@@ -173,7 +173,7 @@ func TestS3Store_PublicURL(t *testing.T) {
 		Region:     "us-east-1",
 		BucketName: "test-bucket",
 	}
-	u5 := store5.PublicURL(s3MustEnv("S3_BUCKET"), "path/file.txt")
+	u5 := store5.PublicURL("path/file.txt")
 	expected5 := "https://test-bucket.s3.us-east-1.amazonaws.com/path/file.txt"
 	if u5 != expected5 {
 		t.Fatalf("PublicURL standard S3 got %q, want %q", u5, expected5)
@@ -294,7 +294,7 @@ func TestS3Store_Exists_NonExistent(t *testing.T) {
 
 	// Test with a key that definitely doesn't exist
 	nonExistentKey := "test-go-lingecho/non-existent-" + time.Now().Format("20060102-150405-999999") + ".txt"
-	ok, err := store.Exists(s3MustEnv("S3_BUCKET"), nonExistentKey)
+	ok, err := store.Exists(nonExistentKey)
 	if err != nil {
 		t.Fatalf("Exists for non-existent key should not return error, got: %v", err)
 	}

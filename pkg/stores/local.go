@@ -18,7 +18,7 @@ type LocalStore struct {
 }
 
 // Delete implements Store.
-func (l *LocalStore) Delete(bucketName string, key string) error {
+func (l *LocalStore) Delete(key string) error {
 	root, err := filepath.Abs(l.Root)
 	if err != nil {
 		return err
@@ -32,7 +32,7 @@ func (l *LocalStore) Delete(bucketName string, key string) error {
 }
 
 // Exists implements Store.
-func (l *LocalStore) Exists(bucketName string, key string) (bool, error) {
+func (l *LocalStore) Exists(key string) (bool, error) {
 	root, err := filepath.Abs(l.Root)
 	if err != nil {
 		return false, err
@@ -53,7 +53,7 @@ func (l *LocalStore) Exists(bucketName string, key string) (bool, error) {
 }
 
 // Read implements Store.
-func (l *LocalStore) Read(bucketName string, key string) (io.ReadCloser, int64, error) {
+func (l *LocalStore) Read(key string) (io.ReadCloser, int64, error) {
 	root, err := filepath.Abs(l.Root)
 	if err != nil {
 		return nil, 0, err
@@ -74,7 +74,7 @@ func (l *LocalStore) Read(bucketName string, key string) (io.ReadCloser, int64, 
 }
 
 // Write implements Store.
-func (l *LocalStore) Write(bucketName string, key string, r io.Reader) error {
+func (l *LocalStore) Write(key string, r io.Reader) error {
 	root, err := filepath.Abs(l.Root)
 	if err != nil {
 		return err
@@ -98,7 +98,7 @@ func (l *LocalStore) Write(bucketName string, key string, r io.Reader) error {
 	return err
 }
 
-func (l *LocalStore) PublicURL(bucketName string, key string) string {
+func (l *LocalStore) PublicURL(key string) string {
 	mediaPrefix := strings.TrimSuffix(l.Root, "/")
 	key = strings.TrimPrefix(key, "/")
 	relativePath := path.Join("/", mediaPrefix, key)

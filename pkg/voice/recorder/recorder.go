@@ -34,6 +34,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -44,10 +45,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// Config configures one Recorder. CallID is required; Bucket defaults
-// to "voiceserver-recordings". SampleRate must match the PCM bridge
-// rate — every WriteCaller / WriteAI byte stream is treated as PCM16 LE
-// mono at this rate.
+// Config configures one Recorder. CallID is required; SampleRate must
+// match the PCM bridge rate — every WriteCaller / WriteAI byte stream is
+// treated as PCM16 LE mono at this rate.
 //
 // Store is the destination for the WAV blob at flush time; nil falls
 // through to stores.Default() (the process-wide upload backend used by
@@ -55,7 +55,6 @@ import (
 // the bytes without touching disk or hitting the network.
 type Config struct {
 	CallID     string // unique call identifier; embedded in the storage key
-	Bucket     string // storage bucket name (uses pkg/stores.Default())
 	SampleRate int    // PCM bridge rate; e.g. 8000 / 16000 / 48000
 	Transport  string // free-form label for log lines: "sip" / "xiaozhi" / "webrtc"
 	Codec      string // wire codec (informational, used in flush log line)
@@ -75,30 +74,72 @@ type Config struct {
 	ChunkInterval time.Duration
 }
 
+// legPlacer tracks one leg's session-wide PCM placement state. Each
+// successful place() call advances `pen` (in samples, session-relative)
+// by exactly the number of bytes/2 it returned, so concatenating outputs
+// across multiple calls produces a continuous per-leg PCM timeline. This
+// is the core trick that lets us stream-merge per-leg part files at
+// Flush time without rebuilding any per-leg buffer in memory.
+type legPlacer struct {
+	pen        int64 // session-wide sample position; next byte goes here
+	prevTailNs int64 // for jitter snap across place() calls
+}
+
+// chunkManifest records one rolling-chunk upload. Each chunk produces
+// THREE objects in the store:
+//
+//   - wavKey: standalone playable stereo WAV for ops triage (afplay)
+//   - lKey:   raw L PCM (mono, no header) — used only by Flush to merge
+//   - rKey:   raw R PCM (mono, no header) — used only by Flush to merge
+//
+// lBytes / rBytes are the EXACT byte counts of the raw PCM uploads so
+// Flush can compute the final WAV's data-chunk size deterministically
+// (without needing to re-Read each part to learn its length).
+//
+// An empty leg in this chunk is recorded as ""/0 so the Flush merger
+// knows to skip the open-and-read for that key.
+type chunkManifest struct {
+	seq    int
+	wavKey string
+	lKey   string
+	rKey   string
+	lBytes int64
+	rBytes int64
+}
+
 // Recorder captures user and AI PCM streams and produces a stereo WAV.
 type Recorder struct {
 	cfg Config
 	log *zap.Logger
 
 	mu      sync.Mutex
-	inSegs  []frame // L = caller / device / browser
-	outSegs []frame // R = AI / TTS
+	inSegs  []frame // L = caller / device / browser (evicted after chunk upload)
+	outSegs []frame // R = AI / TTS                  (evicted after chunk upload)
 	flushed bool
 
-	// Rolling chunk state. inHead / outHead point at the index up to
-	// which the chunker has already uploaded; the final Flush still
-	// uploads the FULL frame slices, so chunks are a safety net only.
-	inHead  int
-	outHead int
+	// Session-wide timeline base. Set lazily when the first frame
+	// arrives (across either leg) so a leg that never speaks can still
+	// share a t=0 with the other leg.
+	sessionBaseNs  int64
+	sessionBaseSet bool
+
+	// Per-leg streaming placement state. Cloned (value copy) before
+	// each chunk upload; committed back only on success. This is what
+	// makes the chunker idempotent on transient store failures: a
+	// failed upload leaves r.inPlacer / r.outPlacer untouched, so the
+	// next tick re-places the same frames.
+	inPlacer  legPlacer
+	outPlacer legPlacer
+
+	// Rolling chunk state. partSeq just provides monotonically
+	// increasing seq numbers for log + storage keys.
 	partSeq int
 	chunkCh chan struct{} // closed by Flush to stop the chunker goroutine
 
-	// chunkKeys remembers every part-*.wav we successfully uploaded so
-	// Flush can delete them after the canonical full WAV write
-	// succeeds. Crash before Flush → chunks survive in the bucket as
-	// recovery data; Flush success → chunks are reclaimed and the
-	// bucket carries exactly one row per call.
-	chunkKeys []string
+	// parts records every chunk's manifest in upload order. Flush
+	// iterates this list to stream-merge per-leg PCM into the final
+	// WAV, then deletes every key (3 per chunk) at the end.
+	parts []chunkManifest
 
 	// 每路（caller / AI）采样率运行时校验状态。每次 append 累计字节数和
 	// 时间跨度；一旦观察窗口 ≥ rateCheckMinSeconds 就计算 implied rate =
@@ -140,9 +181,6 @@ func New(cfg Config) *Recorder {
 	if strings.TrimSpace(cfg.CallID) == "" || cfg.SampleRate <= 0 {
 		return nil
 	}
-	if cfg.Bucket == "" {
-		cfg.Bucket = "voiceserver-recordings"
-	}
 	if cfg.Logger == nil {
 		cfg.Logger = zap.NewNop()
 	}
@@ -177,95 +215,182 @@ func (r *Recorder) chunkLoop() {
 	}
 }
 
-// uploadNextChunk snapshots the new frames since the last tick and
-// uploads a partial stereo WAV under "<callid>-part-<seq>-<ts>.wav".
-// Best-effort: errors are logged and the head pointers stay where they
-// were so the next tick will retry the same range. This means a flaky
-// store causes duplicate uploads on the next attempt, not data loss.
+// uploadNextChunk drains all frames captured since the previous tick
+// and writes THREE objects to the store:
+//
+//   - <callid>-part-<seq>-<ts>.wav   playable stereo WAV (ops triage)
+//   - <callid>-part-<seq>-<ts>-L.pcm raw L PCM (mono, no header)
+//   - <callid>-part-<seq>-<ts>-R.pcm raw R PCM (mono, no header)
+//
+// On success: the per-leg placers advance, the manifest grows, and the
+// in-memory frame slices ARE EVICTED (replaced with fresh slices
+// containing only frames that arrived during the upload). This keeps
+// peak Recorder memory bounded at ~O(ChunkInterval) regardless of call
+// duration — the critical reason this exists.
+//
+// On failure: nothing is committed. The next tick re-snapshots the
+// same range and retries. A partially-uploaded chunk (WAV ok, L
+// failed, etc.) rolls back its already-uploaded keys best-effort.
+//
+// Concurrency: uploads run WITHOUT holding r.mu. Flush may run during
+// upload — it sets flushed=true, takes whatever frames remain in
+// inSegs/outSegs, and ignores parts uploaded after this point. We
+// detect that on commit and self-clean-up our orphaned objects.
 func (r *Recorder) uploadNextChunk() {
 	r.mu.Lock()
-	if r.flushed {
+	if r.flushed || !r.sessionBaseSet {
 		r.mu.Unlock()
 		return
 	}
-	in := r.inSegs[r.inHead:]
-	out := r.outSegs[r.outHead:]
-	if len(in) == 0 && len(out) == 0 {
+	if len(r.inSegs) == 0 && len(r.outSegs) == 0 {
 		r.mu.Unlock()
 		return
 	}
-	// Snapshot indices we'll commit if upload succeeds. Stash
-	// references rather than copies — frames are immutable once
-	// appended (we only ever append, never mutate), so reading them
-	// outside the lock is safe.
-	inEnd := len(r.inSegs)
-	outEnd := len(r.outSegs)
+	// Snapshot the current slice headers. Frames are immutable once
+	// appended (we only append, never mutate the pcm bytes), so
+	// reading them outside the lock is safe even if append() races and
+	// reallocates r.inSegs / r.outSegs — our local headers still point
+	// at the original backing array.
+	inSnap := r.inSegs
+	outSnap := r.outSegs
+	inLen := len(inSnap)
+	outLen := len(outSnap)
+	// Clone placers — we'll commit them back only on success.
+	inP := r.inPlacer
+	outP := r.outPlacer
+	baseNs := r.sessionBaseNs
+	rate := r.cfg.SampleRate
 	seq := r.partSeq + 1
 	r.mu.Unlock()
 
-	wav := r.buildStereoWAV(in, out)
-	if len(wav) == 0 {
+	snapNs := utils.RecordingJitterSnapNs()
+	inPenBefore := inP.pen
+	outPenBefore := outP.pen
+	lBytes := inP.place(inSnap, baseNs, rate, snapNs)
+	rBytes := outP.place(outSnap, baseNs, rate, snapNs)
+	if len(lBytes) == 0 && len(rBytes) == 0 {
 		return
 	}
+
 	store := r.cfg.Store
 	if store == nil {
 		store = stores.Default()
 	}
 	if store == nil {
-		// No store available; chunker silently no-ops, the final
-		// Flush still has the data in memory.
+		// No store: leave frames in place; final Flush still has them.
 		return
 	}
+
+	// Build the playable stereo WAV with chunk-local t=0 (= the earlier
+	// of the two legs' starting pen). The shorter leg gets a leading
+	// zero-pad so both tracks within the part WAV are aligned.
+	chunkBase := inPenBefore
+	if outPenBefore < chunkBase {
+		chunkBase = outPenBefore
+	}
+	lPrefix := (inPenBefore - chunkBase) * 2 // bytes
+	rPrefix := (outPenBefore - chunkBase) * 2
+	// In-memory build: this is fine — chunk size is bounded by
+	// ChunkInterval, not call duration.
+	lForWav := make([]byte, 0, int(lPrefix)+len(lBytes))
+	if lPrefix > 0 {
+		lForWav = append(lForWav, make([]byte, lPrefix)...)
+	}
+	lForWav = append(lForWav, lBytes...)
+	rForWav := make([]byte, 0, int(rPrefix)+len(rBytes))
+	if rPrefix > 0 {
+		rForWav = append(rForWav, make([]byte, rPrefix)...)
+	}
+	rForWav = append(rForWav, rBytes...)
+	stereo := interleaveStereoBytes(lForWav, rForWav)
+	wav := wrapWAV(stereo, rate, 2)
+
 	ts := time.Now().Unix()
-	key := fmt.Sprintf("%s-part-%d-%d.wav", sanitizeFilename(r.cfg.CallID), seq, ts)
-	if err := store.Write(r.cfg.Bucket, key, bytes.NewReader(wav)); err != nil {
-		r.log.Warn("recorder: chunk upload failed",
-			zap.String("call_id", r.cfg.CallID),
-			zap.Int("seq", seq),
-			zap.Error(err))
+	base := sanitizeFilename(r.cfg.CallID)
+	wavKey := fmt.Sprintf("%s-part-%d-%d.wav", base, seq, ts)
+	lKey := fmt.Sprintf("%s-part-%d-%d-L.pcm", base, seq, ts)
+	rKey := fmt.Sprintf("%s-part-%d-%d-R.pcm", base, seq, ts)
+
+	if err := store.Write(wavKey, bytes.NewReader(wav)); err != nil {
+		r.log.Warn("recorder: chunk wav upload failed",
+			zap.String("call_id", r.cfg.CallID), zap.Int("seq", seq), zap.Error(err))
 		return
 	}
+	if len(lBytes) > 0 {
+		if err := store.Write(lKey, bytes.NewReader(lBytes)); err != nil {
+			r.log.Warn("recorder: chunk L PCM upload failed",
+				zap.String("call_id", r.cfg.CallID), zap.Int("seq", seq), zap.Error(err))
+			_ = store.Delete(wavKey)
+			return
+		}
+	} else {
+		lKey = ""
+	}
+	if len(rBytes) > 0 {
+		if err := store.Write(rKey, bytes.NewReader(rBytes)); err != nil {
+			r.log.Warn("recorder: chunk R PCM upload failed",
+				zap.String("call_id", r.cfg.CallID), zap.Int("seq", seq), zap.Error(err))
+			_ = store.Delete(wavKey)
+			if lKey != "" {
+				_ = store.Delete(lKey)
+			}
+			return
+		}
+	} else {
+		rKey = ""
+	}
+
+	// Commit. If Flush ran during our upload, abandon our work and
+	// best-effort clean up the now-orphaned objects (Flush already
+	// re-placed the same frames as part of its tail and streamed them
+	// without referencing our manifest).
 	r.mu.Lock()
-	r.inHead = inEnd
-	r.outHead = outEnd
+	if r.flushed {
+		r.mu.Unlock()
+		_ = store.Delete(wavKey)
+		if lKey != "" {
+			_ = store.Delete(lKey)
+		}
+		if rKey != "" {
+			_ = store.Delete(rKey)
+		}
+		return
+	}
+	r.inPlacer = inP
+	r.outPlacer = outP
 	r.partSeq = seq
-	r.chunkKeys = append(r.chunkKeys, key)
+	r.parts = append(r.parts, chunkManifest{
+		seq: seq, wavKey: wavKey, lKey: lKey, rKey: rKey,
+		lBytes: int64(len(lBytes)), rBytes: int64(len(rBytes)),
+	})
+	// Evict the placed frames. Frames appended during our upload sit
+	// at indices [inLen, len(r.inSegs)) and stay in memory for the
+	// next tick. Reallocating into a new small slice releases the
+	// underlying array (with all the placed pcm bytes) for GC.
+	r.inSegs = trimFramesFront(r.inSegs, inLen)
+	r.outSegs = trimFramesFront(r.outSegs, outLen)
 	r.mu.Unlock()
+
 	r.log.Info("recorder: chunk uploaded",
 		zap.String("call_id", r.cfg.CallID),
 		zap.Int("seq", seq),
-		zap.String("key", key),
-		zap.Int("bytes", len(wav)))
+		zap.String("wav_key", wavKey),
+		zap.Int("l_bytes", len(lBytes)),
+		zap.Int("r_bytes", len(rBytes)))
 }
 
-// buildStereoWAV builds a complete WAV blob from the supplied frames
-// using the same wall-clock placement logic as Flush. Used by both the
-// final Flush and the rolling chunker so chunk WAVs are byte-shaped
-// identical to the final recording.
-func (r *Recorder) buildStereoWAV(inSegs, outSegs []frame) []byte {
-	if len(inSegs) == 0 && len(outSegs) == 0 {
-		return nil
+// trimFramesFront drops the first `n` frames from segs and returns a
+// fresh slice containing only the remainder. Returning a NEW backing
+// array is the whole point — it lets the GC reclaim the consumed
+// frames' pcm buffers.
+func trimFramesFront(segs []frame, n int) []frame {
+	if n >= len(segs) {
+		return segs[:0:0] // empty slice, original array drops out of scope
 	}
-	// Per-WAV base = min wallNs across just THIS WAV's frames so each
-	// chunk is independently playable from t=0.
-	base := int64(0)
-	first := true
-	for _, s := range inSegs {
-		if first || s.wallNs < base {
-			base = s.wallNs
-			first = false
-		}
-	}
-	for _, s := range outSegs {
-		if first || s.wallNs < base {
-			base = s.wallNs
-			first = false
-		}
-	}
-	left := placePCMTrackBytes(inSegs, base, r.cfg.SampleRate)
-	right := placePCMTrackBytes(outSegs, base, r.cfg.SampleRate)
-	stereo := interleaveStereoBytes(left, right)
-	return wrapWAV(stereo, r.cfg.SampleRate, 2)
+	rest := segs[n:]
+	out := make([]frame, len(rest))
+	copy(out, rest)
+	return out
 }
 
 // WriteCaller appends a caller-side PCM16 LE mono chunk. nil-safe.
@@ -302,6 +427,15 @@ func (r *Recorder) append(caller bool, pcm []byte) {
 		return
 	}
 	f := frame{wallNs: time.Now().UnixNano(), pcm: buf}
+	// Anchor the session timeline on the very first frame across either
+	// leg. Both per-leg pens and all subsequent placement math measure
+	// sample offset from this point. Doing it lazily (vs. New()) means a
+	// recorder that never receives audio doesn't waste a Flush trying
+	// to build a zero-length WAV.
+	if !r.sessionBaseSet {
+		r.sessionBaseNs = f.wallNs
+		r.sessionBaseSet = true
+	}
 	if caller {
 		r.inSegs = append(r.inSegs, f)
 		r.updateRateStats(true, f.wallNs, int64(len(buf)))
@@ -379,10 +513,13 @@ func (r *Recorder) updateRateStats(caller bool, wallNs, byteCount int64) {
 	)
 }
 
-// Flush builds the stereo WAV, uploads it via stores.Default(), and
-// returns a RecordingInfo suitable for passing to a SessionPersister.
-// Returns ok=false when there is nothing to record (no frames captured)
-// or when the upload failed; the error is logged either way.
+// Flush stitches every uploaded chunk-part PCM together with the tail
+// (frames that arrived after the last chunker tick), streams the
+// combined stereo WAV to the store via io.Pipe (so peak memory is
+// O(buffer size), not O(call duration)), then deletes the part files.
+//
+// Returns ok=false when there is nothing to record or when the upload
+// failed; the error is logged either way.
 //
 // Idempotent: a second Flush returns (zero, false) without re-uploading.
 func (r *Recorder) Flush(ctx context.Context) (gateway.RecordingInfo, bool) {
@@ -395,9 +532,10 @@ func (r *Recorder) Flush(ctx context.Context) (gateway.RecordingInfo, bool) {
 		return gateway.RecordingInfo{}, false
 	}
 	r.flushed = true
-	// Signal the chunker to stop BEFORE we null the slices, so a
-	// concurrent uploadNextChunk that has already entered its critical
-	// section just sees flushed=true and returns harmlessly.
+	// Stop the chunker BEFORE taking the snapshot. A chunker tick that
+	// already passed its `flushed` check just races to upload+commit;
+	// our `flushed=true` makes its commit branch into the orphan-delete
+	// path so it can't double-place the tail frames.
 	if r.chunkCh != nil {
 		close(r.chunkCh)
 		r.chunkCh = nil
@@ -406,38 +544,49 @@ func (r *Recorder) Flush(ctx context.Context) (gateway.RecordingInfo, bool) {
 	outSegs := r.outSegs
 	r.inSegs = nil
 	r.outSegs = nil
+	parts := r.parts
+	r.parts = nil
+	inP := r.inPlacer
+	outP := r.outPlacer
+	baseNs := r.sessionBaseNs
+	sessionSet := r.sessionBaseSet
 	r.mu.Unlock()
 
 	rate := r.cfg.SampleRate
-	if len(inSegs) == 0 && len(outSegs) == 0 {
+	if !sessionSet {
 		r.log.Info("recorder: no frames captured, skip",
 			zap.String("call_id", r.cfg.CallID))
 		return gateway.RecordingInfo{}, false
 	}
 
-	// Shared base wall-clock = min wallNs across both legs.
-	base := int64(0)
-	first := true
-	for _, s := range inSegs {
-		if first || s.wallNs < base {
-			base = s.wallNs
-			first = false
-		}
+	// Place the tail (frames since the last chunker tick) using the
+	// SAME placer state the chunker would have used. tailL/tailR
+	// concatenate cleanly onto parts[*].lBytes / rBytes streams.
+	snapNs := utils.RecordingJitterSnapNs()
+	tailL := inP.place(inSegs, baseNs, rate, snapNs)
+	tailR := outP.place(outSegs, baseNs, rate, snapNs)
+
+	// Compute total per-leg byte counts up-front. We need the WAV
+	// data-chunk size in the header before the body streams, and we
+	// don't want to "rewind and patch" on backends that don't
+	// re-seek (S3 multipart, COS, …).
+	var totalLBytes, totalRBytes int64
+	for _, p := range parts {
+		totalLBytes += p.lBytes
+		totalRBytes += p.rBytes
 	}
-	for _, s := range outSegs {
-		if first || s.wallNs < base {
-			base = s.wallNs
-			first = false
-		}
+	totalLBytes += int64(len(tailL))
+	totalRBytes += int64(len(tailR))
+	legSamples := totalLBytes / 2
+	if rs := totalRBytes / 2; rs > legSamples {
+		legSamples = rs
+	}
+	if legSamples == 0 {
+		r.log.Info("recorder: zero-length recording, skip",
+			zap.String("call_id", r.cfg.CallID))
+		return gateway.RecordingInfo{}, false
 	}
 
-	left := placePCMTrackBytes(inSegs, base, rate)
-	right := placePCMTrackBytes(outSegs, base, rate)
-	stereo := interleaveStereoBytes(left, right)
-	wav := wrapWAV(stereo, rate, 2)
-
-	ts := time.Now().Unix()
-	key := fmt.Sprintf("%s-%d.wav", sanitizeFilename(r.cfg.CallID), ts)
 	store := r.cfg.Store
 	if store == nil {
 		store = stores.Default()
@@ -447,77 +596,364 @@ func (r *Recorder) Flush(ctx context.Context) (gateway.RecordingInfo, bool) {
 			zap.String("call_id", r.cfg.CallID))
 		return gateway.RecordingInfo{}, false
 	}
-	if err := store.Write(r.cfg.Bucket, key, bytes.NewReader(wav)); err != nil {
+
+	ts := time.Now().Unix()
+	key := fmt.Sprintf("%s-%d.wav", sanitizeFilename(r.cfg.CallID), ts)
+
+	// Streaming pipeline:
+	//
+	//   writer goroutine ──► pw ──► [io.Pipe] ──► pr ──► store.Write
+	//                  └─► sha256.Hash
+	//                  └─► counterWriter (Bytes for RecordingInfo)
+	//
+	// Backend Write reads from pr concurrently. If Write fails we cancel
+	// the writer via pr.CloseWithError, which makes pw.Write return the
+	// same error and lets the goroutine exit cleanly (no leak).
+	pr, pw := io.Pipe()
+	hasher := sha256.New()
+	var totalBytes int64
+	cw := &counterWriter{n: &totalBytes}
+	mw := io.MultiWriter(pw, hasher, cw)
+
+	var streamErr error
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		lChain := newPartReaderChain(store, parts, true /*L*/, tailL)
+		rChain := newPartReaderChain(store, parts, false /*R*/, tailR)
+		defer lChain.Close()
+		defer rChain.Close()
+		if err := writeWAVHeaderTo(mw, rate, 2, legSamples); err != nil {
+			streamErr = err
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if err := streamInterleave(mw, lChain, rChain, legSamples); err != nil {
+			streamErr = err
+			_ = pw.CloseWithError(err)
+			return
+		}
+		_ = pw.Close()
+	}()
+
+	if err := store.Write(key, pr); err != nil {
+		// Tear down the writer side: pr is the read half, closing it
+		// with an error unblocks the goroutine's pw.Write.
+		_ = pr.CloseWithError(err)
+		<-streamDone
 		r.log.Warn("recorder: store write failed",
-			zap.String("call_id", r.cfg.CallID),
-			zap.Error(err))
+			zap.String("call_id", r.cfg.CallID), zap.Error(err))
+		return gateway.RecordingInfo{}, false
+	}
+	<-streamDone
+	if streamErr != nil {
+		r.log.Warn("recorder: stream-build failed",
+			zap.String("call_id", r.cfg.CallID), zap.Error(streamErr))
 		return gateway.RecordingInfo{}, false
 	}
 
-	// Final WAV is durable; reclaim every part-*.wav we'd uploaded as
-	// a crash-safety net so the bucket carries exactly one row per
-	// call. Best-effort: delete failures are logged but never demote
-	// the recording's success — the canonical full WAV is what
-	// dashboards/persistence rows reference.
-	r.mu.Lock()
-	parts := r.chunkKeys
-	r.chunkKeys = nil
-	r.mu.Unlock()
-	if len(parts) > 0 {
-		var failed int
-		for _, k := range parts {
-			if err := store.Delete(r.cfg.Bucket, k); err != nil {
-				failed++
-				r.log.Warn("recorder: chunk delete failed",
-					zap.String("call_id", r.cfg.CallID),
-					zap.String("key", k),
-					zap.Error(err))
-			}
-		}
-		r.log.Info("recorder: chunks reclaimed",
-			zap.String("call_id", r.cfg.CallID),
-			zap.Int("ok", len(parts)-failed),
-			zap.Int("failed", failed))
+	// Reclaim every part object (3 keys per chunk) now that the
+	// canonical final WAV is durable. Best-effort: delete failures are
+	// logged but never demote the recording's success.
+	deletePartObjects(store, parts, r.log, r.cfg.CallID)
+
+	durationMs := legSamples * 1000 / int64(rate)
+	hash := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	url := strings.TrimSpace(stores.PublicObjectURL(store, key))
+	if url == "" {
+		url = key
 	}
 
-	durationMs := int64(0)
-	if rate > 0 && len(stereo) > 0 {
-		// stereo: PCM16 LE 2ch → 4 bytes per sample-frame.
-		durationMs = int64(len(stereo)/4) * 1000 / int64(rate)
-	}
-	r.log.Info("recorder: wav written",
+	r.log.Info("recorder: wav written (streamed)",
 		zap.String("call_id", r.cfg.CallID),
 		zap.String("transport", r.cfg.Transport),
 		zap.String("codec", r.cfg.Codec),
 		zap.Int("rate", rate),
-		zap.Int("bytes", len(wav)),
-		zap.Int("in_frames", len(inSegs)),
-		zap.Int("out_frames", len(outSegs)),
-		zap.String("bucket", r.cfg.Bucket),
+		zap.Int64("bytes", totalBytes),
+		zap.Int64("samples", legSamples),
+		zap.Int("parts", len(parts)),
 		zap.String("key", key))
 
-	// SHA-256 hash of the canonical WAV blob (improvement over VS:
-	// upstream RecordingInfo carries a Hash field but VS never populates
-	// it). Persisters can compare this against re-downloaded artefacts to
-	// detect bit-rot or accidental S3 overwrites.
-	sum := sha256.Sum256(wav)
-	hash := "sha256:" + hex.EncodeToString(sum[:])
-
 	return gateway.RecordingInfo{
-		Bucket:     r.cfg.Bucket,
 		Key:        key,
-		URL:        r.cfg.Bucket + "/" + key,
+		URL:        url,
 		Format:     "wav",
-		Layout:     "stereo-l-r", // matches persist.RecordingLayoutStereoLR
+		Layout:     "stereo-l-r",
 		SampleRate: rate,
 		Channels:   2,
-		Bytes:      len(wav),
+		Bytes:      int(totalBytes),
 		DurationMs: durationMs,
 		Hash:       hash,
 	}, true
 }
 
+// counterWriter tallies bytes written through it. Used to populate
+// RecordingInfo.Bytes during the streaming Flush since the final WAV
+// never lives in one buffer we could len() on.
+type counterWriter struct{ n *int64 }
+
+func (c *counterWriter) Write(p []byte) (int, error) {
+	*c.n += int64(len(p))
+	return len(p), nil
+}
+
+// partReaderChain is an io.Reader that lazily concatenates per-leg PCM
+// from a list of chunk parts plus a tail buffer. It opens at most ONE
+// part stream at a time, so a 1-hour call with 60-second chunks keeps
+// at most ~one HTTP body open instead of 60.
+//
+// Empty parts (lBytes==0 or rBytes==0 for the requested leg) are
+// transparently skipped — they record windows where this leg had no
+// audio.
+type partReaderChain struct {
+	store         stores.Store
+	parts         []chunkManifest
+	selectL       bool
+	tail          []byte
+	idx           int
+	cur           io.ReadCloser
+	tailReader    io.Reader
+	tailExhausted bool
+}
+
+func newPartReaderChain(store stores.Store, parts []chunkManifest, selectL bool, tail []byte) *partReaderChain {
+	return &partReaderChain{
+		store:   store,
+		parts:   parts,
+		selectL: selectL,
+		tail:    tail,
+	}
+}
+
+func (c *partReaderChain) Read(p []byte) (int, error) {
+	for {
+		if c.cur == nil {
+			if c.idx >= len(c.parts) {
+				if c.tailReader == nil && !c.tailExhausted {
+					if len(c.tail) == 0 {
+						c.tailExhausted = true
+						return 0, io.EOF
+					}
+					c.tailReader = bytes.NewReader(c.tail)
+				}
+				if c.tailReader != nil {
+					n, err := c.tailReader.Read(p)
+					if errors.Is(err, io.EOF) {
+						c.tailReader = nil
+						c.tailExhausted = true
+						if n > 0 {
+							return n, nil
+						}
+						continue
+					}
+					return n, err
+				}
+				return 0, io.EOF
+			}
+			part := c.parts[c.idx]
+			c.idx++
+			key := part.lKey
+			byteCount := part.lBytes
+			if !c.selectL {
+				key = part.rKey
+				byteCount = part.rBytes
+			}
+			if key == "" || byteCount == 0 {
+				continue
+			}
+			rc, _, err := c.store.Read(key)
+			if err != nil {
+				return 0, fmt.Errorf("recorder: open part %s: %w", key, err)
+			}
+			c.cur = rc
+		}
+		n, err := c.cur.Read(p)
+		if errors.Is(err, io.EOF) {
+			_ = c.cur.Close()
+			c.cur = nil
+			if n > 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
+	}
+}
+
+func (c *partReaderChain) Close() error {
+	if c.cur != nil {
+		_ = c.cur.Close()
+		c.cur = nil
+	}
+	return nil
+}
+
+// streamInterleave reads up to legSamples L+R PCM16 sample pairs from
+// lr / rr and writes 4-byte interleaved stereo samples to w. EOF on
+// either input is treated as zero samples (the corresponding leg ran
+// short of the longer leg) — we KNOW the exact total length up-front
+// from the manifest so we never under- or over-write the WAV's
+// declared data chunk.
+//
+// Block size: 1024 samples per side = 4096 output bytes per loop. Big
+// enough to amortise syscalls, small enough to keep memory tiny.
+func streamInterleave(w io.Writer, lr, rr io.Reader, legSamples int64) error {
+	const blockSamples = 1024
+	lBuf := make([]byte, blockSamples*2)
+	rBuf := make([]byte, blockSamples*2)
+	out := make([]byte, blockSamples*4)
+	var done int64
+	for done < legSamples {
+		want := legSamples - done
+		if want > blockSamples {
+			want = blockSamples
+		}
+		wantBytes := int(want) * 2
+		nl, _ := io.ReadFull(lr, lBuf[:wantBytes])
+		nr, _ := io.ReadFull(rr, rBuf[:wantBytes])
+		// Anything we couldn't read from the leg = zero samples for
+		// that side. ReadFull returns whatever bytes it managed to
+		// read in `n`, regardless of the error type.
+		for i := nl; i < wantBytes; i++ {
+			lBuf[i] = 0
+		}
+		for i := nr; i < wantBytes; i++ {
+			rBuf[i] = 0
+		}
+		for i := 0; i < int(want); i++ {
+			out[i*4] = lBuf[i*2]
+			out[i*4+1] = lBuf[i*2+1]
+			out[i*4+2] = rBuf[i*2]
+			out[i*4+3] = rBuf[i*2+1]
+		}
+		if _, err := w.Write(out[:int(want)*4]); err != nil {
+			return err
+		}
+		done += want
+	}
+	return nil
+}
+
+// writeWAVHeaderTo emits the canonical 44-byte RIFF/WAVE header for
+// PCM16 with a known data-chunk size. The caller is responsible for
+// streaming exactly `legSamples * channels * 2` bytes of PCM after.
+func writeWAVHeaderTo(w io.Writer, sampleRate, channels int, legSamples int64) error {
+	const (
+		bitsPerSample = 16
+		fmtChunkSize  = 16
+		audioFormat   = 1
+	)
+	if channels < 1 {
+		channels = 1
+	}
+	dataSize := uint32(legSamples) * uint32(channels) * uint32(bitsPerSample/8)
+	totalSize := uint32(4) + 8 + uint32(fmtChunkSize) + 8 + dataSize
+	byteRate := uint32(sampleRate * channels * bitsPerSample / 8)
+	blockAlign := uint16(channels * bitsPerSample / 8)
+
+	var hdr [44]byte
+	copy(hdr[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(hdr[4:8], totalSize)
+	copy(hdr[8:12], "WAVE")
+	copy(hdr[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(hdr[16:20], uint32(fmtChunkSize))
+	binary.LittleEndian.PutUint16(hdr[20:22], audioFormat)
+	binary.LittleEndian.PutUint16(hdr[22:24], uint16(channels))
+	binary.LittleEndian.PutUint32(hdr[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(hdr[28:32], byteRate)
+	binary.LittleEndian.PutUint16(hdr[32:34], blockAlign)
+	binary.LittleEndian.PutUint16(hdr[34:36], uint16(bitsPerSample))
+	copy(hdr[36:40], "data")
+	binary.LittleEndian.PutUint32(hdr[40:44], dataSize)
+	_, err := w.Write(hdr[:])
+	return err
+}
+
+// deletePartObjects best-effort removes every key referenced by the
+// manifest. Failures are logged but don't propagate — by this point
+// the canonical final WAV is durable; orphaned parts are wasted
+// storage at worst.
+func deletePartObjects(store stores.Store, parts []chunkManifest, log *zap.Logger, callID string) {
+	if len(parts) == 0 {
+		return
+	}
+	var failed int
+	for _, p := range parts {
+		for _, k := range []string{p.wavKey, p.lKey, p.rKey} {
+			if k == "" {
+				continue
+			}
+			if err := store.Delete(k); err != nil {
+				failed++
+				log.Warn("recorder: chunk delete failed",
+					zap.String("call_id", callID), zap.String("key", k), zap.Error(err))
+			}
+		}
+	}
+	log.Info("recorder: chunks reclaimed",
+		zap.String("call_id", callID),
+		zap.Int("parts", len(parts)),
+		zap.Int("failed", failed))
+}
+
 // ---------- internals: PCM placement / WAV wrapping ----------------------
+
+// place is the streaming variant of placePCMTrackBytes used by the
+// chunker / Flush. Given the SAME sessionBaseNs across calls, repeated
+// invocations on successive frame batches produce a CONTINUOUS per-leg
+// PCM stream — each call's output begins at session-sample lp.pen
+// (going in) and ends at session-sample lp.pen (going out), so
+// concatenating outputs across calls reconstructs the leg's full
+// timeline byte-for-byte.
+//
+// The per-call output length equals (new_pen - old_pen) * 2; concretely,
+// it includes any zero-padding for inter-frame gaps WITHIN the batch,
+// PLUS any zero-padding for the gap from the prior batch's pen up to
+// this batch's first frame's wall position (when the gap exceeds the
+// jitter-snap window — sub-snap gaps are absorbed via pen).
+//
+// Returns nil iff the batch contributes zero new samples (e.g. all
+// frames were empty). lp.pen / lp.prevTailNs are mutated in place.
+func (lp *legPlacer) place(frames []frame, sessionBaseNs int64, rate int, snapNs int64) []byte {
+	if len(frames) == 0 || rate <= 0 {
+		return nil
+	}
+	// Insertion-sort: same rationale as sortFramesByWall — frames are
+	// almost always near-sorted by arrival.
+	sortFramesByWall(frames)
+
+	startPen := lp.pen
+	out := make([]byte, 0, 4096)
+	for _, s := range frames {
+		if len(s.pcm) == 0 {
+			continue
+		}
+		samples := int64(len(s.pcm) / 2)
+		pos := (s.wallNs - sessionBaseNs) * int64(rate) / 1_000_000_000
+		// Jitter snap: micro-gaps from scheduling noise collapse to pen.
+		// prevTailNs == 0 on the very first call ever — treat as "no
+		// prior frame" by allowing snap so the first frame of the
+		// session lands at pos without artificial leading silence.
+		if pos > lp.pen && lp.prevTailNs > 0 && (s.wallNs-lp.prevTailNs) < snapNs {
+			pos = lp.pen
+		}
+		if pos < lp.pen {
+			// Burst arrival: keep frames non-overlapping.
+			pos = lp.pen
+		}
+		// Zero-pad from current pen up to pos (real silence).
+		if pos > lp.pen {
+			out = append(out, make([]byte, (pos-lp.pen)*2)...)
+		}
+		out = append(out, s.pcm...)
+		lp.pen = pos + samples
+		lp.prevTailNs = s.wallNs + samples*1_000_000_000/int64(rate)
+	}
+	if lp.pen == startPen {
+		return nil
+	}
+	return out
+}
 
 // placePCMTrackBytes lays PCM frames on a wall-clock timeline anchored
 // to baseNs. Each frame is positioned at

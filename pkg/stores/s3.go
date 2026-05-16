@@ -62,7 +62,7 @@ func (s *S3Store) client(ctx context.Context) (*s3.Client, error) {
 }
 
 // Read reads a file from S3
-func (s *S3Store) Read(bucketName, key string) (io.ReadCloser, int64, error) {
+func (s *S3Store) Read(key string) (io.ReadCloser, int64, error) {
 	ctx := context.Background()
 	client, err := s.client(ctx)
 	if err != nil {
@@ -86,7 +86,7 @@ func (s *S3Store) Read(bucketName, key string) (io.ReadCloser, int64, error) {
 }
 
 // Write writes a file to S3
-func (s *S3Store) Write(bucketName, key string, r io.Reader) error {
+func (s *S3Store) Write(key string, r io.Reader) error {
 	ctx := context.Background()
 	client, err := s.client(ctx)
 	if err != nil {
@@ -107,7 +107,7 @@ func (s *S3Store) Write(bucketName, key string, r io.Reader) error {
 }
 
 // Delete deletes a file from S3
-func (s *S3Store) Delete(bucketName, key string) error {
+func (s *S3Store) Delete(key string) error {
 	ctx := context.Background()
 	client, err := s.client(ctx)
 	if err != nil {
@@ -126,7 +126,7 @@ func (s *S3Store) Delete(bucketName, key string) error {
 }
 
 // Exists checks if a file exists in S3
-func (s *S3Store) Exists(bucketName, key string) (bool, error) {
+func (s *S3Store) Exists(key string) (bool, error) {
 	ctx := context.Background()
 	client, err := s.client(ctx)
 	if err != nil {
@@ -149,7 +149,7 @@ func (s *S3Store) Exists(bucketName, key string) (bool, error) {
 }
 
 // PublicURL returns the public URL for a file
-func (s *S3Store) PublicURL(bucketName string, key string) string {
+func (s *S3Store) PublicURL(key string) string {
 	// If custom domain is set, use it
 	if s.Domain != "" {
 		domain := strings.TrimSuffix(s.Domain, "/")

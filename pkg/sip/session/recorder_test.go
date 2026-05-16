@@ -18,33 +18,31 @@ import (
 // recorder integration without an external storage backend. It satisfies
 // pkg/stores.Store.
 type fakeStore struct {
-	mu     sync.Mutex
-	bucket string
-	key    string
-	bytes  []byte
+	mu    sync.Mutex
+	key   string
+	bytes []byte
 }
 
-func (f *fakeStore) Write(bucket, key string, r io.Reader) error {
+func (f *fakeStore) Write(key string, r io.Reader) error {
 	buf, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.bucket = bucket
 	f.key = key
 	f.bytes = buf
 	return nil
 }
 
-func (f *fakeStore) Read(bucket, key string) (io.ReadCloser, int64, error) {
+func (f *fakeStore) Read(key string) (io.ReadCloser, int64, error) {
 	return nil, 0, nil
 }
 
-func (f *fakeStore) Delete(string, string) error         { return nil }
-func (f *fakeStore) Exists(string, string) (bool, error) { return true, nil }
-func (f *fakeStore) PublicURL(bucket, key string) string {
-	return "https://test.example/" + bucket + "/" + key
+func (f *fakeStore) Delete(string) error         { return nil }
+func (f *fakeStore) Exists(string) (bool, error) { return true, nil }
+func (f *fakeStore) PublicURL(key string) string {
+	return "https://test.example/" + key
 }
 
 // TestCallSession_RecorderHelpersNilSafe verifies that the recorder API

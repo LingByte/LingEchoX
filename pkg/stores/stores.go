@@ -40,15 +40,15 @@ func getDefaultStoreKind() string {
 
 // Store Common Storage Modules
 type Store interface {
-	Read(bucketName string, key string) (io.ReadCloser, int64, error)
+	Read(key string) (io.ReadCloser, int64, error)
 
-	Write(bucketName string, key string, r io.Reader) error
+	Write(key string, r io.Reader) error
 
-	Delete(bucketName string, key string) error
+	Delete(key string) error
 
-	Exists(bucketName string, key string) (bool, error)
+	Exists(key string) (bool, error)
 
-	PublicURL(bucketName string, key string) string
+	PublicURL(key string) string
 }
 
 func GetStore(kind string) Store {
