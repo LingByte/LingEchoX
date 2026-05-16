@@ -9,12 +9,12 @@ import (
 
 type BaseModel struct {
 	ID        uint           `json:"id,string" gorm:"primaryKey;autoIncrement:false"`
-	CreatedAt time.Time      `json:"createdAt" gorm:"autoCreateTime;comment:Creation time"`
-	UpdatedAt time.Time      `json:"updatedAt,omitempty" gorm:"autoUpdateTime;comment:Update time"`
+	CreatedAt time.Time      `json:"createdAt" gorm:"autoCreateTime;comment:创建时间"`
+	UpdatedAt time.Time      `json:"updatedAt,omitempty" gorm:"autoUpdateTime;comment:更新时间"`
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
-	CreateBy  string         `json:"createBy,omitempty" gorm:"size:128;comment:Creator"`
-	UpdateBy  string         `json:"updateBy,omitempty" gorm:"size:128;comment:Updater"`
-	Remark    string         `json:"remark,omitempty" gorm:"size:128;comment:Remark"`
+	CreateBy  string         `json:"createBy,omitempty" gorm:"size:128;comment:创建人"`
+	UpdateBy  string         `json:"updateBy,omitempty" gorm:"size:128;comment:更新人"`
+	Remark    string         `json:"remark,omitempty" gorm:"size:128;comment:备注"`
 }
 
 // BeforeCreate GORM hook: assigns a Snowflake ID when the caller did not

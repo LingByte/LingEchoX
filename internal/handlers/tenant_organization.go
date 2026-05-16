@@ -101,7 +101,7 @@ func (h *Handlers) createOrgGroup(c *gin.Context) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	op := acdOperator(c)
+	op := middleware.AuditOperator(c)
 	g := &models.TenantGroup{TenantID: tid, Name: name, IsDefault: req.IsDefault}
 	g.SetCreateInfo(op)
 	err := h.db.Transaction(func(tx *gorm.DB) error {
@@ -144,7 +144,7 @@ func (h *Handlers) updateOrgGroup(c *gin.Context) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	op := acdOperator(c)
+	op := middleware.AuditOperator(c)
 	txErr := h.db.Transaction(func(tx *gorm.DB) error {
 		if req.IsDefault {
 			if err := tx.Model(&models.TenantGroup{}).
@@ -182,7 +182,7 @@ func (h *Handlers) deleteOrgGroup(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	if err := models.SoftDeleteTenantGroup(h.db, tid, id, acdOperator(c)); err != nil {
+	if err := models.SoftDeleteTenantGroup(h.db, tid, id, middleware.AuditOperator(c)); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.Fail(c, "not found", nil)
 			return
@@ -268,7 +268,7 @@ func (h *Handlers) createOrgRole(c *gin.Context) {
 		Description: strings.TrimSpace(req.Description),
 		IsSystem:    false,
 	}
-	r.SetCreateInfo(acdOperator(c))
+	r.SetCreateInfo(middleware.AuditOperator(c))
 	if err := models.CreateTenantRole(h.db, r); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -306,7 +306,7 @@ func (h *Handlers) updateOrgRole(c *gin.Context) {
 		response.Fail(c, "系统角色不可改名", nil)
 		return
 	}
-	op := acdOperator(c)
+	op := middleware.AuditOperator(c)
 	u := map[string]any{
 		"name":        strings.TrimSpace(req.Name),
 		"description": strings.TrimSpace(req.Description),
@@ -343,7 +343,7 @@ func (h *Handlers) deleteOrgRole(c *gin.Context) {
 		response.Fail(c, "系统角色不可删除", nil)
 		return
 	}
-	if err := models.SoftDeleteTenantRole(h.db, tid, r.ID, acdOperator(c)); err != nil {
+	if err := models.SoftDeleteTenantRole(h.db, tid, r.ID, middleware.AuditOperator(c)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -379,7 +379,7 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 		response.Fail(c, "invalid body", err.Error())
 		return
 	}
-	if err := models.ReplaceTenantRolePermissions(h.db, id, req.PermissionIDs, acdOperator(c)); err != nil {
+	if err := models.ReplaceTenantRolePermissions(h.db, id, req.PermissionIDs, middleware.AuditOperator(c)); err != nil {
 		if errors.Is(err, models.ErrInvalidOrgReference) {
 			response.Fail(c, "无效的权限 id", nil)
 			return
@@ -415,7 +415,7 @@ func (h *Handlers) putOrgTenantUserRoles(c *gin.Context) {
 		response.Fail(c, "invalid body", err.Error())
 		return
 	}
-	if err := models.ReplaceTenantUserRoles(h.db, tid, u.ID, req.RoleIDs, acdOperator(c)); err != nil {
+	if err := models.ReplaceTenantUserRoles(h.db, tid, u.ID, req.RoleIDs, middleware.AuditOperator(c)); err != nil {
 		if errors.Is(err, models.ErrInvalidOrgReference) {
 			response.Fail(c, "无效的角色 id", nil)
 			return
@@ -429,7 +429,7 @@ func (h *Handlers) putOrgTenantUserRoles(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", h.tenantUserPublic(next))
+	response.Success(c, "success", models.TenantUserPublic(h.db, next))
 }
 
 type orgUserGroupsReq struct {
@@ -457,7 +457,7 @@ func (h *Handlers) putOrgTenantUserGroups(c *gin.Context) {
 		response.Fail(c, "invalid body", err.Error())
 		return
 	}
-	if err := models.ReplaceTenantUserGroups(h.db, tid, u.ID, req.GroupIDs, acdOperator(c)); err != nil {
+	if err := models.ReplaceTenantUserGroups(h.db, tid, u.ID, req.GroupIDs, middleware.AuditOperator(c)); err != nil {
 		if errors.Is(err, models.ErrInvalidOrgReference) {
 			response.Fail(c, "无效的部门 id", nil)
 			return
@@ -470,5 +470,5 @@ func (h *Handlers) putOrgTenantUserGroups(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", h.tenantUserPublic(next))
+	response.Success(c, "success", models.TenantUserPublic(h.db, next))
 }

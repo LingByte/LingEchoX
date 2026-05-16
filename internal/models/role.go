@@ -12,10 +12,10 @@ const TenantAdminRoleName = "管理员"
 type TenantRole struct {
 	BaseModel
 
-	TenantID    uint   `json:"tenantId" gorm:"index;not null"`
-	Name        string `json:"name" gorm:"size:128;index;not null"`
-	Description string `json:"description,omitempty" gorm:"size:512"`
-	IsSystem    bool   `json:"isSystem" gorm:"not null;default:0"`
+	TenantID    uint   `json:"tenantId" gorm:"index;not null;comment:所属租户ID"`
+	Name        string `json:"name" gorm:"size:128;index;not null;comment:角色名称"`
+	Description string `json:"description,omitempty" gorm:"size:512;comment:描述"`
+	IsSystem    bool   `json:"isSystem" gorm:"not null;default:0;comment:是否系统角色"`
 }
 
 func (TenantRole) TableName() string {
@@ -26,8 +26,8 @@ func (TenantRole) TableName() string {
 type TenantUserRole struct {
 	BaseModel
 
-	TenantUserID uint `json:"tenantUserId" gorm:"index;not null;uniqueIndex:idx_tenant_user_role"`
-	RoleID       uint `json:"roleId" gorm:"index;not null;uniqueIndex:idx_tenant_user_role"`
+	TenantUserID uint `json:"tenantUserId" gorm:"index;not null;uniqueIndex:idx_tenant_user_role;comment:租户用户ID"`
+	RoleID       uint `json:"roleId" gorm:"index;not null;uniqueIndex:idx_tenant_user_role;comment:角色ID"`
 }
 
 func (TenantUserRole) TableName() string {

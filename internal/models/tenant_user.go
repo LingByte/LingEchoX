@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,20 +26,56 @@ const (
 type TenantUser struct {
 	BaseModel
 
-	TenantID     uint       `json:"tenantId" gorm:"index;not null"`
-	Email        string     `json:"email" gorm:"size:256;uniqueIndex:idx_global_tenant_user_email;not null"`
-	Phone        string     `json:"phone" gorm:"size:32"`
-	Username     string     `json:"username" gorm:"size:128"`
-	PasswordHash string     `json:"-" gorm:"size:256"`
-	DisplayName  string     `json:"displayName" gorm:"size:128"`
-	AvatarURL    string     `json:"avatarUrl" gorm:"size:512"`
-	Status       string     `json:"status" gorm:"size:32;index;not null;default:active"` // active | disabled | pending
-	LastLogin    *time.Time `json:"lastLogin,omitempty" gorm:"column:last_login_at"`
-	LastLoginIP  string     `json:"-" gorm:"size:128;column:last_login_ip"`
-	Source       string     `json:"source" gorm:"size:64;index;default:register"`
-	LoginCount   int        `json:"loginCount" gorm:"default:0"`
-	TOTPSecret   string     `json:"-" gorm:"size:128;column:totp_secret"`
-	TOTPEnabled  bool       `json:"totpEnabled" gorm:"column:totp_enabled;not null;default:0"`
+	TenantID     uint       `json:"tenantId" gorm:"index;not null;comment:所属租户ID"`
+	Email        string     `json:"email" gorm:"size:256;uniqueIndex:idx_global_tenant_user_email;not null;comment:登录邮箱"`
+	Phone        string     `json:"phone" gorm:"size:32;comment:手机号"`
+	Username     string     `json:"username" gorm:"size:128;comment:用户名"`
+	PasswordHash string     `json:"-" gorm:"size:256;comment:密码哈希"`
+	DisplayName  string     `json:"displayName" gorm:"size:128;comment:显示名"`
+	AvatarURL    string     `json:"avatarUrl" gorm:"size:512;comment:头像URL"`
+	Status       string     `json:"status" gorm:"size:32;index;not null;default:active;comment:账号状态"`
+	LastLogin    *time.Time `json:"lastLogin,omitempty" gorm:"column:last_login_at;comment:最后登录时间"`
+	LastLoginIP  string     `json:"-" gorm:"size:128;column:last_login_ip;comment:最后登录IP"`
+	Source       string     `json:"source" gorm:"size:64;index;default:register;comment:来源"`
+	LoginCount   int        `json:"loginCount" gorm:"default:0;comment:登录次数"`
+	TOTPSecret   string     `json:"-" gorm:"size:128;column:totp_secret;comment:TOTP密钥"`
+	TOTPEnabled  bool       `json:"totpEnabled" gorm:"column:totp_enabled;not null;default:0;comment:是否启用TOTP"`
+}
+
+// TenantUserPublic builds a JSON-safe tenant user map (Snowflake ids as strings).
+func TenantUserPublic(db *gorm.DB, u TenantUser) map[string]any {
+	out := map[string]any{
+		"id":          strconv.FormatUint(uint64(u.ID), 10),
+		"tenantId":    strconv.FormatUint(uint64(u.TenantID), 10),
+		"email":       u.Email,
+		"phone":       u.Phone,
+		"username":    u.Username,
+		"displayName": u.DisplayName,
+		"avatarUrl":   u.AvatarURL,
+		"status":      u.Status,
+		"createdAt":   u.CreatedAt,
+		"lastLogin":   u.LastLogin,
+		"lastLoginIp": u.LastLoginIP,
+		"source":      u.Source,
+		"loginCount":  u.LoginCount,
+		"totpEnabled": u.TOTPEnabled,
+	}
+	if gs, err := ListTenantGroupsForUser(db, u.ID); err == nil && len(gs) > 0 {
+		gpub := make([]map[string]any, 0, len(gs))
+		for _, g := range gs {
+			gpub = append(gpub, map[string]any{"id": g.ID, "name": g.Name, "isDefault": g.IsDefault})
+		}
+		out["tenantGroups"] = gpub
+		out["tenantGroup"] = map[string]any{"id": gs[0].ID, "name": gs[0].Name}
+	}
+	if roles, err := ListTenantRolesForUser(db, u.ID); err == nil && len(roles) > 0 {
+		rpub := make([]map[string]any, 0, len(roles))
+		for _, r := range roles {
+			rpub = append(rpub, map[string]any{"id": r.ID, "name": r.Name, "isSystem": r.IsSystem})
+		}
+		out["roles"] = rpub
+	}
+	return out
 }
 
 func (TenantUser) TableName() string {
@@ -224,7 +261,7 @@ func CountTenantUsersByStatus(db *gorm.DB, tenantID uint, status string) (int64,
 }
 
 // CheckTenantUserEmailExists checks if email is already used by an active user (globally unique).
-func CheckTenantUserEmailExists(db *gorm.DB, _ uint, email string, excludeID uint) (bool, error) {
+func CheckTenantUserEmailExists(db *gorm.DB, email string, excludeID uint) (bool, error) {
 	email = utils.TrimLower(email)
 	q := ActiveTenantUsers(db).Where("email = ?", email)
 	if excludeID > 0 {
@@ -236,7 +273,7 @@ func CheckTenantUserEmailExists(db *gorm.DB, _ uint, email string, excludeID uin
 }
 
 // CheckTenantUserPhoneExists checks if phone is already used globally (excluding empty phone).
-func CheckTenantUserPhoneExists(db *gorm.DB, _ uint, phone string, excludeID uint) (bool, error) {
+func CheckTenantUserPhoneExists(db *gorm.DB, phone string, excludeID uint) (bool, error) {
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
 		return false, nil
@@ -251,7 +288,7 @@ func CheckTenantUserPhoneExists(db *gorm.DB, _ uint, phone string, excludeID uin
 }
 
 // CheckTenantUserUsernameExists checks if username is already used globally (excluding blank).
-func CheckTenantUserUsernameExists(db *gorm.DB, _ uint, username string, excludeID uint) (bool, error) {
+func CheckTenantUserUsernameExists(db *gorm.DB, username string, excludeID uint) (bool, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return false, nil

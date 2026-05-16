@@ -12,9 +12,9 @@ import (
 type TenantGroup struct {
 	BaseModel
 
-	TenantID  uint   `json:"tenantId" gorm:"index;not null"`
-	Name      string `json:"name" gorm:"size:128;index;not null"`
-	IsDefault bool   `json:"isDefault" gorm:"index;not null;default:0"`
+	TenantID  uint   `json:"tenantId" gorm:"index;not null;comment:所属租户ID"`
+	Name      string `json:"name" gorm:"size:128;index;not null;comment:部门名称"`
+	IsDefault bool   `json:"isDefault" gorm:"index;not null;default:0;comment:是否默认部门"`
 }
 
 func (TenantGroup) TableName() string {
@@ -25,8 +25,8 @@ func (TenantGroup) TableName() string {
 type TenantUserGroup struct {
 	BaseModel
 
-	TenantUserID uint `json:"tenantUserId" gorm:"index;not null;uniqueIndex:idx_user_group"`
-	GroupID      uint `json:"groupId" gorm:"index;not null;uniqueIndex:idx_user_group"`
+	TenantUserID uint `json:"tenantUserId" gorm:"index;not null;uniqueIndex:idx_user_group;comment:租户用户ID"`
+	GroupID      uint `json:"groupId" gorm:"index;not null;uniqueIndex:idx_user_group;comment:部门ID"`
 }
 
 func (TenantUserGroup) TableName() string {

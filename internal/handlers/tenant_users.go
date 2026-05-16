@@ -60,7 +60,7 @@ func (h *Handlers) listTenantUsers(c *gin.Context) {
 	}
 	pub := make([]gin.H, 0, len(list))
 	for _, row := range list {
-		pub = append(pub, h.tenantUserPublic(row))
+		pub = append(pub, models.TenantUserPublic(h.db, row))
 	}
 	response.Success(c, "success", gin.H{"list": pub, "total": total, "page": page, "size": size})
 }
@@ -85,7 +85,7 @@ func (h *Handlers) getTenantUser(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	response.Success(c, "success", h.tenantUserPublic(row))
+	response.Success(c, "success", models.TenantUserPublic(h.db, row))
 }
 
 func (h *Handlers) createTenantUser(c *gin.Context) {
@@ -107,20 +107,20 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 	}
 
 	// Check for duplicates
-	exists, _ := models.CheckTenantUserEmailExists(h.db, tenantID, email, 0)
+	exists, _ := models.CheckTenantUserEmailExists(h.db, email, 0)
 	if exists {
 		response.Fail(c, "email already exists", nil)
 		return
 	}
 	if req.Phone != "" {
-		exists, _ = models.CheckTenantUserPhoneExists(h.db, tenantID, strings.TrimSpace(req.Phone), 0)
+		exists, _ = models.CheckTenantUserPhoneExists(h.db, strings.TrimSpace(req.Phone), 0)
 		if exists {
 			response.Fail(c, "phone already exists", nil)
 			return
 		}
 	}
 	if req.Username != "" {
-		exists, _ = models.CheckTenantUserUsernameExists(h.db, tenantID, strings.TrimSpace(req.Username), 0)
+		exists, _ = models.CheckTenantUserUsernameExists(h.db, strings.TrimSpace(req.Username), 0)
 		if exists {
 			response.Fail(c, "username already exists", nil)
 			return
@@ -157,7 +157,7 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		Status:       status,
 		Source:       source,
 	}
-	if op := acdOperator(c); op != "" {
+	if op := middleware.AuditOperator(c); op != "" {
 		user.SetCreateInfo(op)
 	}
 
@@ -165,7 +165,7 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", h.tenantUserPublic(*user))
+	response.Success(c, "success", models.TenantUserPublic(h.db, *user))
 }
 
 func (h *Handlers) updateTenantUser(c *gin.Context) {
@@ -200,7 +200,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 	updates := make(map[string]any)
 	if req.Email != "" {
 		email := utils.TrimLower(req.Email)
-		exists, _ := models.CheckTenantUserEmailExists(h.db, existing.TenantID, email, uint(id))
+		exists, _ := models.CheckTenantUserEmailExists(h.db, email, uint(id))
 		if exists {
 			response.Fail(c, "email already exists", nil)
 			return
@@ -209,7 +209,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 	}
 	if req.Phone != "" {
 		phone := strings.TrimSpace(req.Phone)
-		exists, _ := models.CheckTenantUserPhoneExists(h.db, existing.TenantID, phone, uint(id))
+		exists, _ := models.CheckTenantUserPhoneExists(h.db, phone, uint(id))
 		if exists {
 			response.Fail(c, "phone already exists", nil)
 			return
@@ -218,7 +218,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 	}
 	if req.Username != "" {
 		username := strings.TrimSpace(req.Username)
-		exists, _ := models.CheckTenantUserUsernameExists(h.db, existing.TenantID, username, uint(id))
+		exists, _ := models.CheckTenantUserUsernameExists(h.db, username, uint(id))
 		if exists {
 			response.Fail(c, "username already exists", nil)
 			return
@@ -237,7 +237,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 		return
 	}
 
-	n, err := models.UpdateTenantUser(h.db, uint(id), updates, acdOperator(c))
+	n, err := models.UpdateTenantUser(h.db, uint(id), updates, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -279,7 +279,7 @@ func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
 		return
 	}
 
-	n, err := models.UpdateTenantUserStatus(h.db, id, status, acdOperator(c))
+	n, err := models.UpdateTenantUserStatus(h.db, id, status, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -309,7 +309,7 @@ func (h *Handlers) deleteTenantUser(c *gin.Context) {
 		return
 	}
 
-	rows, err := models.SoftDeleteTenantUserByID(h.db, id, acdOperator(c))
+	rows, err := models.SoftDeleteTenantUserByID(h.db, id, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -339,7 +339,7 @@ func (h *Handlers) restoreTenantUser(c *gin.Context) {
 		return
 	}
 
-	rows, err := models.RestoreTenantUser(h.db, id, acdOperator(c))
+	rows, err := models.RestoreTenantUser(h.db, id, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -408,7 +408,7 @@ func (h *Handlers) getMe(c *gin.Context) {
 		}
 		response.Success(c, "success", gin.H{
 			"principal":     "platform",
-			"platformAdmin": platformAdminPublic(row),
+			"platformAdmin": models.PlatformAdminPublic(row),
 		})
 		return
 	}
@@ -425,8 +425,8 @@ func (h *Handlers) getMe(c *gin.Context) {
 	codes, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, u.ID)
 	response.Success(c, "success", gin.H{
 		"principal":       "tenant",
-		"user":            h.tenantUserPublic(u),
-		"tenant":          tenantPublic(tenant),
+		"user":            models.TenantUserPublic(h.db, u),
+		"tenant":          models.TenantPublic(tenant),
 		"permissionCodes": codes,
 	})
 }
@@ -458,7 +458,7 @@ func (h *Handlers) updateMe(c *gin.Context) {
 			response.Fail(c, "not found", nil)
 			return
 		}
-		response.Success(c, "success", platformAdminPublic(row))
+		response.Success(c, "success", models.PlatformAdminPublic(row))
 		return
 	}
 
@@ -477,7 +477,7 @@ func (h *Handlers) updateMe(c *gin.Context) {
 	}
 	if req.Phone != "" {
 		phone := strings.TrimSpace(req.Phone)
-		exists, _ := models.CheckTenantUserPhoneExists(h.db, u.TenantID, phone, u.ID)
+		exists, _ := models.CheckTenantUserPhoneExists(h.db, phone, u.ID)
 		if exists {
 			response.Fail(c, "phone already exists", nil)
 			return
@@ -486,7 +486,7 @@ func (h *Handlers) updateMe(c *gin.Context) {
 	}
 	if req.Username != "" {
 		username := strings.TrimSpace(req.Username)
-		exists, _ := models.CheckTenantUserUsernameExists(h.db, u.TenantID, username, u.ID)
+		exists, _ := models.CheckTenantUserUsernameExists(h.db, username, u.ID)
 		if exists {
 			response.Fail(c, "username already exists", nil)
 			return
@@ -497,7 +497,7 @@ func (h *Handlers) updateMe(c *gin.Context) {
 		response.Fail(c, "no fields to update", nil)
 		return
 	}
-	if _, err := models.UpdateTenantUser(h.db, u.ID, updates, acdOperator(c)); err != nil {
+	if _, err := models.UpdateTenantUser(h.db, u.ID, updates, middleware.AuditOperator(c)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -506,7 +506,7 @@ func (h *Handlers) updateMe(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", h.tenantUserPublic(next))
+	response.Success(c, "success", models.TenantUserPublic(h.db, next))
 }
 
 func (h *Handlers) updateMyPassword(c *gin.Context) {
@@ -565,7 +565,7 @@ func (h *Handlers) updateMyPassword(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{"password_hash": hash}, acdOperator(c)); err != nil {
+	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{"password_hash": hash}, middleware.AuditOperator(c)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -581,21 +581,6 @@ func (h *Handlers) logout(c *gin.Context) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 const maxAvatarBytes = 2 << 20
-
-func pickAvatarExt(contentType string) string {
-	switch strings.ToLower(contentType) {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	default:
-		return ""
-	}
-}
 
 func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 	if middleware.AuthPlatformAdminID(c) > 0 {
@@ -628,7 +613,7 @@ func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 		return
 	}
 	ct := http.DetectContentType(body)
-	ext := pickAvatarExt(ct)
+	ext := utils.PickImageExtFromContentType(ct)
 	if ext == "" {
 		response.Fail(c, "仅支持 JPEG、PNG、GIF、WebP", nil)
 		return
@@ -658,7 +643,7 @@ func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 			url = "/uploads/" + strings.TrimPrefix(key, "/")
 		}
 	}
-	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{"avatar_url": url}, acdOperator(c)); err != nil {
+	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{"avatar_url": url}, middleware.AuditOperator(c)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -667,7 +652,7 @@ func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"avatarUrl": url, "user": h.tenantUserPublic(next)})
+	response.Success(c, "success", gin.H{"avatarUrl": url, "user": models.TenantUserPublic(h.db, next)})
 }
 
 type enableTotpReq struct {
@@ -739,7 +724,7 @@ func (h *Handlers) enableTotp(c *gin.Context) {
 	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{
 		"totp_secret":  secret,
 		"totp_enabled": true,
-	}, acdOperator(c)); err != nil {
+	}, middleware.AuditOperator(c)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -748,7 +733,7 @@ func (h *Handlers) enableTotp(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", h.tenantUserPublic(next))
+	response.Success(c, "success", models.TenantUserPublic(h.db, next))
 }
 
 func (h *Handlers) disableTotp(c *gin.Context) {
@@ -780,7 +765,7 @@ func (h *Handlers) disableTotp(c *gin.Context) {
 	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{
 		"totp_secret":  "",
 		"totp_enabled": false,
-	}, acdOperator(c)); err != nil {
+	}, middleware.AuditOperator(c)); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
@@ -789,5 +774,5 @@ func (h *Handlers) disableTotp(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", h.tenantUserPublic(next))
+	response.Success(c, "success", models.TenantUserPublic(h.db, next))
 }

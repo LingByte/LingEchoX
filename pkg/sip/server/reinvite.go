@@ -20,6 +20,11 @@ func (s *SIPServer) handleReInvite(msg *stack.Message, addr *net.UDPAddr, cs *si
 	if s == nil || msg == nil || cs == nil || addr == nil {
 		return nil
 	}
+	// RFC 4028 §10: any in-dialog INVITE refreshes the session timer.
+	// Touch BEFORE running the request through so even a 488 rejection
+	// still reflects "the peer is alive" — the timer is about session
+	// liveness, not media-renegotiation success.
+	cs.TouchSessionTimer()
 	callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
 	toWithTag := ensureToTag(msg.GetHeader("To"))
 	s.registerPendingInvite(msg, addr, toWithTag)

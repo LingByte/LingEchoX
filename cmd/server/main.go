@@ -102,6 +102,7 @@ func main() {
 	if addr == "" {
 		addr = ":8082"
 	}
+
 	// 9. Create application
 	app := NewLingEchoApp(db)
 	sipUserCleaner := tasks.NewSIPUserOnlineCleaner(db, time.Duration(utils.GetIntEnv("SIP_USER_ONLINE_SWEEP_SECONDS"))*time.Second)

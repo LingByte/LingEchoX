@@ -24,7 +24,7 @@ func (h *Handlers) listTenants(c *gin.Context) {
 	}
 	rows := make([]gin.H, len(list))
 	for i := range list {
-		rows[i] = tenantPublic(list[i])
+		rows[i] = models.TenantPublic(list[i])
 	}
 	response.Success(c, "success", gin.H{"list": rows, "total": total, "page": page, "size": size})
 }

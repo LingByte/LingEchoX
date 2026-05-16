@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
@@ -99,4 +100,15 @@ func AuthEmail(c *gin.Context) string {
 		}
 	}
 	return ""
+}
+
+// AuditOperator returns email, user id string, or "system" for create_by / update_by fields.
+func AuditOperator(c *gin.Context) string {
+	if s := strings.TrimSpace(AuthEmail(c)); s != "" {
+		return s
+	}
+	if uid := AuthUserID(c); uid > 0 {
+		return strconv.FormatUint(uint64(uid), 10)
+	}
+	return "system"
 }

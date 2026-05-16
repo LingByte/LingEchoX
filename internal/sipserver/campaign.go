@@ -386,7 +386,7 @@ func (s *CampaignService) RecordScriptStep(ctx context.Context, evt outbound.Scr
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return err
 	}
-	msg := fmt.Sprintf("step=%s type=%s result=%s input=%s output=%s", evt.StepID, evt.StepType, evt.Result, nonEmptyOr(evt.InputText, "-"), nonEmptyOr(evt.OutputText, "-"))
+	msg := fmt.Sprintf("step=%s type=%s result=%s input=%s output=%s", evt.StepID, evt.StepType, evt.Result, utils.NonEmptyOr(evt.InputText, "-"), utils.NonEmptyOr(evt.OutputText, "-"))
 	if evt.StepType == constants.SIPScriptStepListen && evt.Result == constants.SIPScriptRunStarted {
 		msg = "listen wait (asr pending): " + msg
 	}
@@ -667,14 +667,6 @@ func (r scriptRecorder) Record(ctx context.Context, event outbound.ScriptRunEven
 		return nil
 	}
 	return r.s.RecordScriptStep(ctx, event)
-}
-
-func nonEmptyOr(v, fallback string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return fallback
-	}
-	return v
 }
 
 func (s *CampaignService) tryAcquireCampaignSlot(campaignID uint, limit int) bool {

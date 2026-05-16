@@ -4,19 +4,25 @@ package utils
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/welcomeaudio"
 	"go.uber.org/zap"
 )
 
@@ -258,4 +264,154 @@ func NormalizeFramePeriod(d string) time.Duration {
 		return 20 * time.Millisecond
 	}
 	return parsed
+}
+
+// PickImageExtFromContentType maps image/* Content-Type to a file extension.
+func PickImageExtFromContentType(contentType string) string {
+	switch strings.ToLower(contentType) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ""
+	}
+}
+
+// JSONValueFromBytes unmarshals JSON bytes for API maps; empty/null returns nil.
+func JSONValueFromBytes(b []byte) any {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return nil
+	}
+	return v
+}
+
+// MarshalStringSliceJSON encodes a string slice as JSON. When s is empty, defaultIfEmpty is used (may be nil).
+func MarshalStringSliceJSON(s []string, defaultIfEmpty []string) (string, error) {
+	if len(s) == 0 && defaultIfEmpty != nil {
+		s = defaultIfEmpty
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// MustMarshalJSON marshals v; on error returns "{}".
+func MustMarshalJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
+}
+
+// NonEmptyOr returns v when non-empty, otherwise fallback.
+func NonEmptyOr(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+// CloneRawMessage copies json.RawMessage for GORM/datatypes persistence.
+func CloneRawMessage(r json.RawMessage) []byte {
+	if len(r) == 0 {
+		return []byte("null")
+	}
+	out := make([]byte, len(r))
+	copy(out, r)
+	return out
+}
+
+// ParseOptionalRFC3339 parses *s when set; nil or blank returns (nil, nil).
+func ParseOptionalRFC3339(s *string) (*time.Time, error) {
+	if s == nil {
+		return nil, nil
+	}
+	v := strings.TrimSpace(*s)
+	if v == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// NormalizeTrunkNumberAudioURL validates a welcome/ringing audio URL (empty allowed).
+func NormalizeTrunkNumberAudioURL(ctx context.Context, fieldName, raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if err := welcomeaudio.ValidateURL(ctx, s); err != nil {
+		return "", fmt.Errorf("%s invalid: %w", fieldName, err)
+	}
+	return s, nil
+}
+
+// NormalizeTrunkNumberVoiceDialogWs validates optional ws/wss dialogue bridge URL.
+func NormalizeTrunkNumberVoiceDialogWs(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return "", fmt.Errorf("voiceDialogWsUrl must be ws:// or wss:// with host")
+	}
+	return s, nil
+}
+
+// NormalizeTenantSlug lowercases and collapses a human label into [a-z0-9-] slug form.
+func NormalizeTenantSlug(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		case r == '-' || r == '_' || unicode.IsSpace(r):
+			if b.Len() > 0 && !prevDash {
+				b.WriteRune('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// ValidTenantSlug reports whether slug meets tenant slug rules (2–64 chars, lowercase alnum and internal dashes).
+func ValidTenantSlug(slug string) bool {
+	if len(slug) < 2 || len(slug) > 64 {
+		return false
+	}
+	for i, r := range slug {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			continue
+		case r == '-':
+			if i == 0 || i == len(slug)-1 {
+				return false
+			}
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }

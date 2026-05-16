@@ -5,11 +5,9 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -22,7 +20,6 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/welcomeaudio"
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // maxWelcomeWAVBytes 上限与 pkg/welcomeaudio.MaxBytes 对齐（16MiB）；
@@ -67,75 +64,6 @@ type trunkNumberWriteReq struct {
 	// 空则回退 SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav。
 	// 与 WelcomeAudioUrl 共用同一套校验逻辑（welcomeaudio.ValidateURL）。
 	TransferRingingUrl string `json:"transferRingingUrl"`
-}
-
-// normalizeTrunkNumberAudioURL 处理写入路径上任何「中继音频 URL」字段
-// （welcomeAudioUrl / transferRingingUrl 共用）：空值直接返回（合法，走
-// fallback）；非空时调用 welcomeaudio.ValidateURL 做 scheme / 可达性 /
-// RIFF-WAVE magic 三重校验。
-//
-// 校验在 5 秒 deadline 内完成（管理后台交互预算），失败时把底层错误原样
-// 透传给前端，便于运营定位是配置错（scheme 不对）还是网络错（CDN 504）。
-// fieldName 仅用于错误信息提示，方便用户在浏览器看到具体字段名。
-func normalizeTrunkNumberAudioURL(ctx context.Context, fieldName, raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", nil
-	}
-	if err := welcomeaudio.ValidateURL(ctx, s); err != nil {
-		return "", fmt.Errorf("%s invalid: %w", fieldName, err)
-	}
-	return s, nil
-}
-
-// validateOutboundTrunkNumberBinding 校验外呼号码绑定：必须与本号码同租户、direction 允许外呼、
-// 且不指向本号码自身（避免循环）。tenantID == 0（平台号池）时禁止绑定。
-func validateOutboundTrunkNumberBinding(db *gorm.DB, selfID, outboundID, tenantID uint) error {
-	if outboundID == 0 {
-		return nil
-	}
-	if tenantID == 0 {
-		return fmt.Errorf("outboundTrunkNumberId 需先把本号码分配给某个租户")
-	}
-	if outboundID == selfID {
-		return fmt.Errorf("outboundTrunkNumberId 不能指向号码自身")
-	}
-	var n models.TrunkNumber
-	if err := db.Where("id = ? AND tenant_id = ?", outboundID, tenantID).First(&n).Error; err != nil {
-		return fmt.Errorf("outboundTrunkNumberId 不属于同一租户或不存在")
-	}
-	dir := strings.ToLower(strings.TrimSpace(n.Direction))
-	if dir != "outbound" && dir != "both" && dir != "all" {
-		return fmt.Errorf("outboundTrunkNumberId 对应号码 direction 必须是 outbound/both/all")
-	}
-	return nil
-}
-
-func normalizeTrunkNumberVoiceDialogWs(raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", nil
-	}
-	u, err := url.Parse(s)
-	if err != nil || u.Host == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
-		return "", fmt.Errorf("voiceDialogWsUrl must be ws:// or wss:// with host")
-	}
-	return s, nil
-}
-
-func parseOptionalRFC3339(s *string) (*time.Time, error) {
-	if s == nil {
-		return nil, nil
-	}
-	v := strings.TrimSpace(*s)
-	if v == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(time.RFC3339, v)
-	if err != nil {
-		return nil, err
-	}
-	return &t, nil
 }
 
 func (h *Handlers) listTrunks(c *gin.Context) {
@@ -308,32 +236,32 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 		response.Fail(c, "trunk not found", nil)
 		return
 	}
-	eff, err := parseOptionalRFC3339(req.EffectiveTime)
+	eff, err := utils.ParseOptionalRFC3339(req.EffectiveTime)
 	if err != nil {
 		response.Fail(c, "invalid effectiveTime", err.Error())
 		return
 	}
-	exp, err := parseOptionalRFC3339(req.ExpirationTime)
+	exp, err := utils.ParseOptionalRFC3339(req.ExpirationTime)
 	if err != nil {
 		response.Fail(c, "invalid expirationTime", err.Error())
 		return
 	}
-	voiceWS, err := normalizeTrunkNumberVoiceDialogWs(req.VoiceDialogWsURL)
+	voiceWS, err := utils.NormalizeTrunkNumberVoiceDialogWs(req.VoiceDialogWsURL)
 	if err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
-	welcomeURL, err := normalizeTrunkNumberAudioURL(c.Request.Context(), "welcomeAudioUrl", req.WelcomeAudioUrl)
+	welcomeURL, err := utils.NormalizeTrunkNumberAudioURL(c.Request.Context(), "welcomeAudioUrl", req.WelcomeAudioUrl)
 	if err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
-	ringingURL, err := normalizeTrunkNumberAudioURL(c.Request.Context(), "transferRingingUrl", req.TransferRingingUrl)
+	ringingURL, err := utils.NormalizeTrunkNumberAudioURL(c.Request.Context(), "transferRingingUrl", req.TransferRingingUrl)
 	if err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
-	if err := validateOutboundTrunkNumberBinding(h.db, 0, req.OutboundTrunkNumberID, req.TenantID); err != nil {
+	if err := models.ValidateOutboundTrunkNumberBinding(h.db, 0, req.OutboundTrunkNumberID, req.TenantID); err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
@@ -403,32 +331,32 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 		response.Fail(c, "trunk not found", nil)
 		return
 	}
-	eff, err := parseOptionalRFC3339(req.EffectiveTime)
+	eff, err := utils.ParseOptionalRFC3339(req.EffectiveTime)
 	if err != nil {
 		response.Fail(c, "invalid effectiveTime", err.Error())
 		return
 	}
-	exp, err := parseOptionalRFC3339(req.ExpirationTime)
+	exp, err := utils.ParseOptionalRFC3339(req.ExpirationTime)
 	if err != nil {
 		response.Fail(c, "invalid expirationTime", err.Error())
 		return
 	}
-	voiceWS, err := normalizeTrunkNumberVoiceDialogWs(req.VoiceDialogWsURL)
+	voiceWS, err := utils.NormalizeTrunkNumberVoiceDialogWs(req.VoiceDialogWsURL)
 	if err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
-	welcomeURL, err := normalizeTrunkNumberAudioURL(c.Request.Context(), "welcomeAudioUrl", req.WelcomeAudioUrl)
+	welcomeURL, err := utils.NormalizeTrunkNumberAudioURL(c.Request.Context(), "welcomeAudioUrl", req.WelcomeAudioUrl)
 	if err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
-	ringingURL, err := normalizeTrunkNumberAudioURL(c.Request.Context(), "transferRingingUrl", req.TransferRingingUrl)
+	ringingURL, err := utils.NormalizeTrunkNumberAudioURL(c.Request.Context(), "transferRingingUrl", req.TransferRingingUrl)
 	if err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
-	if err := validateOutboundTrunkNumberBinding(h.db, id, req.OutboundTrunkNumberID, req.TenantID); err != nil {
+	if err := models.ValidateOutboundTrunkNumberBinding(h.db, id, req.OutboundTrunkNumberID, req.TenantID); err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}

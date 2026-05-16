@@ -83,7 +83,7 @@ func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
 		spec,
 	)
 	row.TenantID = tid
-	if op := acdOperator(c); op != "" {
+	if op := middleware.AuditOperator(c); op != "" {
 		row.SetCreateInfo(op)
 	}
 	if err := h.db.Create(&row).Error; err != nil {
@@ -110,7 +110,7 @@ func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	updateBy := acdOperator(c)
+	updateBy := middleware.AuditOperator(c)
 	updates, err := models.BuildSIPScriptTemplateUpdates(
 		row,
 		req.Name,
@@ -140,7 +140,7 @@ func (h *Handlers) deleteSIPScriptTemplate(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	n, err := models.SoftDeleteSIPScriptTemplateByIDForTenant(h.db, id, tid, acdOperator(c))
+	n, err := models.SoftDeleteSIPScriptTemplateByIDForTenant(h.db, id, tid, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return

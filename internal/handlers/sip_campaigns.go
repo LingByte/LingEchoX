@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -101,7 +100,7 @@ func (h *Handlers) createSIPCampaign(c *gin.Context) {
 	if row.GlobalConcurrency <= 0 {
 		row.GlobalConcurrency = 20
 	}
-	if op := acdOperator(c); op != "" {
+	if op := middleware.AuditOperator(c); op != "" {
 		row.SetCreateInfo(op)
 	}
 	if err := h.db.Create(&row).Error; err != nil {
@@ -140,7 +139,7 @@ func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 		if phone == "" {
 			continue
 		}
-		b := jsonMarshal(it.Variables)
+		b := utils.MustMarshalJSON(it.Variables)
 		items = append(items, models.SIPCampaignContactBatchItem{
 			Phone:         phone,
 			Display:       it.Display,
@@ -217,7 +216,7 @@ func (h *Handlers) setSIPCampaignStatus(c *gin.Context, status string) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	n, err := models.UpdateActiveSIPCampaignStatusForTenant(h.db, id, tid, status, acdOperator(c))
+	n, err := models.UpdateActiveSIPCampaignStatusForTenant(h.db, id, tid, status, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -268,7 +267,7 @@ func (h *Handlers) deleteSIPCampaign(c *gin.Context) {
 		response.Fail(c, "running campaign cannot be deleted", nil)
 		return
 	}
-	n, err := models.SoftDeleteSIPCampaignForTenant(h.db, id, tid, acdOperator(c))
+	n, err := models.SoftDeleteSIPCampaignForTenant(h.db, id, tid, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -353,7 +352,7 @@ func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 			Phone:         "",
 			CallID:        e.CallID,
 			CorrelationID: e.CorrelationID,
-			Level:         nonEmptyOr(strings.TrimSpace(e.Level), "info"),
+			Level:         utils.NonEmptyOr(strings.TrimSpace(e.Level), "info"),
 			Message:       strings.TrimSpace(e.Message),
 		})
 	}
@@ -452,24 +451,10 @@ func (h *Handlers) appendCampaignEvent(campaignID, contactID, attemptID uint, ca
 		AttemptID:     attemptID,
 		CallID:        strings.TrimSpace(callID),
 		CorrelationID: strings.TrimSpace(correlationID),
-		Type:          nonEmptyOr(strings.TrimSpace(typ), "campaign"),
-		Level:         nonEmptyOr(strings.TrimSpace(level), "info"),
-		Message:       nonEmptyOr(strings.TrimSpace(message), "event"),
+		Type:          utils.NonEmptyOr(strings.TrimSpace(typ), "campaign"),
+		Level:         utils.NonEmptyOr(strings.TrimSpace(level), "info"),
+		Message:       utils.NonEmptyOr(strings.TrimSpace(message), "event"),
 	}
 	_ = models.InsertSIPCampaignEvent(context.Background(), h.db, evt)
 }
 
-func nonEmptyOr(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-func jsonMarshal(v interface{}) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return []byte("{}")
-	}
-	return b
-}

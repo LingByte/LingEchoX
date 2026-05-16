@@ -2,7 +2,10 @@ import { del, get, post, put, type ApiResponse } from '@/utils/request'
 import type { Paginated } from '@/api/types'
 
 export interface TenantRow {
-  id: number
+  // id 是后端 Snowflake (uint64, >2^53)，必须以字符串透传，否则 JavaScript
+  // Number 会把末几位抹平（典型表现：…3258368 → …3258000），随后 GET/PUT
+  // /tenants/:id 全部 404。后端 `tenantPublic` 已经把 ID 序列化为字符串。
+  id: string
   name: string
   slug: string
   description?: string
@@ -29,7 +32,7 @@ export async function listTenants(
   return get(`/tenants?${q.toString()}`)
 }
 
-export async function getTenant(id: number): Promise<ApiResponse<{ tenant: TenantDetail }>> {
+export async function getTenant(id: string | number): Promise<ApiResponse<{ tenant: TenantDetail }>> {
   return get(`/tenants/${id}`)
 }
 
@@ -45,7 +48,7 @@ export async function createTenantPlatform(body: {
 }
 
 export async function updateTenantPlatform(
-  id: number,
+  id: string | number,
   body: {
     name?: string
     description?: string
@@ -60,6 +63,6 @@ export async function updateTenantPlatform(
   return put(`/tenants/${id}`, body)
 }
 
-export async function deleteTenantPlatform(id: number): Promise<ApiResponse<{ id: number }>> {
+export async function deleteTenantPlatform(id: string | number): Promise<ApiResponse<{ id: string }>> {
   return del(`/tenants/${id}`)
 }

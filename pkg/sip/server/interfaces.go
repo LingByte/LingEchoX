@@ -20,6 +20,8 @@ import (
 	"context"
 	"net"
 
+	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
+	"github.com/LinByte/VoiceServer/pkg/sip/identity"
 	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 	"github.com/LinByte/VoiceServer/pkg/sip/session"
@@ -39,6 +41,32 @@ type IncomingCall struct {
 	// been (or will be) advertised in the 200 OK SDP answer. Business
 	// handlers MUST pass this same session to session.NewMediaLeg.
 	RTPSession *rtp.Session
+
+	// AssertedIdentities is the parsed P-Asserted-Identity header (RFC 3325)
+	// when present AND the remote signaling peer is in the configured
+	// trust domain (SIP_PAI_TRUST_DOMAINS env). Empty when:
+	//   - the header is absent,
+	//   - the peer is not in the trust domain (PAI silently dropped per
+	//     RFC 3325 §5: an untrusted assertion is worse than no assertion),
+	//   - the header is syntactically malformed.
+	// Business code should prefer this over FromURI for CDR / abuse-tracing
+	// because PAI carries the *carrier-verified* identity, while From is
+	// the user-claimed value. If empty, fall back to FromURI.
+	AssertedIdentities []identity.Asserted
+	// PrivacyTokens is the parsed Privacy header (RFC 3323). Common
+	// inbound use: caller sent {"id"} to request anonymous display →
+	// business code should redact identity in agent UIs and CDR exports.
+	PrivacyTokens []string
+
+	// HistoryInfo (RFC 7044) parsed from the inbound INVITE. When we
+	// later run a B2BUA transfer (TriggerTransferToAgent or REFER), we
+	// extend THIS chain rather than synthesise a new one, so multi-hop
+	// SBC topologies preserve their full retarget history downstream.
+	// Empty when the header is absent.
+	HistoryInfo []historyinfo.Entry
+	// Diversion (RFC 5806) parsed from the inbound INVITE. Same chain-
+	// extension policy as HistoryInfo. Empty when the header is absent.
+	Diversion []historyinfo.Diversion
 }
 
 // Decision tells the SIP server how to answer an INVITE.

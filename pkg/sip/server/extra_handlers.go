@@ -30,6 +30,14 @@ func (s *SIPServer) handleUpdate(msg *stack.Message, addr *net.UDPAddr) *stack.M
 	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
+	// RFC 4028 §6: UPDATE is a valid session-timer refresh method. If
+	// we know this Call-ID's CallSession, touch its watchdog so the
+	// peer's keep-alive doesn't get us BYE'd in `ChosenSE` seconds.
+	if callID := strings.TrimSpace(msg.GetHeader("Call-ID")); callID != "" {
+		if cs := s.GetCallSession(callID); cs != nil {
+			cs.TouchSessionTimer()
+		}
+	}
 	resp := s.makeResponse(msg, 200, "OK", "", "")
 	resp.SetHeader("Content-Length", "0")
 	return resp

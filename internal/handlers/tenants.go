@@ -4,31 +4,19 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"math/big"
 	"net/http"
 	"strings"
-	"time"
-	"unicode"
 
 	"github.com/LinByte/VoiceServer/cmd/bootstrap"
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
 	"github.com/gin-gonic/gin"
-	pinyinLib "github.com/mozillazg/go-pinyin"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
-)
-
-const (
-	tenantAccessTokenTTL = 24 * time.Hour
-	jwtRoleTenantAdmin   = "tenant_admin"
-	jwtRoleTenantMember  = "tenant_member"
 )
 
 type tenantRegisterReq struct {
@@ -40,267 +28,22 @@ type tenantRegisterReq struct {
 	MaxUserCount      int    `json:"maxUserCount"`
 }
 
-func baseSlugFromCompanyName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "tenant"
+func signTenantAccessToken(db *gorm.DB, user models.TenantUser, tenant models.Tenant) (string, error) {
+	if bootstrap.GlobalKeyManager == nil {
+		return "", errors.New("jwt key manager not initialized")
 	}
-	args := pinyinLib.NewArgs()
-	segs := pinyinLib.LazyPinyin(name, args)
-	raw := strings.Join(segs, "-")
-	slug := normalizeTenantSlug(raw)
-	if slug == "" {
-		slug = normalizeTenantSlug(name)
-	}
-	if len(slug) < 2 {
-		slug = "tenant"
-	}
-	if len(slug) > 62 {
-		slug = strings.TrimRight(strings.TrimSpace(slug[:62]), "-")
-	}
-	return slug
-}
-
-func allocateUniqueTenantSlug(db *gorm.DB, base string) (string, error) {
-	base = strings.Trim(base, "-")
-	if base == "" {
-		base = "tenant"
-	}
-	for attempts := 0; attempts < 80; attempts++ {
-		nBig, err := rand.Int(rand.Reader, big.NewInt(100))
-		if err != nil {
-			return "", err
-		}
-		suffix := fmt.Sprintf("%02d", nBig.Int64())
-		candidate := base + suffix
-		if len(candidate) > 64 {
-			trunc := base[:64-len(suffix)]
-			trunc = strings.TrimRight(strings.TrimSpace(trunc), "-")
-			if len(trunc) < 2 {
-				trunc = "te"
-			}
-			candidate = trunc + suffix
-		}
-		if len(candidate) < 2 || len(candidate) > 64 {
-			continue
-		}
-		if !validTenantSlug(candidate) {
-			continue
-		}
-		ok, err := models.TenantSlugTaken(db, candidate)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return candidate, nil
-		}
-	}
-	return "", errors.New("could not allocate unique tenant slug")
-}
-
-func normalizeTenantSlug(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	prevDash := false
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			prevDash = false
-		case r == '-' || r == '_' || unicode.IsSpace(r):
-			if b.Len() > 0 && !prevDash {
-				b.WriteRune('-')
-				prevDash = true
-			}
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
-func validTenantSlug(slug string) bool {
-	if len(slug) < 2 || len(slug) > 64 {
-		return false
-	}
-	for i, r := range slug {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			continue
-		case r == '-':
-			if i == 0 || i == len(slug)-1 {
-				return false
-			}
-			continue
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func tenantJWTDisplayRole(db *gorm.DB, user models.TenantUser) string {
+	role := constants.JWTRoleTenantMember
 	if ok, _ := models.TenantUserHasRoleName(db, user.ID, models.TenantAdminRoleName); ok {
-		return jwtRoleTenantAdmin
+		role = constants.JWTRoleTenantAdmin
 	}
-	return jwtRoleTenantMember
-}
-
-func tenantLoginPayload(db *gorm.DB, user models.TenantUser, tenant models.Tenant) access.AccessPayload {
-	return access.AccessPayload{
+	p := access.AccessPayload{
 		UserID:     user.ID,
 		TenantID:   tenant.ID,
 		TenantSlug: tenant.Slug,
 		Email:      user.Email,
-		Role:       tenantJWTDisplayRole(db, user),
+		Role:       role,
 	}
-}
-
-func issueTenantAccessToken(db *gorm.DB, user models.TenantUser, tenant models.Tenant) (string, error) {
-	if bootstrap.GlobalKeyManager == nil {
-		return "", errors.New("jwt key manager not initialized")
-	}
-	p := tenantLoginPayload(db, user, tenant)
-	return access.SignAccessTokenWithKey(p, bootstrap.GlobalKeyManager, tenantAccessTokenTTL)
-}
-
-func (h *Handlers) tenantUserPublic(u models.TenantUser) gin.H {
-	out := gin.H{
-		"id":          u.ID,
-		"tenantId":    u.TenantID,
-		"email":       u.Email,
-		"phone":       u.Phone,
-		"username":    u.Username,
-		"displayName": u.DisplayName,
-		"avatarUrl":   u.AvatarURL,
-		"status":      u.Status,
-		"createdAt":   u.CreatedAt,
-		"lastLogin":   u.LastLogin,
-		"lastLoginIp": u.LastLoginIP,
-		"source":      u.Source,
-		"loginCount":  u.LoginCount,
-		"totpEnabled": u.TOTPEnabled,
-	}
-	if gs, err := models.ListTenantGroupsForUser(h.db, u.ID); err == nil && len(gs) > 0 {
-		gpub := make([]gin.H, 0, len(gs))
-		for _, g := range gs {
-			gpub = append(gpub, gin.H{"id": g.ID, "name": g.Name, "isDefault": g.IsDefault})
-		}
-		out["tenantGroups"] = gpub
-		out["tenantGroup"] = gin.H{"id": gs[0].ID, "name": gs[0].Name}
-	}
-	if roles, err := models.ListTenantRolesForUser(h.db, u.ID); err == nil && len(roles) > 0 {
-		rpub := make([]gin.H, 0, len(roles))
-		for _, r := range roles {
-			rpub = append(rpub, gin.H{"id": r.ID, "name": r.Name, "isSystem": r.IsSystem})
-		}
-		out["roles"] = rpub
-	}
-	return out
-}
-
-func tenantPublic(t models.Tenant) gin.H {
-	return gin.H{
-		"id":           t.ID,
-		"name":         t.Name,
-		"slug":         t.Slug,
-		"description":  t.Description,
-		"status":       t.Status,
-		"contactEmail": t.ContactEmail,
-		"maxUserCount": t.MaxUserCount,
-		"createdAt":    t.CreatedAt,
-	}
-}
-
-func jsonValueFromTenantBlob(b []byte) any {
-	s := strings.TrimSpace(string(b))
-	if s == "" || s == "null" {
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
-		return nil
-	}
-	return v
-}
-
-// tenantPlatformDetail is for platform-admin APIs only (includes per-tenant AI JSON). Do not use on tenant login.
-func tenantPlatformDetail(t models.Tenant) gin.H {
-	h := tenantPublic(t)
-	h["asrConfig"] = jsonValueFromTenantBlob(t.AsrConfig)
-	h["ttsConfig"] = jsonValueFromTenantBlob(t.TtsConfig)
-	h["llmConfig"] = jsonValueFromTenantBlob(t.LlmConfig)
-	return h
-}
-
-// provisionTenantWithAdmin creates tenant, system「管理员」role with full catalog permissions, first admin user, and role binding.
-func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash string, attachTag string) (tenant models.Tenant, user models.TenantUser, role models.TenantRole, err error) {
-	email := utils.TrimLower(req.AdminEmail)
-	display := strings.TrimSpace(req.AdminDisplayName)
-	if display == "" {
-		display = strings.Split(email, "@")[0]
-	}
-	slugBase := baseSlugFromCompanyName(req.CompanyName)
-	err = db.Transaction(func(tx *gorm.DB) error {
-		slug, e := allocateUniqueTenantSlug(tx, slugBase)
-		if e != nil {
-			return e
-		}
-		t := &models.Tenant{
-			Name:         strings.TrimSpace(req.CompanyName),
-			Slug:         slug,
-			Description:  strings.TrimSpace(req.TenantDescription),
-			Status:       "active",
-			ContactEmail: email,
-			MaxUserCount: req.MaxUserCount,
-		}
-		t.SetCreateInfo(attachTag)
-		if t.MaxUserCount <= 0 {
-			t.MaxUserCount = 5
-		}
-		if !utils.IsEmail(t.ContactEmail) {
-			return errors.New("invalid contact email")
-		}
-		if e := models.CreateTenant(tx, t); e != nil {
-			return e
-		}
-		tenant = *t
-
-		roleRow := &models.TenantRole{
-			TenantID:    tenant.ID,
-			Name:        models.TenantAdminRoleName,
-			Description: "组织管理员，注册时自动创建",
-			IsSystem:    true,
-		}
-		roleRow.SetCreateInfo(attachTag)
-		if e := models.CreateTenantRole(tx, roleRow); e != nil {
-			return e
-		}
-		role = *roleRow
-
-		u := &models.TenantUser{
-			TenantID:     tenant.ID,
-			Email:        email,
-			PasswordHash: passwordHash,
-			DisplayName:  display,
-			Status:       models.TenantUserStatusActive,
-			Source:       models.TenantUserSourceRegister,
-		}
-		u.SetCreateInfo(attachTag)
-		if e := models.CreateTenantUser(tx, u); e != nil {
-			return e
-		}
-		user = *u
-
-		tur := &models.TenantUserRole{
-			TenantUserID: user.ID,
-			RoleID:       role.ID,
-		}
-		tur.SetCreateInfo(attachTag)
-		if e := models.CreateTenantUserRole(tx, tur); e != nil {
-			return e
-		}
-		return models.AttachAllPermissionsToRole(tx, role.ID, attachTag)
-	})
-	return tenant, user, role, err
+	return access.SignAccessTokenWithKey(p, bootstrap.GlobalKeyManager, constants.TenantAccessTokenTTL)
 }
 
 // registerTenant creates a tenant, default admin role, first admin user, and returns JWT.
@@ -311,20 +54,16 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 
-	if bootstrap.GlobalKeyManager == nil {
-		response.Fail(c, "服务未就绪：JWT 密钥未初始化", nil)
-		return
-	}
-
 	hash, err := access.HashPassword(req.AdminPassword)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-
-	email := utils.TrimLower(req.AdminEmail)
-
-	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, 0, email, 0)
+	if !utils.IsEmail(req.AdminEmail) {
+		response.Fail(c, "邮箱格式错误", nil)
+		return
+	}
+	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, req.AdminEmail, 0)
 	if mailErr != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, mailErr)
 		return
@@ -334,7 +73,10 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 
-	tenant, user, role, err := provisionTenantWithAdmin(h.db, req, hash, "register")
+	tenant, user, role, err := models.ProvisionTenantWithAdmin(h.db, models.TenantProvisionInput{
+		CompanyName: req.CompanyName, AdminEmail: req.AdminEmail, AdminDisplayName: req.AdminDisplayName,
+		TenantDescription: req.TenantDescription, MaxUserCount: req.MaxUserCount,
+	}, hash, "register")
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -342,7 +84,7 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 
 	_ = models.RecordTenantUserLogin(h.db, user.ID, c.ClientIP())
 
-	token, err := issueTenantAccessToken(h.db, user, tenant)
+	token, err := signTenantAccessToken(h.db, user, tenant)
 	if err != nil {
 		response.Fail(c, "签发登录凭证失败", nil)
 		return
@@ -352,9 +94,9 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 	response.Success(c, "success", gin.H{
 		"principal":       "tenant",
 		"token":           token,
-		"expiresIn":       int(tenantAccessTokenTTL.Seconds()),
-		"tenant":          tenantPublic(tenant),
-		"user":            h.tenantUserPublic(user),
+		"expiresIn":       int(constants.TenantAccessTokenTTL.Seconds()),
+		"tenant":          models.TenantPublic(tenant),
+		"user":            models.TenantUserPublic(h.db, user),
 		"permissionCodes": pc,
 		"roleCreated":     models.TenantAdminRoleName,
 		"roleId":          role.ID,
@@ -362,19 +104,17 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 }
 
 type tenantPlatformUpdateReq struct {
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Status       string `json:"status"`
-	ContactEmail string `json:"contactEmail"`
-	MaxUserCount int    `json:"maxUserCount"`
-
-	AsrConfig *json.RawMessage `json:"asrConfig"`
-	TtsConfig *json.RawMessage `json:"ttsConfig"`
-	LlmConfig *json.RawMessage `json:"llmConfig"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description"`
+	Status       string           `json:"status"`
+	ContactEmail string           `json:"contactEmail"`
+	MaxUserCount int              `json:"maxUserCount"`
+	AsrConfig    *json.RawMessage `json:"asrConfig"`
+	TtsConfig    *json.RawMessage `json:"ttsConfig"`
+	LlmConfig    *json.RawMessage `json:"llmConfig"`
 }
 
 func (h *Handlers) getTenant(c *gin.Context) {
-	// Platform admin only (enforced by route middleware).
 	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -385,12 +125,10 @@ func (h *Handlers) getTenant(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	response.Success(c, "success", gin.H{"tenant": tenantPlatformDetail(t)})
+	response.Success(c, "success", gin.H{"tenant": models.TenantPlatformDetail(t)})
 }
 
-// createTenantPlatform provisions a tenant (platform console); same payload as public register but returns JSON without issuing tenant JWT.
 func (h *Handlers) createTenantPlatform(c *gin.Context) {
-	// Platform admin only (enforced by route middleware).
 	var req tenantRegisterReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "请求参数无效", err.Error())
@@ -401,8 +139,7 @@ func (h *Handlers) createTenantPlatform(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	email := utils.TrimLower(req.AdminEmail)
-	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, 0, email, 0)
+	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, req.AdminEmail, 0)
 	if mailErr != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, mailErr)
 		return
@@ -411,20 +148,22 @@ func (h *Handlers) createTenantPlatform(c *gin.Context) {
 		response.Fail(c, "该邮箱已被注册", nil)
 		return
 	}
-	tenant, user, role, err := provisionTenantWithAdmin(h.db, req, hash, "platform")
+	tenant, user, role, err := models.ProvisionTenantWithAdmin(h.db, models.TenantProvisionInput{
+		CompanyName: req.CompanyName, AdminEmail: req.AdminEmail, AdminDisplayName: req.AdminDisplayName,
+		TenantDescription: req.TenantDescription, MaxUserCount: req.MaxUserCount,
+	}, hash, "platform")
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
 	response.Success(c, "success", gin.H{
-		"tenant":    tenantPlatformDetail(tenant),
-		"adminUser": h.tenantUserPublic(user),
+		"tenant":    models.TenantPlatformDetail(tenant),
+		"adminUser": models.TenantUserPublic(h.db, user),
 		"roleId":    role.ID,
 	})
 }
 
 func (h *Handlers) updateTenantPlatform(c *gin.Context) {
-	// Platform admin only (enforced by route middleware).
 	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)
@@ -440,7 +179,7 @@ func (h *Handlers) updateTenantPlatform(c *gin.Context) {
 		return
 	}
 	st := strings.TrimSpace(req.Status)
-	if st != "" && st != "active" && st != "suspended" {
+	if st != "" && st != constants.TenantStatusActive && st != constants.TenantStatusSuspended {
 		response.Fail(c, "invalid status", nil)
 		return
 	}
@@ -463,20 +202,7 @@ func (h *Handlers) updateTenantPlatform(c *gin.Context) {
 		return
 	}
 	if req.AsrConfig != nil || req.TtsConfig != nil || req.LlmConfig != nil {
-		patch := map[string]any{
-			"updated_at": time.Now(),
-			"update_by":  op,
-		}
-		if req.AsrConfig != nil {
-			patch["asr_config"] = datatypes.JSON(cloneRawMessage(*req.AsrConfig))
-		}
-		if req.TtsConfig != nil {
-			patch["tts_config"] = datatypes.JSON(cloneRawMessage(*req.TtsConfig))
-		}
-		if req.LlmConfig != nil {
-			patch["llm_config"] = datatypes.JSON(cloneRawMessage(*req.LlmConfig))
-		}
-		if err := h.db.Model(&models.Tenant{}).Where("id = ?", id).Updates(patch).Error; err != nil {
+		if err := models.PatchTenantAIConfigJSON(h.db, id, req.AsrConfig, req.TtsConfig, req.LlmConfig, op); err != nil {
 			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 			return
 		}
@@ -486,20 +212,10 @@ func (h *Handlers) updateTenantPlatform(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"tenant": tenantPlatformDetail(t)})
-}
-
-func cloneRawMessage(r json.RawMessage) []byte {
-	if len(r) == 0 {
-		return []byte("null")
-	}
-	out := make([]byte, len(r))
-	copy(out, r)
-	return out
+	response.Success(c, "success", gin.H{"tenant": models.TenantPlatformDetail(t)})
 }
 
 func (h *Handlers) deleteTenantPlatform(c *gin.Context) {
-	// Platform admin only (enforced by route middleware).
 	id, err := utils.ParseID(c.Param("id"))
 	if err != nil {
 		response.Fail(c, "invalid id", nil)

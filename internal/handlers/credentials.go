@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -31,17 +32,6 @@ type credentialUpdateReq struct {
 	Name            *string  `json:"name"`
 	AllowIP         *string  `json:"allowIp"`
 	PermissionCodes []string `json:"permissionCodes"`
-}
-
-func marshalCredentialPermissionCodes(codes []string) (string, error) {
-	if len(codes) == 0 {
-		codes = []string{"*"}
-	}
-	b, err := json.Marshal(codes)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }
 
 // findCredentialForTenant 命中时返回行；未命中时已写过响应，调用方直接 return。
@@ -86,7 +76,7 @@ func (h *Handlers) createCredential(c *gin.Context) {
 	if req.PermissionCodes != nil && len(req.PermissionCodes) == 0 {
 		pcodes = "[]"
 	} else {
-		pcodes, err = marshalCredentialPermissionCodes(req.PermissionCodes)
+		pcodes, err = utils.MarshalStringSliceJSON(req.PermissionCodes, []string{constants.CredentialPermissionWildcard})
 	}
 	if err != nil {
 		response.Fail(c, "invalid permissionCodes", nil)
@@ -223,7 +213,7 @@ func (h *Handlers) updateCredential(c *gin.Context) {
 		if len(req.PermissionCodes) == 0 {
 			pcodes = "[]"
 		} else {
-			pcodes, err = marshalCredentialPermissionCodes(req.PermissionCodes)
+			pcodes, err = utils.MarshalStringSliceJSON(req.PermissionCodes, []string{constants.CredentialPermissionWildcard})
 		}
 		if err != nil {
 			response.Fail(c, "invalid permissionCodes", nil)

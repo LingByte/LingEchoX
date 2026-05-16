@@ -1,8 +1,55 @@
 # SIP 模块差距分析与增强规划
 
 > **生成时间**：2026-05-16
+> **最近更新**：2026-05-16（追加 P0 三批次实施路线 + 在建项）
 > **基线对比**：`@/Users/cetide/Desktop/VoiceServer/pkg/sip/` vs `@/Users/cetide/Desktop/LingEchoX/pkg/sip/`
 > **结论**：LingEchoX 已**完全覆盖** VoiceServer 上游 SIP 代码，并在多个方向作出实质增强；下方列出的是**协议层 / 工程化层** 仍可补强的点，按优先级排序。
+
+---
+
+## ⭐ P0 三批次实施路线（in-progress）
+
+> 6 个 RFC 缺口整理为 3 批，每批独立 PR、独立验收。每完成一个批次会在此打勾并附 commit / 验收笔记。
+
+### 📠 转接架构说明（与下面 1B 相关）
+
+**现状**：SIP REFER 入局 ✅ 支持（`@/Users/cetide/Desktop/LingEchoX/pkg/sip/server/refer_handler.go:14` 响应 202 + NOTIFY 回报）；出局 ❌ 不发。两条路径最终都收敛到同一个 B2BUA 模型：
+
+| 触发源 | 走到哪里 | 外部表现 |
+|---|---|---|
+| 对端 REFER | `pkg/sip/server/refer_handler.go` → `conversation.TriggerTransferFromReferTo` → `outbound.Manager.Dial` | 接受 REFER，解析 `Refer-To` 后**平台自己发起新的 INVITE**，原对端跳过，同时 NOTIFY 回报 100/200/603 |
+| AI/工具/免责文案 | `conversation.TriggerTransferToAgent` → `outbound.Manager.Dial` | 直接 ACD pool / env 目标 |
+
+两条路径都走 `MediaProfileTransferBridge`，最终都是**两条 leg 中间做 RTP 桥接**。选这个 B2BUA 设计的原因：
+- 全程控制媒体 → 录音/转写/质检不会丢
+- 老 PBX / 老话机多数不支持发出 REFER，能发也无法靠 PSTN 正确处理
+- 跨运营商转接时，对端需要看到「谁发起」与「原始被叫号」，这里就需要补 RFC 7044 History-Info + RFC 5806 Diversion（下表 1B）重建溯源链
+
+### 批次 1：低风险 + 跨网部署必需（预估 2-3 工作日）
+
+| Item | 状态 | 落地点 | 验收 |
+|---|---|---|---|
+| 1A. RFC 3325 P-Asserted-Identity / Privacy | ✅ done (2026-05-16) | `@/Users/cetide/Desktop/LingEchoX/pkg/sip/identity/identity.go`（新包）+ `@/Users/cetide/Desktop/LingEchoX/pkg/sip/outbound/invite.go:164-183`（注入头）+ `@/Users/cetide/Desktop/LingEchoX/pkg/sip/server/incoming.go:62-87`（提取头）+ `@/Users/cetide/Desktop/LingEchoX/pkg/sip/outbound/types.go:60-78`（DialRequest 字段）| 单测 19 个通过；trust-domain 通过 `SIP_PAI_TRUST_DOMAINS` env 配置（空=信任所有；生产环境填运营商 SBC IP，逗号分隔）。**业务侧消费**：`IncomingCall.AssertedIdentities`（trust-domain 内有效）+ `.PrivacyTokens`；下游 router / CDR 持久化层可继续替换 FromURI 为 PAI |
+| 1B. RFC 7044 History-Info + RFC 5806 Diversion | ✅ done (2026-05-16) | `@/Users/cetide/Desktop/LingEchoX/pkg/sip/historyinfo/`（新包，parse / format / chain extension）+ `@/Users/cetide/Desktop/LingEchoX/pkg/sip/outbound/invite.go:204-214`（注入两头）+ `@/Users/cetide/Desktop/LingEchoX/pkg/sip/server/incoming.go:78-99`（入局解析）+ `@/Users/cetide/Desktop/LingEchoX/pkg/sip/session/call_session.go:124-164`（CallSession 缓存原始头供转接路径读取）+ `@/Users/cetide/Desktop/LingEchoX/pkg/sip/conversation/transfer_retarget.go`（applyRetargetHeaders 串联链）| 单测 16 个通过（historyinfo 9 + transfer_retarget 5 + buildINVITE 注入 2）。AI/ACD 路径使用 `cause=302 / unconditional`，入局 REFER 路径使用 `cause=302 / deflection`。两头**始终同时发出**因为 PBX 群体读 7044 / 老话机读 5806；无入局头时不伪造（避免误导下游"以为发生过 redirect"）|
+| 1C. RFC 4028 Session-Timer | ⏳ pending | 新增 `@/Users/cetide/Desktop/LingEchoX/pkg/sip/session_timer/` + 与 INVITE/200/UPDATE 路径整合 | `Session-Expires`/`Min-SE` 协商；UAC/UAS refresh re-INVITE/UPDATE；过期自动 BYE |
+
+> ~~IPv6 dual-stack~~：**不做**（产品决策 2026-05-16）。运营商 SBC + 企业内网 未来 2-3 年依然以 IPv4 为主，额外补 IPv6 收益低。
+
+### 批次 2：传输层升级（预估 3-5 工作日）
+
+| Item | 状态 | 落地点 | 阻塞条件 |
+|---|---|---|---|
+| 2A. TCP signaling transport | ⏳ pending | 重写 `@/Users/cetide/Desktop/LingEchoX/pkg/sip/stack/transport.go` 抽象，新增 TCP framing (RFC 3261 §18) | 无 |
+| 2B. TLS signaling (SIPS) | ⏳ pending | 在 2A 基础上加 TLS wrapper；Contact/Via 用 `sips:` scheme | 需要 TLS 证书（自签 OK） |
+
+### 批次 3：互通与合规（预估 10-17 工作日）
+
+| Item | 状态 | 落地点 | 阻塞条件 |
+|---|---|---|---|
+| 3A. DTLS-SRTP | ⏳ pending | `@/Users/cetide/Desktop/LingEchoX/pkg/sip/rtp/transport.go` + `@/Users/cetide/Desktop/LingEchoX/pkg/sip/sdp/sdp.go` `a=fingerprint` 协商 | 自签 cert 即可，WebRTC 互通必备 |
+| 3B. RFC 8224 STIR/SHAKEN | ⏳ pending | 新增 `@/Users/cetide/Desktop/LingEchoX/pkg/sip/identity/` (JWS sign / verify) + INVITE `Identity:` 头 | 需要 STI-CA 签发 SP 证书（北美运营商必需），可先做 stub + 自签验证链 |
+
+> 每批落地后回到本节打 ✅ + 加 commit 链接 / 测试结果。
 
 ---
 
@@ -42,18 +89,17 @@
 | RFC / 特性 | 现状 | 影响 |
 |---|---|---|
 | **RFC 4028 Session Timer**（`Session-Expires` / `Min-SE`） | ❌ 未实现 | 长时通话被运营商/SBC 中途单方面 BYE；现在我们既不发送也不响应 refresh re-INVITE/UPDATE，跨网部署一定踩坑 |
-| **RFC 3325 P-Asserted-Identity / Privacy** | ❌ 未实现 | 主叫号码在企业 SBC / 电信侧无法可信传递；外呼场景的"显示号码"可能丢失 |
+| **RFC 3325 P-Asserted-Identity / Privacy** | ✅ 已实现（2026-05-16）| 入/出局 INVITE 都处理 PAI/Privacy；trust-domain 过滤。详见上方批次 1A |
 | **TLS / TCP signaling transport** | ⚠️ 仅 UDP | 公网部署/合规审计场景必须 TLS；当前 outbound 全部 `net.ResolveUDPAddr("udp", …)` |
 | **RFC 4474 / 8224 Identity（SHAKEN/STIR）** | ❌ 未实现 | 北美运营商已强制；不做就被标骚扰拦截 |
 | **DTLS-SRTP 密钥协商** | ❌ 未实现 | 仅有 SDES-SRTP；WebRTC 互通必备 |
-| **IPv6 dual-stack 监听** | ⚠️ 仅 IPv4 解析 | `server/sip_server.go` / `outbound/manager.go` 全是 IPv4 假定 |
 
 ### 2.2 P1 缺口
 
 | 特性 | 现状 | 用途 |
 |---|---|---|
-| **RFC 7044 History-Info** | ❌ | 转接溯源、呼叫追责 |
-| **RFC 5806 Diversion** | ❌ | 老式 PBX 转接信息 |
+| **RFC 7044 History-Info** | ✅ 已实现（2026-05-16）| 转接溯源、呼叫追责。详见批次 1B |
+| **RFC 5806 Diversion** | ✅ 已实现（2026-05-16）| 老式 PBX 转接信息。详见批次 1B |
 | **RFC 3327 Path** / **RFC 3608 Service-Route** | ❌ | 多级 registrar/proxy 部署 |
 | **RFC 3262 PRACK** | ✅ 已有 `invite_rfc3262.go` | — |
 | **RFC 3891 Replaces** | ✅ 已有 | — |
@@ -69,10 +115,8 @@
 | PCMA / PCMU | ✅ |
 | G.722 | ✅ |
 | Opus（含 inband-FEC） | ✅（FEC 待复核） |
-| G.729 | ❌ — 国内传统 PBX/IPPBX 大量在用 |
-| iLBC | ❌ — 老式终端 |
-| AMR-WB | ❌ — VoLTE 网关接入 |
-| L16 / L24 | ❌ — IP 内联高保真 |
+
+> **产品决策 2026-05-16**：G.729 / iLBC / AMR-WB / L16 / L24 **不接入**。现有 PCMA/PCMU/G.722/Opus 足以覆盖目标场景（互联网业务 + 主流运营商中继），额外 codec 不同价付出 transcoding CPU 成本。（注：`pkg/sip/bridge/two_leg_relay.go` 以 L16 作为 raw RTP relay 识别器，不是外向协商提议，保留不动）。
 
 ---
 

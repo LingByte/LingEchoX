@@ -11,12 +11,14 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
 	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/sip/session_timer"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"github.com/LinByte/VoiceServer/pkg/sip/transaction"
 	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
@@ -662,6 +664,16 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		}
 	}
 
+	// RFC 4028 Session-Timer negotiation. Done BEFORE SDP parsing so a
+	// 422 "Session Interval Too Small" gets out fast without allocating
+	// RTP / CallSession (peer is expected to retry with a higher SE).
+	stDecision := s.negotiateInboundSessionTimer(msg)
+	if stDecision.Reject422 {
+		resp := s.makeResponse(msg, 422, "Session Interval Too Small", "", "")
+		resp.SetHeader("Min-SE", session_timer.FormatMinSE(stDecision.MinSE))
+		return resp
+	}
+
 	// Parse remote RTP endpoint from SDP.
 	offer, err := sdp.Parse(msg.Body)
 	if err != nil {
@@ -886,6 +898,29 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 	// display the original PSTN caller's number on the agent's phone
 	// instead of the platform's trunk number (e.g. 400-xxx).
 	cs.SetRemoteFromHeader(fromHdr)
+	// Capture To + RFC 7044 History-Info + RFC 5806 Diversion off the
+	// inbound INVITE so the transfer path can extend the retarget chain
+	// when this call is B2BUA'd onward (see pkg/sip/conversation/transfer.go).
+	cs.SetInboundRetargetHeaders(
+		msg.GetHeader("To"),
+		msg.GetHeader("History-Info"),
+		msg.GetHeader("Diversion"),
+	)
+	// Arm RFC 4028 watchdog: if the peer doesn't refresh us within
+	// ChosenSE seconds (re-INVITE / UPDATE), hang up the call per
+	// §10. handleReInvite / handleUpdate calls cs.TouchSessionTimer()
+	// to reset on every refresh.
+	if stDecision.IsActive() {
+		dur := time.Duration(stDecision.ChosenSE) * time.Second
+		armedCallID := callID
+		cs.ArmSessionTimerWatchdog(dur, func() {
+			logger.Warn("sip session timer expired; hanging up",
+				zap.String("call_id", armedCallID),
+				zap.Int("se_seconds", stDecision.ChosenSE),
+				zap.String("refresher", string(stDecision.Refresher)))
+			s.HangupInboundCall(armedCallID)
+		})
+	}
 
 	bind := s.resolveInboundDIDBinding(msg)
 	cs.SetTenantID(bind.TenantID)
@@ -947,6 +982,21 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		stack.MethodMessage,
 		stack.MethodUpdate,
 	}, ", "))
+	// RFC 4028 Session-Timer: echo Session-Expires + advertise Min-SE
+	// + Supported: timer on the 200 OK so the peer knows we're playing
+	// along and which side owns refresh. Watchdog is armed AFTER the
+	// CallSession is registered (further down) so the BYE callback
+	// can find it.
+	if stDecision.IsActive() {
+		respMsg.SetHeader("Session-Expires",
+			session_timer.FormatSessionExpires(stDecision.ChosenSE, stDecision.Refresher))
+		respMsg.SetHeader("Min-SE", session_timer.FormatMinSE(stDecision.MinSE))
+		// Merge "timer" into Supported header (don't overwrite an existing one).
+		mergeSupportedToken(respMsg, session_timer.SupportedTokenTimer)
+		if stDecision.RequireTimer {
+			respMsg.SetHeader("Require", session_timer.SupportedTokenTimer)
+		}
+	}
 	respMsg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(respSDP)))
 
 	logger.Info("sip invite negotiated",

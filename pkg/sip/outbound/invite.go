@@ -8,6 +8,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
+	"github.com/LinByte/VoiceServer/pkg/sip/identity"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
@@ -25,6 +27,42 @@ type inviteParams struct {
 	SDPBody         string
 	FromUser        string // sip:FromUser@host:port
 	FromDisplayName string // optional; quoted display-name in From
+
+	// AssertedIdentityURI / AssertedIdentityDisplayName: RFC 3325 P-Asserted-Identity
+	// content. Set this when the platform has carrier-verified the calling
+	// number (e.g. the operator gave us a CLI we're authorised to assert).
+	// Empty URI = header omitted; From header still acts as the claimed identity.
+	//
+	// Two-row form (sip + tel together) isn't expressible here on purpose:
+	// the vast majority of carrier interop wants exactly one sip: PAI, and
+	// the From header already carries the user-claimed identity. Add a
+	// slice version later if a customer specifically requires both.
+	AssertedIdentityURI         string
+	AssertedIdentityDisplayName string
+	// PrivacyTokens are RFC 3323 tokens (e.g. "id", "id;critical"). When
+	// non-empty we add the Privacy header verbatim; downstream SBC honors
+	// it by stripping PAI / anonymising From at trust-domain boundaries.
+	// Set "id" to mark this outbound call as "show no caller ID" while
+	// still carrying carrier-verified PAI inside the trust domain.
+	PrivacyTokens []string
+
+	// HistoryInfo (RFC 7044) is the call-retarget chain emitted on the
+	// outbound INVITE. For B2BUA transfer legs this should contain at
+	// minimum:
+	//   index=1 → the original inbound Request-URI / To URI (the trunk
+	//             number / DID the customer dialed)
+	//   index=2 → the new target (this agent / next hop), optionally
+	//             with a Reason header value identifying the retarget
+	//             cause.
+	// Empty chain → header omitted. Use historyinfo.AppendTransferEntry
+	// to build the chain so any pre-existing entries from upstream SBCs
+	// get carried forward.
+	HistoryInfo []historyinfo.Entry
+	// Diversion (RFC 5806) is the legacy equivalent of HistoryInfo for
+	// PBX / desk-phone populations that don't parse History-Info. We
+	// emit BOTH headers on transfer scenarios; downstream picks whichever
+	// it understands. Empty chain → header omitted.
+	Diversion []historyinfo.Diversion
 }
 
 // sipFormatDisplayName renders a SIP From display-name in a wire format
@@ -143,9 +181,49 @@ func buildINVITE(p inviteParams) *stack.Message {
 	msg.SetHeader("Call-ID", p.CallID)
 	msg.SetHeader("CSeq", fmt.Sprintf("%d INVITE", p.CSeq))
 	msg.SetHeader("Contact", formatOutboundContact(p.FromUser, p.SIPHost, p.SIPPort))
+	// RFC 3325 P-Asserted-Identity: carrier-validated CLI carried separately
+	// from the (user-claimed) From header. Only emitted when the caller has
+	// explicitly populated AssertedIdentityURI — we do NOT auto-derive PAI
+	// from FromUser because that would leak unsigned claims as if they
+	// were operator-verified.
+	if pai := strings.TrimSpace(p.AssertedIdentityURI); pai != "" {
+		hdr := identity.Asserted{
+			URI:         pai,
+			DisplayName: strings.TrimSpace(p.AssertedIdentityDisplayName),
+		}.FormatHeader()
+		if hdr != "" {
+			msg.SetHeader("P-Asserted-Identity", hdr)
+		}
+	}
+	// RFC 3323 Privacy: token list (id / header / user / session / critical).
+	// Set "id" to make a withheld-CLI call (carrier still sees PAI inside the
+	// trust domain, but its egress rule strips PAI before handing to PSTN).
+	if pr := identity.FormatPrivacyHeader(p.PrivacyTokens); pr != "" {
+		msg.SetHeader("Privacy", pr)
+	}
+	// RFC 7044 History-Info / RFC 5806 Diversion: surface the retarget
+	// chain on B2BUA transfer legs. We emit BOTH because the downstream
+	// PBX / phone population is mixed — modern Avaya/Cisco honor
+	// History-Info, older Yealink/Polycom/Asterisk read Diversion. See
+	// docs/sip_gap_analysis.md §"转接架构说明" for why this matters.
+	if h := historyinfo.FormatChain(p.HistoryInfo); h != "" {
+		msg.SetHeader("History-Info", h)
+	}
+	if d := historyinfo.FormatDiversionChain(p.Diversion); d != "" {
+		msg.SetHeader("Diversion", d)
+	}
 	msg.SetHeader("User-Agent", "SoulNexus-SIP/1.0")
 	msg.SetHeader("Content-Type", "application/sdp")
-	msg.SetHeader("Allow", "INVITE, ACK, BYE, CANCEL, OPTIONS")
+	msg.SetHeader("Allow", "INVITE, ACK, BYE, CANCEL, OPTIONS, UPDATE")
+	// RFC 4028 — advertise our willingness to participate in
+	// session timers. We deliberately do NOT propose a Session-Expires
+	// here: until we implement UAC-initiated refresh (in-dialog re-
+	// INVITE / UPDATE machinery), letting the peer set the timer means
+	// the peer is the refresher (RFC 4028 §7.1 default) and we just
+	// have to answer their refreshes — which our UAS path already does
+	// via handleReInvite + handleUpdate. See docs/sip_gap_analysis.md
+	// §1C for follow-up scope on UAC-side refresh sending.
+	msg.SetHeader("Supported", "timer, 100rel, replaces")
 	msg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(p.SDPBody)))
 	return msg
 }

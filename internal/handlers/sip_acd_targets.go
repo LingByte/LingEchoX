@@ -48,16 +48,6 @@ func (h *Handlers) validateTrunkNumberOwnedByTenant(c *gin.Context, trunkNumberI
 	return true
 }
 
-func acdOperator(c *gin.Context) string {
-	if s := strings.TrimSpace(middleware.AuthEmail(c)); s != "" {
-		return s
-	}
-	if uid := middleware.AuthUserID(c); uid > 0 {
-		return strconv.FormatUint(uint64(uid), 10)
-	}
-	return "system"
-}
-
 // acdPoolTargetListItem adds live SIP registration hint for admin list (not stored in acd_pool_targets).
 type acdPoolTargetListItem struct {
 	models.ACDPoolTarget
@@ -152,7 +142,7 @@ func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, id)
-	if err != nil || !tenantOwns(row.TenantID, tid) {
+	if err != nil || row.TenantID != tid {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -209,7 +199,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		req.TrunkNumberID,
 	)
 	row.TenantID = tid
-	op := acdOperator(c)
+	op := middleware.AuditOperator(c)
 	if op != "" {
 		row.SetCreateInfo(op)
 	}
@@ -283,7 +273,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, id)
-	if err != nil || !tenantOwns(row.TenantID, tid) {
+	if err != nil || row.TenantID != tid {
 		response.Fail(c, "not found", nil)
 		return
 	}
@@ -298,7 +288,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		// SIP ACD rows are now unified as outbound trunk-style targets.
 		sipSrc = models.ACDSipSourceTrunk
 	}
-	op := acdOperator(c)
+	op := middleware.AuditOperator(c)
 	updates := models.BuildACDPoolTargetUpdateMap(
 		row, req.Name, rt, sipSrc, req.TargetValue,
 		"", 0, "",
@@ -325,7 +315,7 @@ func (h *Handlers) deleteACDPoolTarget(c *gin.Context) {
 		response.Fail(c, "invalid id", nil)
 		return
 	}
-	n, err := models.SoftDeleteACDPoolTargetByIDForTenant(h.db, id, tid, acdOperator(c))
+	n, err := models.SoftDeleteACDPoolTargetByIDForTenant(h.db, id, tid, middleware.AuditOperator(c))
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
@@ -349,13 +339,13 @@ func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
 		response.Fail(c, "invalid body: need targetId", nil)
 		return
 	}
-	op := acdOperator(c)
+	op := middleware.AuditOperator(c)
 	if op == "" {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, req.TargetID)
-	if err != nil || !tenantOwns(row.TenantID, tid) {
+	if err != nil || row.TenantID != tid {
 		response.Fail(c, "not found", nil)
 		return
 	}

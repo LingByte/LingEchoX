@@ -2,7 +2,10 @@ package outbound
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
 )
 
 func TestManager_Dial_RequiresBind(t *testing.T) {
@@ -56,5 +59,140 @@ func TestBuildINVITE_ContainsMethod(t *testing.T) {
 	}
 	if msg.GetHeader("Call-ID") != p.CallID {
 		t.Fatalf("call-id")
+	}
+	if msg.GetHeader("P-Asserted-Identity") != "" {
+		t.Fatalf("PAI should be absent when AssertedIdentityURI is empty")
+	}
+	if msg.GetHeader("Privacy") != "" {
+		t.Fatalf("Privacy should be absent when PrivacyTokens is nil")
+	}
+}
+
+// TestBuildINVITE_PAI_Privacy verifies that populating the RFC 3325 /
+// RFC 3323 fields on inviteParams produces correctly-formatted headers
+// on the outbound INVITE.
+func TestBuildINVITE_PAI_Privacy(t *testing.T) {
+	p := inviteParams{
+		LocalIP:                     "127.0.0.1",
+		SIPHost:                     "127.0.0.1",
+		SIPPort:                     6050,
+		RequestURI:                  "sip:bob@example.com",
+		CallID:                      "test@127.0.0.1",
+		FromTag:                     "abc",
+		Branch:                      "branch1",
+		CSeq:                        1,
+		LocalRTPPort:                10000,
+		SDPBody:                     "v=0\r\n",
+		FromUser:                    "alice",
+		AssertedIdentityURI:         "sip:+8613800138000@trust.example",
+		AssertedIdentityDisplayName: "Customer Service",
+		PrivacyTokens:               []string{"id"},
+	}
+	msg := buildINVITE(p)
+
+	pai := msg.GetHeader("P-Asserted-Identity")
+	want := `"Customer Service" <sip:+8613800138000@trust.example>`
+	if pai != want {
+		t.Fatalf("PAI = %q, want %q", pai, want)
+	}
+	if pr := msg.GetHeader("Privacy"); pr != "id" {
+		t.Fatalf("Privacy = %q, want %q", pr, "id")
+	}
+}
+
+// TestBuildINVITE_PAI_OmittedWhenURIEmpty ensures a non-nil but empty
+// AssertedIdentityURI doesn't accidentally emit a malformed PAI header.
+func TestBuildINVITE_PAI_OmittedWhenURIEmpty(t *testing.T) {
+	p := inviteParams{
+		LocalIP:             "127.0.0.1",
+		SIPHost:             "127.0.0.1",
+		SIPPort:             6050,
+		RequestURI:          "sip:bob@example.com",
+		CallID:              "test@127.0.0.1",
+		FromTag:             "abc",
+		Branch:              "branch1",
+		CSeq:                1,
+		LocalRTPPort:        10000,
+		SDPBody:             "v=0\r\n",
+		FromUser:            "alice",
+		AssertedIdentityURI: "   ", // whitespace-only must be treated as absent
+		PrivacyTokens:       []string{"id"},
+	}
+	msg := buildINVITE(p)
+	if msg.GetHeader("P-Asserted-Identity") != "" {
+		t.Fatalf("PAI should be absent for whitespace-only URI")
+	}
+	// Privacy: id without PAI is valid (RFC 3323 standalone "id" → request
+	// anonymous; downstream can drop PAI it would otherwise *insert*).
+	if pr := msg.GetHeader("Privacy"); pr != "id" {
+		t.Fatalf("Privacy = %q, want %q", pr, "id")
+	}
+}
+
+// TestBuildINVITE_HistoryInfoAndDiversion verifies that the RFC 7044 /
+// RFC 5806 chains populated on inviteParams reach the wire as
+// History-Info and Diversion headers, in the order they appear in the
+// chain. Critical for B2BUA transfer legs — downstream PBX rendering
+// of "originally called T, now ringing here" depends on this.
+func TestBuildINVITE_HistoryInfoAndDiversion(t *testing.T) {
+	p := inviteParams{
+		LocalIP:      "127.0.0.1",
+		SIPHost:      "127.0.0.1",
+		SIPPort:      6050,
+		RequestURI:   "sip:agent42@pool.example",
+		CallID:       "test@127.0.0.1",
+		FromTag:      "abc",
+		Branch:       "branch1",
+		CSeq:         1,
+		LocalRTPPort: 10000,
+		SDPBody:      "v=0\r\n",
+		FromUser:     "trunk-cli",
+		HistoryInfo: []historyinfo.Entry{
+			{URI: "sip:+8613800138000@trunk.example", Index: "1"},
+			{URI: "sip:agent42@pool.example", Index: "2", ReasonHeader: `SIP;cause=302;text="Transfer"`},
+		},
+		Diversion: []historyinfo.Diversion{
+			{URI: "sip:+8613800138000@trunk.example", Reason: historyinfo.DiversionUnconditional, Counter: 1},
+		},
+	}
+	msg := buildINVITE(p)
+
+	hi := msg.GetHeader("History-Info")
+	if !strings.Contains(hi, "<sip:+8613800138000@trunk.example>;index=1") {
+		t.Errorf("History-Info missing root entry: %q", hi)
+	}
+	if !strings.Contains(hi, "index=2") || !strings.Contains(hi, "Reason=SIP%3Bcause%3D302") {
+		t.Errorf("History-Info missing percent-encoded reason on retarget entry: %q", hi)
+	}
+
+	dv := msg.GetHeader("Diversion")
+	want := "<sip:+8613800138000@trunk.example>;reason=unconditional;counter=1"
+	if dv != want {
+		t.Errorf("Diversion = %q, want %q", dv, want)
+	}
+}
+
+// TestBuildINVITE_HistoryInfoOmittedWhenEmpty: nil/empty chains must
+// not emit a malformed empty header.
+func TestBuildINVITE_HistoryInfoOmittedWhenEmpty(t *testing.T) {
+	p := inviteParams{
+		LocalIP:      "127.0.0.1",
+		SIPHost:      "127.0.0.1",
+		SIPPort:      6050,
+		RequestURI:   "sip:bob@example.com",
+		CallID:       "test@127.0.0.1",
+		FromTag:      "abc",
+		Branch:       "branch1",
+		CSeq:         1,
+		LocalRTPPort: 10000,
+		SDPBody:      "v=0\r\n",
+		FromUser:     "alice",
+	}
+	msg := buildINVITE(p)
+	if h := msg.GetHeader("History-Info"); h != "" {
+		t.Errorf("History-Info should be absent when chain empty; got %q", h)
+	}
+	if d := msg.GetHeader("Diversion"); d != "" {
+		t.Errorf("Diversion should be absent when chain empty; got %q", d)
 	}
 }

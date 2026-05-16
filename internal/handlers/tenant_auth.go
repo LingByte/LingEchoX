@@ -9,6 +9,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/cmd/bootstrap"
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
@@ -16,7 +17,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const jwtRolePlatformSuper = "platform_super"
 
 type tenantLoginReq struct {
 	Email    string `json:"email" binding:"required,email"`
@@ -61,8 +61,8 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 	token, err := access.SignPlatformAccessTokenWithKey(access.PlatformPayload{
 		AdminID: adm.ID,
 		Email:   adm.Email,
-		Role:    jwtRolePlatformSuper,
-	}, bootstrap.GlobalKeyManager, tenantAccessTokenTTL)
+		Role:    constants.JWTRolePlatformSuper,
+	}, bootstrap.GlobalKeyManager, constants.TenantAccessTokenTTL)
 	if err != nil {
 		response.Fail(c, "签发登录凭证失败", nil)
 		return
@@ -71,8 +71,8 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 	response.Success(c, "success", gin.H{
 		"principal":     "platform",
 		"token":         token,
-		"expiresIn":     int(tenantAccessTokenTTL.Seconds()),
-		"platformAdmin": platformAdminPublic(adm),
+		"expiresIn":     int(constants.TenantAccessTokenTTL.Seconds()),
+		"platformAdmin": models.PlatformAdminPublic(adm),
 	})
 }
 
@@ -108,7 +108,7 @@ func (h *Handlers) finishTenantLogin(c *gin.Context, password, totpCode string, 
 
 	_ = models.RecordTenantUserLogin(h.db, user.ID, c.ClientIP())
 
-	token, err := issueTenantAccessToken(h.db, user, tenant)
+	token, err := signTenantAccessToken(h.db, user, tenant)
 	if err != nil {
 		response.Fail(c, "签发登录凭证失败", nil)
 		return
@@ -118,18 +118,10 @@ func (h *Handlers) finishTenantLogin(c *gin.Context, password, totpCode string, 
 	response.Success(c, "success", gin.H{
 		"principal":       "tenant",
 		"token":           token,
-		"expiresIn":       int(tenantAccessTokenTTL.Seconds()),
-		"tenant":          tenantPublic(tenant),
-		"user":            h.tenantUserPublic(user),
+		"expiresIn":       int(constants.TenantAccessTokenTTL.Seconds()),
+		"tenant":          models.TenantPublic(tenant),
+		"user":            models.TenantUserPublic(h.db, user),
 		"permissionCodes": codes,
 	})
 }
 
-func platformAdminPublic(a models.PlatformAdmin) gin.H {
-	return gin.H{
-		"id":          a.ID,
-		"email":       a.Email,
-		"displayName": a.DisplayName,
-		"status":      a.Status,
-	}
-}

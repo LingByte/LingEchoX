@@ -12,6 +12,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/scriptlisten"
 	sipdtmf "github.com/LinByte/VoiceServer/pkg/sip/dtmf"
+	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
 	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
@@ -164,6 +165,15 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	// 出局 / 主动 dial（campaign）的 CallSession remoteFromHeader 是空，
 	// 这种情况维持 Target.CallerDisplayName 默认值不动。
 	agentDisplayOverride := extractInboundCallerNumber(inboundCallID)
+	// Pull the inbound INVITE's To + History-Info + Diversion headers so
+	// we can extend the retarget chain on the outbound leg (RFC 7044 /
+	// RFC 5806). Look up via the same session helper used elsewhere in
+	// this file; nil session → empty headers → no chain emitted, which
+	// is correct for outbound-originated CallSessions.
+	var inboundTo, inboundHistory, inboundDiversion string
+	if inSess := lookupInboundSession(inboundCallID); inSess != nil {
+		inboundTo, inboundHistory, inboundDiversion = inSess.InboundRetargetHeaders()
+	}
 
 	go func() {
 		req := outbound.DialRequest{
@@ -181,6 +191,14 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 			req.CallerUser = strings.TrimSpace(tgt.CallerUser)
 			req.CallerDisplayName = agentDisplayOverride
 		}
+		// AI / ACD-driven retarget: cause=302 (Moved Temporarily) is the
+		// closest fit and the Diversion reason is "unconditional"
+		// because nothing about the original target signalled a
+		// busy/no-answer/etc — we platform-decided to transfer.
+		applyRetargetHeaders(&req, inboundTo, inboundHistory, inboundDiversion,
+			`SIP;cause=302;text="Transfer"`,
+			historyinfo.DiversionUnconditional,
+		)
 		cid, err := d.Dial(ctx, req)
 		if err != nil {
 			stopTransferRinging(inboundCallID)

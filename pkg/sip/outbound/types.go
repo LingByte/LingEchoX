@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 )
 
@@ -57,6 +58,32 @@ type DialRequest struct {
 
 	// DialTenantID scopes per-tenant trunk-number outbound concurrency (campaign worker sets this).
 	DialTenantID uint `json:"-"`
+
+	// AssertedIdentityURI (RFC 3325) is the carrier-verified caller URI
+	// that the platform is authorised to assert on this outbound leg.
+	// Typical value: the trunk_number that owns this outbound channel
+	// expressed as a sip URI ("sip:+8613800138000@<trunk-host>"), OR a
+	// tel: URI ("tel:+8613800138000"). Leave empty to omit the PAI
+	// header entirely; the From header still carries the displayed CLI.
+	//
+	// IMPORTANT: never derive this automatically from user input — the
+	// caller (router / handler) must have a trust path that justifies
+	// asserting this identity, otherwise we're leaking unverifiable
+	// claims as if they were operator-validated.
+	AssertedIdentityURI         string
+	AssertedIdentityDisplayName string
+	// PrivacyTokens are RFC 3323 Privacy header tokens applied to this
+	// leg. The common case is []string{"id"} for a "withheld-CLI" call
+	// (PSTN displays "anonymous" while the trust domain still sees the
+	// PAI for routing / abuse-tracing). Nil/empty omits the header.
+	PrivacyTokens []string
+
+	// HistoryInfo (RFC 7044) — see inviteParams.HistoryInfo.
+	// Conversation / transfer code should build this via
+	// historyinfo.AppendTransferEntry to chain on any inbound history.
+	HistoryInfo []historyinfo.Entry
+	// Diversion (RFC 5806) — see inviteParams.Diversion.
+	Diversion []historyinfo.Diversion
 }
 
 // MediaProfile selects post-connect behavior on the established CallSession.

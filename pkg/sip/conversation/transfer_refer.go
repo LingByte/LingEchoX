@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
 	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
 	"go.uber.org/zap"
 )
@@ -56,13 +57,28 @@ func TriggerTransferFromReferTo(ctx context.Context, inboundCallID string, refer
 	startTransferRinging(ctx, inboundCallID, lg)
 	notifyTransferPhase(inboundCallID, "ringing", nil)
 
+	// Pull inbound retarget headers so we extend any upstream chain
+	// rather than synthesise a fresh one. For REFER specifically the
+	// Refer-To often originates inside the trust domain (the calling
+	// PBX explicitly asking us to retarget), so the Diversion reason
+	// is "deflection" per RFC 5806 §4.1.1.
+	var inboundTo, inboundHistory, inboundDiversion string
+	if inSess := lookupInboundSession(inboundCallID); inSess != nil {
+		inboundTo, inboundHistory, inboundDiversion = inSess.InboundRetargetHeaders()
+	}
+
 	go func() {
-		cid, err := d.Dial(ctx, outbound.DialRequest{
+		req := outbound.DialRequest{
 			Scenario:      outbound.ScenarioTransferAgent,
 			Target:        tgt,
 			CorrelationID: inboundCallID,
 			MediaProfile:  outbound.MediaProfileTransferBridge,
-		})
+		}
+		applyRetargetHeaders(&req, inboundTo, inboundHistory, inboundDiversion,
+			`SIP;cause=302;text="REFER"`,
+			historyinfo.DiversionDeflection,
+		)
+		cid, err := d.Dial(ctx, req)
 		if onTerminalNotify != nil {
 			if err != nil {
 				onTerminalNotify("SIP/2.0 603 Decline", "terminated;reason=giveup")

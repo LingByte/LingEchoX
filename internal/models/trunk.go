@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -397,4 +398,26 @@ func FindTrunkNumberForOutboundCaller(db *gorm.DB, tenantID uint, callerRaw stri
 		}
 	}
 	return TrunkNumber{}, false
+}
+
+// ValidateOutboundTrunkNumberBinding checks outbound trunk number binding for create/update.
+func ValidateOutboundTrunkNumberBinding(db *gorm.DB, selfID, outboundID, tenantID uint) error {
+	if outboundID == 0 {
+		return nil
+	}
+	if tenantID == 0 {
+		return fmt.Errorf("outboundTrunkNumberId 需先把本号码分配给某个租户")
+	}
+	if outboundID == selfID {
+		return fmt.Errorf("outboundTrunkNumberId 不能指向号码自身")
+	}
+	var n TrunkNumber
+	if err := db.Where("id = ? AND tenant_id = ?", outboundID, tenantID).First(&n).Error; err != nil {
+		return fmt.Errorf("outboundTrunkNumberId 不属于同一租户或不存在")
+	}
+	dir := strings.ToLower(strings.TrimSpace(n.Direction))
+	if dir != "outbound" && dir != "both" && dir != "all" {
+		return fmt.Errorf("outboundTrunkNumberId 对应号码 direction 必须是 outbound/both/all")
+	}
+	return nil
 }

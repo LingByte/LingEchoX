@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
+	"github.com/LinByte/VoiceServer/pkg/sip/identity"
 	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 	"github.com/LinByte/VoiceServer/pkg/sip/session"
@@ -60,6 +62,29 @@ func (s *SIPServer) buildIncomingCallLeg(
 		return session.NewMediaLeg(ctx, callID, rtpSess, offer.Codecs, session.MediaLegConfig{})
 	}
 
+	// RFC 3325 P-Asserted-Identity & RFC 3323 Privacy extraction.
+	// PAI is honoured only when the remote signaling peer is in our trust
+	// domain (configured via SIP_PAI_TRUST_DOMAINS env). Otherwise we
+	// silently drop the parsed assertions — per RFC 3325 §5, propagating
+	// an untrusted assertion is worse than presenting none. Privacy is
+	// always parsed (it's a request, not an assertion) and forwarded so
+	// business code can redact agent UI / CDR even when the trust domain
+	// doesn't cover this peer.
+	var paiList []identity.Asserted
+	if identity.PeerIsTrusted(from) {
+		paiList = identity.ParsePAI(headerOrEmpty(msg, "P-Asserted-Identity"))
+	}
+	privacyTokens := identity.ParsePrivacy(headerOrEmpty(msg, "Privacy"))
+
+	// RFC 7044 / 5806 retarget chain forwarded from upstream. We parse
+	// these regardless of trust domain — unlike PAI, History-Info /
+	// Diversion are not identity assertions, they're routing breadcrumbs
+	// that we'll extend (not trust) when running a B2BUA transfer. If a
+	// downstream party wants to validate them, they can look at our own
+	// trusted leg's Via / network path.
+	historyChain := historyinfo.ParseChain(headerOrEmpty(msg, "History-Info"))
+	diversionChain := historyinfo.ParseDiversionChain(headerOrEmpty(msg, "Diversion"))
+
 	in := &IncomingCall{
 		CallID:              callID,
 		FromURI:             headerOrEmpty(msg, "From"),
@@ -68,6 +93,10 @@ func (s *SIPServer) buildIncomingCallLeg(
 		SDP:                 offer,
 		RawMessage:          msg,
 		RTPSession:          rtpSess,
+		AssertedIdentities:  paiList,
+		PrivacyTokens:       privacyTokens,
+		HistoryInfo:         historyChain,
+		Diversion:           diversionChain,
 	}
 	dec, err := h.OnIncomingCall(ctx, in)
 	if err != nil {

@@ -13,26 +13,17 @@ var ErrInvalidOrgReference = errors.New("invalid organization reference")
 // Copyright (c) 2026 LingByte
 // SPDX-License-Identifier: MIT
 
-const (
-	PermissionKindModule = "module"
-	PermissionKindMenu   = "menu"
-	PermissionKindButton = "button"
-	PermissionKindAPI    = "api"
-	PermissionKindData   = "data"
-)
-
 // Permission is a global capability code (shared RBAC catalog across tenants).
 type Permission struct {
 	BaseModel
 
-	Code        string `json:"code" gorm:"size:128;uniqueIndex;not null"`
-	Name        string `json:"name" gorm:"size:256;not null"`
-	Description string `json:"description,omitempty" gorm:"size:512"`
-	// Kind: module | menu | button | api | data（模块折叠树 / 菜单 / 按钮 / 接口 / 数据范围）
-	Kind       string `json:"kind" gorm:"size:32;index;not null;default:menu"`
-	ParentCode string `json:"parentCode,omitempty" gorm:"size:128;index"`
-	Resource   string `json:"resource,omitempty" gorm:"size:128;index"`
-	Action     string `json:"action,omitempty" gorm:"size:64;index"`
+	Code        string `json:"code" gorm:"size:128;uniqueIndex;not null;comment:权限编码"`
+	Name        string `json:"name" gorm:"size:256;not null;comment:权限名称"`
+	Description string `json:"description,omitempty" gorm:"size:512;comment:描述"`
+	Kind        string `json:"kind" gorm:"size:32;index;not null;default:menu;comment:类型(module/menu/button/api/data)"`
+	ParentCode  string `json:"parentCode,omitempty" gorm:"size:128;index;comment:父级编码"`
+	Resource    string `json:"resource,omitempty" gorm:"size:128;index;comment:资源标识"`
+	Action      string `json:"action,omitempty" gorm:"size:64;index;comment:动作标识"`
 }
 
 func (Permission) TableName() string {
@@ -43,8 +34,8 @@ func (Permission) TableName() string {
 type TenantRolePermission struct {
 	BaseModel
 
-	RoleID       uint `json:"roleId" gorm:"index;not null;uniqueIndex:idx_role_permission"`
-	PermissionID uint `json:"permissionId" gorm:"index;not null;uniqueIndex:idx_role_permission"`
+	RoleID       uint `json:"roleId" gorm:"index;not null;uniqueIndex:idx_role_permission;comment:角色ID"`
+	PermissionID uint `json:"permissionId" gorm:"index;not null;uniqueIndex:idx_role_permission;comment:权限ID"`
 }
 
 func (TenantRolePermission) TableName() string {
@@ -56,11 +47,11 @@ func ListAllPermissions(db *gorm.DB) ([]Permission, error) {
 	var rows []Permission
 	err := db.
 		Order(`CASE kind 
-			WHEN '` + PermissionKindModule + `' THEN 0 
-			WHEN '` + PermissionKindMenu + `' THEN 1 
-			WHEN '` + PermissionKindButton + `' THEN 2 
-			WHEN '` + PermissionKindAPI + `' THEN 3 
-			WHEN '` + PermissionKindData + `' THEN 4 
+			WHEN '` + constants.PermissionKindModule + `' THEN 0 
+			WHEN '` + constants.PermissionKindMenu + `' THEN 1 
+			WHEN '` + constants.PermissionKindButton + `' THEN 2 
+			WHEN '` + constants.PermissionKindAPI + `' THEN 3 
+			WHEN '` + constants.PermissionKindData + `' THEN 4 
 			ELSE 5 END, parent_code ASC, code ASC`).
 		Find(&rows).Error
 	return rows, err
@@ -126,34 +117,30 @@ var builtinPermissions = []struct {
 	Kind       string
 	ParentCode string
 }{
-	// SIP contact center
-	{"api.sip.calls.read", "通话记录查看", PermissionKindAPI, "api.sip"},
-	{"api.sip.acd.read", "ACD 坐席查看", PermissionKindAPI, "api.sip"},
-	{"api.sip.acd.write", "ACD 坐席管理", PermissionKindAPI, "api.sip"},
-	{"api.sip.scripts.read", "话术模板查看", PermissionKindAPI, "api.sip"},
-	{"api.sip.scripts.write", "话术模板管理", PermissionKindAPI, "api.sip"},
-	{"api.sip.campaigns.read", "外呼任务查看", PermissionKindAPI, "api.sip"},
-	{"api.sip.campaigns.write", "外呼任务管理", PermissionKindAPI, "api.sip"},
-	{"api.sip.numbers.read", "号码资源查看", PermissionKindAPI, "api.sip"},
-	// Tenant organization
-	{"api.tenant_org.read", "组织架构查看", PermissionKindAPI, "api.tenant"},
-	{"api.tenant_org.write", "组织架构管理", PermissionKindAPI, "api.tenant"},
-	{"api.tenant_users.read", "成员查看", PermissionKindAPI, "api.tenant"},
-	{"api.tenant_users.write", "成员管理", PermissionKindAPI, "api.tenant"},
-	// Credentials
-	{"api.credentials.read", "访问密钥查看", PermissionKindAPI, "api.credentials"},
-	{"api.credentials.write", "访问密钥管理", PermissionKindAPI, "api.credentials"},
-	// Menu (sidebar visibility codes consumed by the web frontend; see web/src/components/Layout/Sidebar.tsx)
-	{"menu.workspace.overview", "工作台菜单", PermissionKindMenu, "menu.workspace"},
-	{"menu.tel.records", "通话记录菜单", PermissionKindMenu, "menu.tel"},
-	{"menu.tel.webseat", "Web 坐席菜单", PermissionKindMenu, "menu.tel"},
-	{"menu.res.pool", "号码池菜单", PermissionKindMenu, "menu.res"},
-	{"menu.res.outbound", "外呼任务菜单", PermissionKindMenu, "menu.res"},
-	{"menu.res.script", "脚本管理菜单", PermissionKindMenu, "menu.res"},
-	{"menu.acc.keys", "访问管理菜单", PermissionKindMenu, "menu.acc"},
-	{"menu.org.members", "成员管理菜单", PermissionKindMenu, "menu.org"},
-	{"menu.org.dept", "部门菜单", PermissionKindMenu, "menu.org"},
-	{"menu.org.role", "角色与权限菜单", PermissionKindMenu, "menu.org"},
+	{constants.PermAPISIPCallsRead, "通话记录查看", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPISIPACDRead, "ACD 坐席查看", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPISIPACDWrite, "ACD 坐席管理", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPISIPScriptsRead, "话术模板查看", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPISIPScriptsWrite, "话术模板管理", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPISIPCampaignsRead, "外呼任务查看", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPISIPCampaignsWrite, "外呼任务管理", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPISIPNumbersRead, "号码资源查看", constants.PermissionKindAPI, "api.sip"},
+	{constants.PermAPITenantOrgRead, "组织架构查看", constants.PermissionKindAPI, "api.tenant"},
+	{constants.PermAPITenantOrgWrite, "组织架构管理", constants.PermissionKindAPI, "api.tenant"},
+	{constants.PermAPITenantUsersRead, "成员查看", constants.PermissionKindAPI, "api.tenant"},
+	{constants.PermAPITenantUsersWrite, "成员管理", constants.PermissionKindAPI, "api.tenant"},
+	{constants.PermAPICredentialsRead, "访问密钥查看", constants.PermissionKindAPI, "api.credentials"},
+	{constants.PermAPICredentialsWrite, "访问密钥管理", constants.PermissionKindAPI, "api.credentials"},
+	{constants.PermMenuWorkspaceOverview, "工作台菜单", constants.PermissionKindMenu, "menu.workspace"},
+	{constants.PermMenuTelRecords, "通话记录菜单", constants.PermissionKindMenu, "menu.tel"},
+	{constants.PermMenuTelWebseat, "Web 坐席菜单", constants.PermissionKindMenu, "menu.tel"},
+	{constants.PermMenuResPool, "号码池菜单", constants.PermissionKindMenu, "menu.res"},
+	{constants.PermMenuResOutbound, "外呼任务菜单", constants.PermissionKindMenu, "menu.res"},
+	{constants.PermMenuResScript, "脚本管理菜单", constants.PermissionKindMenu, "menu.res"},
+	{constants.PermMenuAccKeys, "访问管理菜单", constants.PermissionKindMenu, "menu.acc"},
+	{constants.PermMenuOrgMembers, "成员管理菜单", constants.PermissionKindMenu, "menu.org"},
+	{constants.PermMenuOrgDept, "部门菜单", constants.PermissionKindMenu, "menu.org"},
+	{constants.PermMenuOrgRole, "角色与权限菜单", constants.PermissionKindMenu, "menu.org"},
 }
 
 // BackfillSystemTenantAdminPermissions ensures every system「管理员」role is bound to the

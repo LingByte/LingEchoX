@@ -397,18 +397,23 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 	}
 
 	params := inviteParams{
-		LocalIP:         localSDP,
-		SIPHost:         ip,
-		SIPPort:         port,
-		RequestURI:      strings.TrimSpace(req.Target.RequestURI),
-		CallID:          callID,
-		FromTag:         randomHex(8),
-		Branch:          randomHex(10),
-		CSeq:            1,
-		LocalRTPPort:    localPort,
-		SDPBody:         sdpBody,
-		FromUser:        fromUser,
-		FromDisplayName: fromDisp,
+		LocalIP:                     localSDP,
+		SIPHost:                     ip,
+		SIPPort:                     port,
+		RequestURI:                  strings.TrimSpace(req.Target.RequestURI),
+		CallID:                      callID,
+		FromTag:                     randomHex(8),
+		Branch:                      randomHex(10),
+		CSeq:                        1,
+		LocalRTPPort:                localPort,
+		SDPBody:                     sdpBody,
+		FromUser:                    fromUser,
+		FromDisplayName:             fromDisp,
+		AssertedIdentityURI:         strings.TrimSpace(req.AssertedIdentityURI),
+		AssertedIdentityDisplayName: strings.TrimSpace(req.AssertedIdentityDisplayName),
+		PrivacyTokens:               req.PrivacyTokens,
+		HistoryInfo:                 req.HistoryInfo,
+		Diversion:                   req.Diversion,
 	}
 
 	invite := buildINVITE(params)

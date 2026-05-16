@@ -76,10 +76,38 @@ type CallSession struct {
 	// 注入。给转接路径用——转接时希望坐席话机上显示的是【真实主叫的手机号】，
 	// 而不是平台 400 中继号；从这里取出 user 部分回写到外呼 DialRequest 的
 	// CallerDisplayName 即可。出局 / 主动 Dial 的 CallSession 这里就是空。
-	metaMu               sync.RWMutex
-	remoteFromHeader     string
-	tenantID             uint
-	inboundUnboundTenant bool
+	metaMu           sync.RWMutex
+	remoteFromHeader string
+	// remoteToHeader / inboundHistoryInfoRaw / inboundDiversionRaw are
+	// captured at INVITE intake by sip/server. They feed the B2BUA
+	// transfer path (RFC 7044 History-Info + RFC 5806 Diversion chain
+	// extension) so retargeted legs surface the original To URI and
+	// any upstream SBC retarget history downstream. We store them as
+	// raw header strings (not parsed entries) on purpose:
+	//   - keeps pkg/sip/session free of a dependency on pkg/sip/historyinfo
+	//   - tolerates malformed headers (parsing failures don't break call setup)
+	//   - lets the conversation layer re-parse on each retarget, which is
+	//     cheap and avoids storing parser-version-bound structs in the
+	//     long-lived session
+	remoteToHeader        string
+	inboundHistoryInfoRaw string
+	inboundDiversionRaw   string
+	tenantID              uint
+	inboundUnboundTenant  bool
+
+	// RFC 4028 Session Timer state. When we're the refreshee (the
+	// usual case for inbound legs — see pkg/sip/session_timer), the
+	// peer is contractually obligated to send a re-INVITE / UPDATE
+	// within `sessionTimerInterval` seconds; if they don't, we MUST
+	// BYE per RFC 4028 §10. Reset on every in-dialog re-INVITE /
+	// UPDATE arrival via TouchSessionTimer.
+	//
+	// Stored as a *time.Timer rather than a goroutine so resetting
+	// is allocation-free in the steady state and there's nothing to
+	// gc when the dialog ends normally.
+	sessionTimerMu       sync.Mutex
+	sessionTimerInterval time.Duration
+	sessionTimerWatchdog *time.Timer
 }
 
 // SetRemoteFromHeader 由 sip/server 在 INVITE 入站时调用，记录 PSTN 主叫
@@ -105,6 +133,107 @@ func (cs *CallSession) RemoteFromHeader() string {
 	cs.metaMu.RLock()
 	defer cs.metaMu.RUnlock()
 	return cs.remoteFromHeader
+}
+
+// SetInboundRetargetHeaders captures the raw To header plus any
+// pre-existing History-Info / Diversion headers from the inbound
+// INVITE. Called by sip/server at INVITE intake. Arguments are
+// trimmed; empty ones are ignored so re-calling with partial info
+// doesn't clobber previously-stored values.
+func (cs *CallSession) SetInboundRetargetHeaders(toHdr, historyInfo, diversion string) {
+	if cs == nil {
+		return
+	}
+	to := strings.TrimSpace(toHdr)
+	hi := strings.TrimSpace(historyInfo)
+	dv := strings.TrimSpace(diversion)
+	if to == "" && hi == "" && dv == "" {
+		return
+	}
+	cs.metaMu.Lock()
+	defer cs.metaMu.Unlock()
+	if to != "" {
+		cs.remoteToHeader = to
+	}
+	if hi != "" {
+		cs.inboundHistoryInfoRaw = hi
+	}
+	if dv != "" {
+		cs.inboundDiversionRaw = dv
+	}
+}
+
+// InboundRetargetHeaders returns (rawTo, rawHistoryInfo, rawDiversion)
+// captured at INVITE intake. Empty strings when not set (e.g. outbound-
+// originated CallSession). Consumers should treat the strings as
+// opaque SIP header values and pass them through historyinfo.ParseChain
+// / ParseDiversionChain.
+func (cs *CallSession) InboundRetargetHeaders() (string, string, string) {
+	if cs == nil {
+		return "", "", ""
+	}
+	cs.metaMu.RLock()
+	defer cs.metaMu.RUnlock()
+	return cs.remoteToHeader, cs.inboundHistoryInfoRaw, cs.inboundDiversionRaw
+}
+
+// ArmSessionTimerWatchdog starts an RFC 4028 watchdog. If no
+// TouchSessionTimer call arrives within `interval`, onExpiry runs
+// (the SIP server wires this to "send BYE with Reason: SIP;cause=408").
+//
+// Calling Arm a second time replaces any prior watchdog (e.g. timer
+// was renegotiated by a re-INVITE). interval <= 0 stops the watchdog.
+//
+// Safe to call on nil receiver (no-op).
+func (cs *CallSession) ArmSessionTimerWatchdog(interval time.Duration, onExpiry func()) {
+	if cs == nil {
+		return
+	}
+	cs.sessionTimerMu.Lock()
+	defer cs.sessionTimerMu.Unlock()
+
+	if cs.sessionTimerWatchdog != nil {
+		cs.sessionTimerWatchdog.Stop()
+		cs.sessionTimerWatchdog = nil
+	}
+	cs.sessionTimerInterval = 0
+
+	if interval <= 0 || onExpiry == nil {
+		return
+	}
+	cs.sessionTimerInterval = interval
+	cs.sessionTimerWatchdog = time.AfterFunc(interval, onExpiry)
+}
+
+// TouchSessionTimer resets the watchdog back to the full interval.
+// Call this every time we accept a refresh re-INVITE or UPDATE in
+// the dialog. No-op when no watchdog is armed.
+func (cs *CallSession) TouchSessionTimer() {
+	if cs == nil {
+		return
+	}
+	cs.sessionTimerMu.Lock()
+	defer cs.sessionTimerMu.Unlock()
+	if cs.sessionTimerWatchdog == nil || cs.sessionTimerInterval <= 0 {
+		return
+	}
+	cs.sessionTimerWatchdog.Reset(cs.sessionTimerInterval)
+}
+
+// StopSessionTimer cancels any pending watchdog. Called automatically
+// from Stop(); also called by the server when BYE arrives before
+// expiry.
+func (cs *CallSession) StopSessionTimer() {
+	if cs == nil {
+		return
+	}
+	cs.sessionTimerMu.Lock()
+	defer cs.sessionTimerMu.Unlock()
+	if cs.sessionTimerWatchdog != nil {
+		cs.sessionTimerWatchdog.Stop()
+		cs.sessionTimerWatchdog = nil
+	}
+	cs.sessionTimerInterval = 0
 }
 
 // SetTenantID records the tenant scope for media/AI (inbound DID or outbound campaign).
@@ -462,6 +591,10 @@ func (cs *CallSession) Stop() {
 	if cs == nil {
 		return
 	}
+	// Cancel session timer before everything else so a watchdog fire
+	// racing with teardown can't trigger a duplicate BYE on an already
+	// dead dialog.
+	cs.StopSessionTimer()
 	if cs.cancel != nil {
 		cs.cancel()
 	}
