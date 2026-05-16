@@ -287,6 +287,11 @@ func lookupInboundSession(callID string) *sipSession.CallSession {
 	return lookupInbound(callID)
 }
 
+// LookupInboundCallSession exposes inbound CallSession lookup (e.g. voicedialog loopback LLM tenant wiring).
+func LookupInboundCallSession(callID string) *sipSession.CallSession {
+	return lookupInboundSession(callID)
+}
+
 func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSession, lg *zap.Logger) error {
 	if inbound == nil {
 		return fmt.Errorf("nil inbound session")

@@ -708,6 +708,7 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 		leg.cleanupLeg()
 		return
 	}
+	cs.SetTenantID(leg.req.DialTenantID)
 
 	ackURI := ackRequestURI(resp, leg.params.RequestURI)
 	ack := buildACK(leg.params, resp, ackURI)

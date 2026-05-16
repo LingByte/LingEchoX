@@ -71,7 +71,7 @@ func consumeSIPTransferPending(callID string) bool {
 	return v
 }
 
-// VoiceEnv holds SIP voice pipeline settings read with utils.GetEnv (see SoulNexus .env).
+// VoiceEnv holds SIP voice pipeline settings (tenant JSON or legacy process env for non-SIP helpers).
 type VoiceEnv struct {
 	LLMProvider string
 	LLMBaseURL  string
@@ -79,11 +79,13 @@ type VoiceEnv struct {
 	LLMAPIKey   string
 	LLMModel    string
 
+	ASRProvider  string
 	ASRAppID     string
 	ASRSecretID  string
 	ASRSecretKey string
 	ASRModelType string
 
+	TTSProvider   string
 	TTSAppID      string
 	TTSSecretID   string
 	TTSSecretKey  string
@@ -186,19 +188,34 @@ func AttachVoicePipeline(ctx context.Context, cs *sipSession.CallSession, lg *za
 	if cs == nil {
 		return nil
 	}
-	env := VoiceEnvFromProcess()
-	if !env.readyForVoice() {
-		if lg != nil {
-			lg.Info("sip voice pipeline skipped (missing ASR/LLM/TTS env)")
-		}
-		return nil
-	}
 	if lg == nil {
 		if logger.Lg != nil {
 			lg = logger.Lg
 		} else {
 			lg, _ = zap.NewDevelopment()
 		}
+	}
+	tid := cs.TenantID()
+	if tid == 0 {
+		lg.Info("sip voice pipeline skipped (no tenant_id on call; play config_error)",
+			zap.String("call_id", cs.CallID))
+		return attachTenantConfigErrorPlayback(cs, lg)
+	}
+	env, loaded, err := ResolveTenantVoiceEnv(ctx, cs)
+	if err != nil {
+		lg.Warn("sip voice tenant env load error", zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid), zap.Error(err))
+		return attachTenantConfigErrorPlayback(cs, lg)
+	}
+	if !loaded {
+		lg.Info("sip voice tenant row missing or loader not ok", zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid))
+		return attachTenantConfigErrorPlayback(cs, lg)
+	}
+	if !TenantVoiceReady(env) {
+		lg.Info("sip voice tenant AI config incomplete or unsupported ASR/TTS provider for embedded pipeline",
+			zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid),
+			zap.String("asr_provider", env.ASRProvider), zap.String("tts_provider", env.TTSProvider),
+			zap.String("llm_provider", env.LLMProvider))
+		return attachTenantConfigErrorPlayback(cs, lg)
 	}
 
 	return cs.AttachVoiceConversation(func() error {
@@ -1148,9 +1165,22 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 			lg = zap.NewNop()
 		}
 	}
-	env := VoiceEnvFromProcess()
+	env, loaded, err := ResolveTenantVoiceEnv(ctx, cs)
+	if err != nil {
+		return err
+	}
+	if !loaded {
+		return fmt.Errorf("sip conversation: missing tenant voice config")
+	}
+	tsp := strings.ToLower(strings.TrimSpace(env.TTSProvider))
+	if tsp == "" {
+		tsp = "qcloud"
+	}
+	if tsp != "qcloud" {
+		return fmt.Errorf("sip conversation: Say step supports qcloud TTS only (tenant ttsConfig.provider)")
+	}
 	if env.TTSAppID == "" || env.TTSSecretID == "" || env.TTSSecretKey == "" {
-		return fmt.Errorf("sip conversation: missing TTS credentials")
+		return fmt.Errorf("sip conversation: missing tenant TTS credentials")
 	}
 	pcmBridgeSR := sipVoicePCMBridgeRate(cs)
 	ttsCloudSR := sipVoiceTTSCloudSampleRate(env, pcmBridgeSR)

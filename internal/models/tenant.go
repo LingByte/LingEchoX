@@ -6,6 +6,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/utils"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +22,11 @@ type Tenant struct {
 	Status       string `json:"status" gorm:"size:24;index;not null;default:active"` // active | suspended
 	ContactEmail string `json:"contactEmail" gorm:"size:128;index"`
 	MaxUserCount int    `json:"maxUserCount" gorm:"default:5"`
+
+	// AsrConfig / TtsConfig / LlmConfig hold per-tenant provider credentials as JSON (shape defined by product / frontend).
+	AsrConfig datatypes.JSON `json:"asrConfig,omitempty" gorm:"column:asr_config"`
+	TtsConfig datatypes.JSON `json:"ttsConfig,omitempty" gorm:"column:tts_config"`
+	LlmConfig datatypes.JSON `json:"llmConfig,omitempty" gorm:"column:llm_config"`
 }
 
 func (Tenant) TableName() string {

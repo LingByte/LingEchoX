@@ -22,5 +22,9 @@ func (h *Handlers) listTenants(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	rows := make([]gin.H, len(list))
+	for i := range list {
+		rows[i] = tenantPublic(list[i])
+	}
+	response.Success(c, "success", gin.H{"list": rows, "total": total, "page": page, "size": size})
 }

@@ -435,6 +435,16 @@ func Start(cfg Config) (*Embedded, error) {
 		}
 		sipServerPtr.HangupInboundCall(callID)
 	})
+	conversation.SetTenantVoiceJSONLoader(func(ctx context.Context, tenantID uint) ([]byte, []byte, []byte, bool) {
+		if acdDB == nil || tenantID == 0 {
+			return nil, nil, nil, false
+		}
+		var t models.Tenant
+		if err := acdDB.WithContext(ctx).Where("id = ?", tenantID).First(&t).Error; err != nil {
+			return nil, nil, nil, false
+		}
+		return []byte(t.AsrConfig), []byte(t.TtsConfig), []byte(t.LlmConfig), true
+	})
 	webseat.InitDefault(webseat.Config{
 		RemoveCallSession:     sipServerPtr.RemoveCallSession,
 		ForgetUASDialog:       sipServerPtr.ForgetUASDialog,

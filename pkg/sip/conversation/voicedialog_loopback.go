@@ -10,22 +10,23 @@ import (
 	"go.uber.org/zap"
 )
 
-// ReadyForVoicedialogLoopbackLLM is true when LLM_* env is sufficient for inbound voicedialog loopback (no ASR/TTS check).
+// ReadyForVoicedialogLoopbackLLM is true when tenant LLM JSON is sufficient for inbound voicedialog loopback.
 func (e VoiceEnv) ReadyForVoicedialogLoopbackLLM() bool {
-	if strings.TrimSpace(e.LLMProvider) == "" || e.LLMAPIKey == "" {
-		return false
-	}
-	if strings.EqualFold(e.LLMProvider, "alibaba") {
-		return e.LLMAppID != ""
-	}
-	return e.LLMBaseURL != ""
+	return voiceEnvLLMReady(e)
 }
 
 // NewVoicedialogLoopbackLLMProvider builds one LLM session per inbound call (multi-turn history inside provider).
 func NewVoicedialogLoopbackLLMProvider(ctx context.Context, callID string, lg *zap.Logger) (llm.LLMProvider, string, func(), error) {
-	env := VoiceEnvFromProcess()
-	if !env.ReadyForVoicedialogLoopbackLLM() {
-		return nil, "", nil, fmt.Errorf("voicedialog loopback LLM: incomplete LLM env (LLM_PROVIDER / LLM_APIKEY / LLM_BASEURL or Alibaba APP_ID)")
+	cs := LookupInboundCallSession(callID)
+	if cs == nil {
+		return nil, "", nil, fmt.Errorf("voicedialog loopback LLM: no inbound CallSession for %s", callID)
+	}
+	env, loaded, err := ResolveTenantVoiceEnv(ctx, cs)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if !loaded || !env.ReadyForVoicedialogLoopbackLLM() {
+		return nil, "", nil, fmt.Errorf("voicedialog loopback LLM: incomplete tenant llmConfig")
 	}
 	systemPrompt := popSIPCallSystemPrompt(callID)
 	p, err := llm.NewLLMProvider(ctx, env.LLMProvider, env.LLMAPIKey, llmAPIURLForProvider(env), systemPrompt)

@@ -76,8 +76,10 @@ type CallSession struct {
 	// 注入。给转接路径用——转接时希望坐席话机上显示的是【真实主叫的手机号】，
 	// 而不是平台 400 中继号；从这里取出 user 部分回写到外呼 DialRequest 的
 	// CallerDisplayName 即可。出局 / 主动 Dial 的 CallSession 这里就是空。
-	metaMu           sync.RWMutex
-	remoteFromHeader string
+	metaMu               sync.RWMutex
+	remoteFromHeader     string
+	tenantID             uint
+	inboundUnboundTenant bool
 }
 
 // SetRemoteFromHeader 由 sip/server 在 INVITE 入站时调用，记录 PSTN 主叫
@@ -103,6 +105,46 @@ func (cs *CallSession) RemoteFromHeader() string {
 	cs.metaMu.RLock()
 	defer cs.metaMu.RUnlock()
 	return cs.remoteFromHeader
+}
+
+// SetTenantID records the tenant scope for media/AI (inbound DID or outbound campaign).
+func (cs *CallSession) SetTenantID(id uint) {
+	if cs == nil {
+		return
+	}
+	cs.metaMu.Lock()
+	cs.tenantID = id
+	cs.metaMu.Unlock()
+}
+
+// TenantID returns the tenant id bound to this call (0 = none / legacy).
+func (cs *CallSession) TenantID() uint {
+	if cs == nil {
+		return 0
+	}
+	cs.metaMu.RLock()
+	defer cs.metaMu.RUnlock()
+	return cs.tenantID
+}
+
+// SetInboundUnboundTenant marks inbound calls where the called DID is not assigned to any tenant.
+func (cs *CallSession) SetInboundUnboundTenant(v bool) {
+	if cs == nil {
+		return
+	}
+	cs.metaMu.Lock()
+	cs.inboundUnboundTenant = v
+	cs.metaMu.Unlock()
+}
+
+// InboundUnboundTenant is true when the inbound number is not bound to a tenant (play not_bind.wav).
+func (cs *CallSession) InboundUnboundTenant() bool {
+	if cs == nil {
+		return false
+	}
+	cs.metaMu.RLock()
+	defer cs.metaMu.RUnlock()
+	return cs.inboundUnboundTenant
 }
 
 // NewCallSession creates a call session with codec negotiation from SDP.

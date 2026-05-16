@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -20,6 +21,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 	pinyinLib "github.com/mozillazg/go-pinyin"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -208,6 +210,27 @@ func tenantPublic(t models.Tenant) gin.H {
 	}
 }
 
+func jsonValueFromTenantBlob(b []byte) any {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return nil
+	}
+	return v
+}
+
+// tenantPlatformDetail is for platform-admin APIs only (includes per-tenant AI JSON). Do not use on tenant login.
+func tenantPlatformDetail(t models.Tenant) gin.H {
+	h := tenantPublic(t)
+	h["asrConfig"] = jsonValueFromTenantBlob(t.AsrConfig)
+	h["ttsConfig"] = jsonValueFromTenantBlob(t.TtsConfig)
+	h["llmConfig"] = jsonValueFromTenantBlob(t.LlmConfig)
+	return h
+}
+
 // provisionTenantWithAdmin creates tenant, system「管理员」role with full catalog permissions, first admin user, and role binding.
 func provisionTenantWithAdmin(db *gorm.DB, req tenantRegisterReq, passwordHash string, attachTag string) (tenant models.Tenant, user models.TenantUser, role models.TenantRole, err error) {
 	email := utils.TrimLower(req.AdminEmail)
@@ -344,6 +367,10 @@ type tenantPlatformUpdateReq struct {
 	Status       string `json:"status"`
 	ContactEmail string `json:"contactEmail"`
 	MaxUserCount int    `json:"maxUserCount"`
+
+	AsrConfig *json.RawMessage `json:"asrConfig"`
+	TtsConfig *json.RawMessage `json:"ttsConfig"`
+	LlmConfig *json.RawMessage `json:"llmConfig"`
 }
 
 func (h *Handlers) getTenant(c *gin.Context) {
@@ -358,7 +385,7 @@ func (h *Handlers) getTenant(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	response.Success(c, "success", gin.H{"tenant": tenantPublic(t)})
+	response.Success(c, "success", gin.H{"tenant": tenantPlatformDetail(t)})
 }
 
 // createTenantPlatform provisions a tenant (platform console); same payload as public register but returns JSON without issuing tenant JWT.
@@ -390,7 +417,7 @@ func (h *Handlers) createTenantPlatform(c *gin.Context) {
 		return
 	}
 	response.Success(c, "success", gin.H{
-		"tenant":    tenantPublic(tenant),
+		"tenant":    tenantPlatformDetail(tenant),
 		"adminUser": h.tenantUserPublic(user),
 		"roleId":    role.ID,
 	})
@@ -435,12 +462,40 @@ func (h *Handlers) updateTenantPlatform(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
+	if req.AsrConfig != nil || req.TtsConfig != nil || req.LlmConfig != nil {
+		patch := map[string]any{
+			"updated_at": time.Now(),
+			"update_by":  op,
+		}
+		if req.AsrConfig != nil {
+			patch["asr_config"] = datatypes.JSON(cloneRawMessage(*req.AsrConfig))
+		}
+		if req.TtsConfig != nil {
+			patch["tts_config"] = datatypes.JSON(cloneRawMessage(*req.TtsConfig))
+		}
+		if req.LlmConfig != nil {
+			patch["llm_config"] = datatypes.JSON(cloneRawMessage(*req.LlmConfig))
+		}
+		if err := h.db.Model(&models.Tenant{}).Where("id = ?", id).Updates(patch).Error; err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	t, err := models.GetActiveTenantByID(h.db, id)
 	if err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", gin.H{"tenant": tenantPublic(t)})
+	response.Success(c, "success", gin.H{"tenant": tenantPlatformDetail(t)})
+}
+
+func cloneRawMessage(r json.RawMessage) []byte {
+	if len(r) == 0 {
+		return []byte("null")
+	}
+	out := make([]byte, len(r))
+	copy(out, r)
+	return out
 }
 
 func (h *Handlers) deleteTenantPlatform(c *gin.Context) {

@@ -208,11 +208,24 @@ func (h *Hub) runInboundLoopbackWS(callID string) {
 func runLoopbackAssistant(callID string, c *websocket.Conn) {
 	defer func() { _ = c.Close() }()
 
-	env := conversation.VoiceEnvFromProcess()
-	if !env.ReadyForVoicedialogLoopbackLLM() {
-		logger.Warn("voicedialog loopback: LLM env incomplete — drain WS only (configure LLM_PROVIDER + LLM_APIKEY + LLM_BASEURL or Alibaba APP_ID, same as outbound SIP)",
-			zap.String(KeyCallID, callID),
-		)
+	cs := conversation.LookupInboundCallSession(callID)
+	ctx := context.Background()
+	env, loaded, err := conversation.ResolveTenantVoiceEnv(ctx, cs)
+	if cs == nil || err != nil || !loaded || !env.ReadyForVoicedialogLoopbackLLM() {
+		if cs == nil {
+			logger.Warn("voicedialog loopback: no inbound CallSession — drain WS only",
+				zap.String(KeyCallID, callID),
+			)
+		} else if err != nil {
+			logger.Warn("voicedialog loopback: tenant voice env error — drain WS only",
+				zap.String(KeyCallID, callID),
+				zap.Error(err),
+			)
+		} else {
+			logger.Warn("voicedialog loopback: tenant llmConfig incomplete — drain WS only",
+				zap.String(KeyCallID, callID),
+			)
+		}
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
 				return
@@ -220,7 +233,6 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 		}
 	}
 
-	ctx := context.Background()
 	var prov llm.LLMProvider
 	var model string
 	var cleanup func()

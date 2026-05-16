@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,7 +16,6 @@ import (
 	sipdtmf "github.com/LinByte/VoiceServer/pkg/sip/dtmf"
 	sipvad "github.com/LinByte/VoiceServer/pkg/sip/vad"
 	"github.com/LinByte/VoiceServer/pkg/synthesizer"
-	"github.com/LinByte/VoiceServer/pkg/utils"
 	sipasr "github.com/LinByte/VoiceServer/pkg/voice/asr"
 	"go.uber.org/zap"
 )
@@ -81,26 +79,23 @@ func attachGatewayMedia(sess *dialogSession) error {
 	if sess == nil || sess.cs == nil {
 		return errors.New("voicedialog gateway: nil session")
 	}
-	asrAppID := utils.GetEnv("ASR_APPID")
-	asrSecretID := utils.GetEnv("ASR_SECRET_ID")
-	asrSecretKey := utils.GetEnv("ASR_SECRET_KEY")
-	asrModelType := utils.GetEnv("ASR_MODEL_TYPE")
-	ttsAppID := utils.GetEnv("TTS_APPID")
-	ttsSecretID := utils.GetEnv("TTS_SECRET_ID")
-	ttsSecretKey := utils.GetEnv("TTS_SECRET_KEY")
-	ttsVoiceType, _ := strconv.ParseInt(utils.GetEnv("TTS_VOICE_TYPE"), 10, 64)
-	ttsSpeed, _ := strconv.ParseInt(utils.GetEnv("TTS_SPEED"), 10, 64)
-	// TTS_SAMPLE_RATE 显式指定时按用户配置走（一般 8000/16000/24000）。
-	// **未设置时不再写死 16000**，而是 0 → 走 gatewayTTSCloudSR 的 fallback：
-	// 跟 SIP 协商出的 pcmBridgeSR 对齐，避免下游 ResamplePCM 跨 chunk 重采样
-	// 造成的相位累积错位（块边界周期性电流音）。
-	ttsSampleRate, _ := strconv.Atoi(utils.GetEnv("TTS_SAMPLE_RATE"))
-	if asrAppID == "" || asrSecretID == "" || asrSecretKey == "" {
-		return fmt.Errorf("voicedialog gateway: missing ASR credentials (ASR_APPID, ASR_SECRET_ID, ASR_SECRET_KEY)")
+	voiceEnv, vLoaded, vErr := conversation.ResolveTenantVoiceEnv(context.Background(), sess.cs)
+	if vErr != nil {
+		return fmt.Errorf("voicedialog gateway: tenant voice env: %w", vErr)
 	}
-	if ttsAppID == "" || ttsSecretID == "" || ttsSecretKey == "" {
-		return fmt.Errorf("voicedialog gateway: missing TTS credentials (TTS_APPID, TTS_SECRET_ID, TTS_SECRET_KEY)")
+	if !vLoaded || !conversation.TenantVoiceReady(voiceEnv) {
+		return fmt.Errorf("voicedialog gateway: tenant ASR/TTS/LLM JSON missing or incomplete (need qcloud ASR+TTS + LLM)")
 	}
+	asrAppID := voiceEnv.ASRAppID
+	asrSecretID := voiceEnv.ASRSecretID
+	asrSecretKey := voiceEnv.ASRSecretKey
+	asrModelType := voiceEnv.ASRModelType
+	ttsAppID := voiceEnv.TTSAppID
+	ttsSecretID := voiceEnv.TTSSecretID
+	ttsSecretKey := voiceEnv.TTSSecretKey
+	ttsVoiceType := voiceEnv.TTSVoiceType
+	ttsSpeed := voiceEnv.TTSSpeed
+	ttsSampleRate := voiceEnv.TTSSampleRate
 
 	ms := sess.cs.MediaSession()
 	if ms == nil {

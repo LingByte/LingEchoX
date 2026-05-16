@@ -715,12 +715,12 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 	}
 
 	tidInbound := s.resolveInboundTenant(msg)
-	if !s.inboundAllowsUnknownDID() && tidInbound == 0 {
-		logger.Warn("sip invite rejected (tenant/DID unresolved)",
+	// DID not bound to any tenant: still answer the call; ACK path plays scripts/not_bind.wav then BYE.
+	if tidInbound == 0 {
+		logger.Warn("sip invite: inbound DID not bound to a tenant (will play not_bind on ACK)",
 			zap.String("call_id", callID),
 			zap.String("request_uri", msg.RequestURI),
 		)
-		return s.makeResponse(msg, 404, "Not Found", "", "")
 	}
 
 	rawCalled := InboundCalledPartyUser(msg)
@@ -887,13 +887,16 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 	// instead of the platform's trunk number (e.g. 400-xxx).
 	cs.SetRemoteFromHeader(fromHdr)
 
+	bind := s.resolveInboundDIDBinding(msg)
+	cs.SetTenantID(bind.TenantID)
+	cs.SetInboundUnboundTenant(bind.TenantID == 0)
+
 	// IMPORTANT: Do not start media until ACK (call established).
 
 	localPort := rtpSess.LocalAddr.Port
 
 	if p := s.callPersistStore(); p != nil {
 		neg := cs.NegotiatedCodec()
-		bind := s.resolveInboundDIDBinding(msg)
 		p.OnInvite(context.Background(), InvitePersistParams{
 			TenantID:             bind.TenantID,
 			InboundTrunkNumberID: bind.TrunkNumberID,
@@ -1021,13 +1024,32 @@ func (s *SIPServer) handleAck(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 			)
 			return nil
 		}
+		if cs.InboundUnboundTenant() {
+			zl := logger.Lg
+			if err := conversation.AttachInboundNotBoundPlayback(context.Background(), cs, zl); err != nil {
+				logger.Warn("sip inbound not_bind playback attach failed",
+					zap.String("call_id", callID),
+					zap.Error(err),
+				)
+			}
+			if p := s.callPersistStore(); p != nil {
+				p.OnEstablished(context.Background(), callID)
+			}
+			return nil
+		}
 		fromH, toH, remSig := s.peekInviteBrief(callID)
 		voiceURL := s.lookupVoiceDialogWS(callID)
 		if err := voicedialog.AttachInboundVoiceDialog(context.Background(), cs, fromH, toH, remSig, voiceURL); err != nil {
-			logger.Warn("sip inbound voicedialog attach failed (no embedded fallback; configure ASR/TTS + HTTP WS client)",
+			logger.Warn("sip inbound voicedialog attach failed; playing config_error then BYE",
 				zap.String("call_id", callID),
 				zap.Error(err),
 			)
+			if err2 := conversation.AttachInboundTenantAIConfigErrorPlayback(cs, logger.Lg); err2 != nil {
+				logger.Warn("sip inbound config_error playback attach failed",
+					zap.String("call_id", callID),
+					zap.Error(err2),
+				)
+			}
 		} else {
 			logger.Info("sip inbound voice attached",
 				zap.String("call_id", callID),
