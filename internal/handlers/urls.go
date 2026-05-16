@@ -159,6 +159,11 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 		numAdmin.POST("/trunk-numbers", h.createTrunkNumber)
 		numAdmin.PUT("/trunk-numbers/:id", h.updateTrunkNumber)
 		numAdmin.DELETE("/trunk-numbers/:id", h.deleteTrunkNumber)
+		// 中继音频 WAV 上传：multipart/form-data，字段名 "file"。返回 {url,key,size}。
+		// 上传成功后由前端把 url 写回 PUT /trunk-numbers/:id 的对应字段。
+		// 两个端点共用同一个 handler 工厂，仅落盘目录前缀不同。
+		numAdmin.POST("/trunk-numbers/welcome-audio", h.uploadTrunkNumberAudio("welcome-audio"))
+		numAdmin.POST("/trunk-numbers/transfer-ringing-audio", h.uploadTrunkNumberAudio("transfer-ringing-audio"))
 	}
 
 	h.registerTenantOrgRoutes(g)

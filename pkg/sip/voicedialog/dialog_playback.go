@@ -13,6 +13,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/welcomeaudio"
 	"go.uber.org/zap"
 )
 
@@ -100,15 +101,33 @@ func (sess *dialogSession) runDialogWelcome() {
 		return
 	}
 	callID := sess.meta.CallID
-	ref := utils.GetEnv("SIP_WELCOME_WAV_PATH")
-	if strings.TrimSpace(ref) == "" {
-		ref = "scripts/welcome.wav"
+	// Resolution order (mirrors conversation.loadWelcomePCM):
+	//   1) Per-DID TrunkNumber.WelcomeAudioURL via the resolver wired in
+	//      internal/sipserver/sipapp.go. URL failures do NOT silently
+	//      fall back — surface as a "skipped/error" gateway event so the
+	//      operator sees the misconfiguration.
+	//   2) SIP_WELCOME_WAV_PATH env / scripts/welcome.wav (legacy default).
+	var (
+		kind, srcDisp, loc string
+		didURL             = strings.TrimSpace(conversation.ResolveWelcomeAudioURL(callID))
+	)
+	if didURL != "" {
+		kind = SourceKindURL
+		// Show the URL itself as source identifier so the gateway
+		// event payload is self-describing (CDN host / path visible).
+		srcDisp = didURL
+		loc = didURL
+	} else {
+		ref := utils.GetEnv("SIP_WELCOME_WAV_PATH")
+		if strings.TrimSpace(ref) == "" {
+			ref = "scripts/welcome.wav"
+		}
+		kind, srcDisp, loc = ParseVoicedialogAudioRef(ref)
 	}
-	kind, srcDisp, loc := ParseVoicedialogAudioRef(ref)
 	if kind == "" || loc == "" {
 		sess.emitGateway(event(EvDialogWelcome, callID, map[string]any{
 			KeyPhase:  PhaseWelcomeSkipped,
-			KeyDetail: "invalid SIP_WELCOME_WAV_PATH or scripts/welcome.wav",
+			KeyDetail: "no welcome audio configured",
 		}))
 		return
 	}
@@ -129,7 +148,20 @@ func (sess *dialogSession) runDialogWelcome() {
 	}))
 
 	pcmSR := pcmBridgeHz(sess)
-	pcm, err := loadVoicedialogWAVPCM(ctx, kind, loc, pcmSR)
+	// URL path goes through pkg/welcomeaudio.FetchPCM so we get
+	// in-process caching, 16 MiB cap, RIFF/WAVE magic re-validation
+	// and consistent error categorisation (ErrUnreachable / ErrNotAudio).
+	// Script / file path keeps the existing loader since local files
+	// don't benefit from the cache layer.
+	var (
+		pcm []byte
+		err error
+	)
+	if kind == SourceKindURL {
+		pcm, err = welcomeaudio.FetchPCM(ctx, loc, pcmSR, conversation.LoadWAVAsPCM16FromBytes)
+	} else {
+		pcm, err = loadVoicedialogWAVPCM(ctx, kind, loc, pcmSR)
+	}
 	if err != nil {
 		logger.Warn("voicedialog welcome wav failed",
 			zap.String(KeyCallID, callID),
@@ -174,7 +206,7 @@ func deliverConversationTransferPhase(callID string, phase string, fields map[st
 
 	switch ph {
 	case PhaseTransferRequested, PhaseTransferLoading:
-		if ref := transferLoadingAudioRef(); ref != "" {
+		if ref := transferLoadingAudioRef(callID); ref != "" {
 			sk, sd, _ := ParseVoicedialogAudioRef(ref)
 			if sk != "" {
 				extra[KeySourceKind] = sk
@@ -220,7 +252,7 @@ func (sess *dialogSession) beginTransferLoadingPlayback() {
 		sess.transferLoadingMu.Unlock()
 		return
 	}
-	ref := transferLoadingAudioRef()
+	ref := transferLoadingAudioRef(sess.meta.CallID)
 	if strings.TrimSpace(ref) == "" {
 		sess.transferLoadingMu.Unlock()
 		return
@@ -238,7 +270,18 @@ func (sess *dialogSession) beginTransferLoadingPlayback() {
 	go func() {
 		defer sess.stopTransferLoadingPlayback()
 		pcmSR := pcmBridgeHz(sess)
-		pcm, err := loadVoicedialogWAVPCM(ctx, kind, loc, pcmSR)
+		// URL path goes through the shared welcomeaudio cache so
+		// repeated transfers within the cache TTL skip the network
+		// hop. Script/file path keeps the existing direct loader.
+		var (
+			pcm []byte
+			err error
+		)
+		if kind == SourceKindURL {
+			pcm, err = welcomeaudio.FetchPCM(ctx, loc, pcmSR, conversation.LoadWAVAsPCM16FromBytes)
+		} else {
+			pcm, err = loadVoicedialogWAVPCM(ctx, kind, loc, pcmSR)
+		}
 		if err != nil {
 			logger.Warn("voicedialog transfer loading wav failed",
 				zap.String(KeyCallID, callID),

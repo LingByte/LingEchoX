@@ -801,17 +801,28 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	}
 
 	if !scriptMode {
-		// Resolve the welcome WAV path UP FRONT so a missing file
-		// (operator deliberately removed scripts/welcome.wav, or test
-		// environment without static assets) short-circuits cleanly
-		// without spawning a goroutine, flipping welcomePlaying, or
-		// emitting a Warn — "skip this phase" is normal, not an error.
-		welcomePath := resolveWelcomeWavPath()
-		if exists, _ := welcomeWavExists(welcomePath); !exists {
-			lg.Info("sip voice: welcome wav not found, skipping welcome phase",
+		// Resolve + decode the welcome WAV up front so we can short-
+		// circuit (skip goroutine + welcomePlaying flag) when there is
+		// no configured source. Two paths feed loadWelcomePCM:
+		//   1) TrunkNumber.WelcomeAudioURL (per-DID, set by admin)
+		//   2) scripts/welcome.wav (legacy / global default)
+		// Both yield decoded PCM at the bridge sample rate; the
+		// playback goroutine below is identical regardless of source.
+		welcomePCM, src, werr := loadWelcomePCM(ms.GetContext(), cs.CallID, pcmBridgeSR, lg)
+		switch {
+		case werr != nil:
+			// Configured source failed (URL unreachable / decode error).
+			// We already logged inside loadWelcomePCM; skip playback
+			// rather than silently falling back, so the operator sees
+			// the misconfiguration in observability.
+			lg.Warn("sip voice: welcome audio load failed, skipping welcome phase",
 				zap.String("call_id", cs.CallID),
-				zap.String("path", welcomePath))
-		} else {
+				zap.String("source", string(src)),
+				zap.Error(werr))
+		case len(welcomePCM) == 0 || src == welcomeSourceSkip:
+			// No URL on trunk AND no local file → legitimate skip.
+			// loadWelcomePCM already emitted an Info log.
+		default:
 			welcomePlaying.Store(true)
 			welcomeCtx, cancelWelcome := context.WithCancel(ms.GetContext())
 			welcomeCancelMu.Lock()
@@ -824,16 +835,22 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 					welcomeCancel = nil
 					welcomeCancelMu.Unlock()
 				}()
-				if err := playResolvedWelcomeWav(welcomeCtx, welcomePath, ms, lg, pcmBridgeSR, cs.WriteAIPCM); err != nil {
+				if err := playWelcomePCM(welcomeCtx, welcomePCM, ms, lg, pcmBridgeSR, cs.WriteAIPCM); err != nil {
 					// Context cancellation = legitimate barge-in / TTS-start
 					// pre-emption (cancelWelcomeIfPlaying), not an error.
 					if errors.Is(err, context.Canceled) {
 						return
 					}
-					lg.Warn("sip voice welcome playback failed", zap.String("call_id", cs.CallID), zap.Error(err))
+					lg.Warn("sip voice welcome playback failed",
+						zap.String("call_id", cs.CallID),
+						zap.String("source", string(src)),
+						zap.Error(err))
 					return
 				}
-				lg.Info("sip voice welcome playback finished", zap.String("call_id", cs.CallID))
+				lg.Info("sip voice welcome playback finished",
+					zap.String("call_id", cs.CallID),
+					zap.String("source", string(src)),
+					zap.Int("bytes", len(welcomePCM)))
 			}()
 		}
 	}
@@ -886,16 +903,26 @@ func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger,
 	return playResolvedWelcomeWav(ctx, resolveWelcomeWavPath(), ms, lg, sampleRate, recordTap)
 }
 
-// playResolvedWelcomeWav is the actual playback loop. Caller supplies a
-// pre-resolved path so the "skip when missing" decision can short-circuit
-// before any goroutine is spawned (see AttachVoicePipeline above).
+// playResolvedWelcomeWav is a backwards-compatible wrapper that loads
+// the WAV from a filesystem path then delegates to playWelcomePCM. New
+// call sites (AttachVoicePipeline) prefer loadWelcomePCM → playWelcomePCM
+// so they can also serve per-DID remote URLs from TrunkNumber.WelcomeAudioURL.
 func playResolvedWelcomeWav(ctx context.Context, path string, ms *media.MediaSession, lg *zap.Logger, sampleRate int, recordTap func(pcm []byte)) error {
-	if ms == nil {
-		return fmt.Errorf("media session is nil")
-	}
 	pcm, err := LoadWAVAsPCM16Mono(path, sampleRate)
 	if err != nil {
 		return fmt.Errorf("load welcome wav: %w", err)
+	}
+	return playWelcomePCM(ctx, pcm, ms, lg, sampleRate, recordTap)
+}
+
+// playWelcomePCM pumps already-decoded s16le mono PCM into the media
+// session at 20 ms cadence, taking the recorder tap so the stereo
+// recording's AI channel includes the welcome utterance. Pure
+// playback: no file I/O, no URL fetches. Returns context.Canceled
+// when the caller cancels (legitimate barge-in / TTS pre-emption).
+func playWelcomePCM(ctx context.Context, pcm []byte, ms *media.MediaSession, lg *zap.Logger, sampleRate int, recordTap func(pcm []byte)) error {
+	if ms == nil {
+		return fmt.Errorf("media session is nil")
 	}
 	if sampleRate <= 0 {
 		sampleRate = 16000

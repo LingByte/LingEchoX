@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 
@@ -47,9 +48,30 @@ func wsTokenExpected() string {
 	return utils.GetEnv("VOICE_DIALOG_WS_TOKEN")
 }
 
-// transferLoadingAudioRef returns SIP_TRANSFER_RINGING_WAV_PATH when set (same clip family as SIP transfer ringback).
-func transferLoadingAudioRef() string {
-	return utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH")
+// transferLoadingAudioRef returns the transfer-loading WAV reference
+// for the given inbound Call-ID. Resolution order matches the welcome
+// audio path:
+//
+//  1. Per-DID TrunkNumber.TransferRingingURL via the resolver wired
+//     in internal/sipserver/sipapp.go (always returns "" when no row /
+//     no resolver).
+//  2. SIP_TRANSFER_RINGING_WAV_PATH env (legacy operator override).
+//  3. scripts/ringing.wav (project default).
+//
+// Callers pass the empty string for callID when no inbound is known
+// (deliverConversationTransferPhase metadata enrichment) — the call
+// then falls straight through to (2)/(3). Returns "" only when all
+// three sources resolve to empty (which currently cannot happen
+// because scripts/ringing.wav is hard-coded as fallback, but kept
+// as the explicit empty-result contract for testability).
+func transferLoadingAudioRef(callID string) string {
+	if u := strings.TrimSpace(conversation.ResolveTransferRingingURL(callID)); u != "" {
+		return u
+	}
+	if env := strings.TrimSpace(utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH")); env != "" {
+		return env
+	}
+	return "scripts/ringing.wav"
 }
 
 // ParseVoicedialogAudioRef returns source_kind, client-visible source, and filesystem path or URL for loading WAV PCM.

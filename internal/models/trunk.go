@@ -66,6 +66,19 @@ type TrunkNumber struct {
 	Provider          string     `json:"-" label:"供应商"`
 	// VoiceDialogWSURL 入局呼叫匹配此号码时，语音对话 WebSocket 客户端拨号地址（ws/wss）；空则走平台默认 loopback。
 	VoiceDialogWSURL string `json:"voiceDialogWsUrl,omitempty" gorm:"column:voice_dialog_ws_url;size:512" label:"呼入语音对话WS"`
+	// WelcomeAudioURL 入局呼叫匹配此号码时，欢迎语音频文件 URL（http/https）；
+	// 取代环境变量 SIP_WELCOME_WAV_PATH。可由用户直接填外链，也可通过
+	// /api/v1/trunk-numbers/welcome-audio 上传 WAV 后由平台返回的 URL 写入。
+	// 空则按 SIP_WELCOME_WAV_PATH env / scripts/welcome.wav 兜底；兜底不存在则跳过欢迎语阶段。
+	// 写入时后端会做可达性 + WAV magic（RIFF/WAVE）双重校验，避免落库非音频或外链失效 URL。
+	WelcomeAudioURL string `json:"welcomeAudioUrl,omitempty" gorm:"column:welcome_audio_url;size:1024" label:"欢迎语音频URL"`
+	// TransferRingingURL 转人工/转接阶段播放给主叫的回铃 WAV URL（http/https）。
+	// 取代环境变量 SIP_TRANSFER_RINGING_WAV_PATH。两条独立链路共用此字段：
+	//   1) pkg/sip/conversation.playTransferRingingLoop（SIP 透传转接的 ringback）
+	//   2) pkg/sip/voicedialog.beginTransferLoadingPlayback（voicedialog 模式 transfer loading loop）
+	// 空则回退 SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav；都不存在则
+	// 转接阶段静音直到对端 180/200。写入时后端做可达性 + WAV magic 双重校验。
+	TransferRingingURL string `json:"transferRingingUrl,omitempty" gorm:"column:transfer_ringing_url;size:1024" label:"转接回铃音频URL"`
 	// ACDDispatchMode controls how inbound calls matching this trunk number select an ACDPoolTarget:
 	// - "weight" (default): pick highest weight (tie-break lower id)
 	// - "round_robin": pick next eligible target in id order (still requires weight>0; weight acts as enable/disable)

@@ -55,8 +55,18 @@ func TestParseVoicedialogAudioRef(t *testing.T) {
 }
 
 func TestTransferLoadingAudioRef(t *testing.T) {
+	// Env override wins over the scripts/ringing.wav fallback when no
+	// per-DID resolver match exists for the supplied Call-ID.
 	t.Setenv("SIP_TRANSFER_RINGING_WAV_PATH", "/tmp/x.wav")
-	if got := transferLoadingAudioRef(); got != "/tmp/x.wav" {
-		t.Fatalf("got %q", got)
+	if got := transferLoadingAudioRef(""); got != "/tmp/x.wav" {
+		t.Fatalf("env override: got %q", got)
+	}
+
+	// With env unset and no resolver wired, we expect the project
+	// default scripts/ringing.wav (caller decides whether that file
+	// exists; this function is responsible for the path resolution only).
+	t.Setenv("SIP_TRANSFER_RINGING_WAV_PATH", "")
+	if got := transferLoadingAudioRef(""); got != "scripts/ringing.wav" {
+		t.Fatalf("default fallback: got %q", got)
 	}
 }

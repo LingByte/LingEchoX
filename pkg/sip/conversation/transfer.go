@@ -16,6 +16,7 @@ import (
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
 	"github.com/LinByte/VoiceServer/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/welcomeaudio"
 	"go.uber.org/zap"
 )
 
@@ -294,20 +295,40 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 	if ms == nil {
 		return fmt.Errorf("nil inbound media session")
 	}
-	path := utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH")
-	if path == "" {
-		path = "scripts/ringing.wav"
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Clean(path)
-	}
+	// Source resolution order, mirroring loadWelcomePCM:
+	//   1) Per-DID TrunkNumber.TransferRingingURL via SetTransferRingingResolver.
+	//      URL failures (unreachable / non-WAV) DO NOT fall back to local —
+	//      surfacing the misconfiguration is more valuable than silently
+	//      replaying a generic ringback.
+	//   2) SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav (legacy).
 	pcmSR := inbound.PCMSampleRate()
 	if pcmSR <= 0 {
 		pcmSR = 16000
 	}
-	pcm, err := LoadWAVAsPCM16Mono(path, pcmSR)
-	if err != nil {
-		return fmt.Errorf("load transfer ringing wav: %w", err)
+	var (
+		pcm    []byte
+		err    error
+		source string
+	)
+	if u := strings.TrimSpace(ResolveTransferRingingURL(inbound.CallID)); u != "" {
+		source = u
+		pcm, err = welcomeaudio.FetchPCM(ctx, u, pcmSR, LoadWAVAsPCM16FromBytes)
+		if err != nil {
+			return fmt.Errorf("load transfer ringing url %q: %w", u, err)
+		}
+	} else {
+		path := utils.GetEnv("SIP_TRANSFER_RINGING_WAV_PATH")
+		if path == "" {
+			path = "scripts/ringing.wav"
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Clean(path)
+		}
+		source = path
+		pcm, err = LoadWAVAsPCM16Mono(path, pcmSR)
+		if err != nil {
+			return fmt.Errorf("load transfer ringing wav %q: %w", path, err)
+		}
 	}
 	bytesPerFrame := pcmSR * 2 * 20 / 1000
 	if bytesPerFrame <= 0 {
@@ -316,7 +337,9 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	if lg != nil {
-		lg.Info("sip transfer ring playback started", zap.Int("bytes", len(pcm)))
+		lg.Info("sip transfer ring playback started",
+			zap.Int("bytes", len(pcm)),
+			zap.String("source", source))
 	}
 	offset := 0
 	for {

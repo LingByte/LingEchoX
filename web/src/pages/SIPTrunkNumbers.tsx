@@ -17,6 +17,8 @@ import {
   fetchTrunksForSelect,
   listTrunkNumbers,
   updateTrunkNumber,
+  uploadTrunkNumberTransferRingingAudio,
+  uploadTrunkNumberWelcomeAudio,
   type TrunkNumberRow,
   type TrunkRow,
 } from '@/api/trunks'
@@ -46,6 +48,11 @@ type FormState = {
   effectiveTime: string
   expirationTime: string
   voiceDialogWsUrl: string
+  // welcomeAudioUrl 入局欢迎语 WAV URL（与「上传 WAV」共用同一个存储字段，
+  // 上传成功后后端返回的 url 会写回该字段）。
+  welcomeAudioUrl: string
+  // transferRingingUrl 转接阶段回铃 WAV URL，语义同 welcomeAudioUrl。
+  transferRingingUrl: string
   outboundTrunkNumberId: string
 }
 
@@ -64,6 +71,8 @@ const defaultForm = (): FormState => ({
   effectiveTime: '',
   expirationTime: '',
   voiceDialogWsUrl: '',
+  welcomeAudioUrl: '',
+  transferRingingUrl: '',
   outboundTrunkNumberId: '0',
 })
 
@@ -81,6 +90,10 @@ const SIPTrunkNumbers = () => {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<FormState>(defaultForm)
   const [saving, setSaving] = useState(false)
+  // *Uploading: 仅控制「上传中」按钮 loading 态；上传成功后由 setForm
+  // 把后端返回的 url 写回对应字段，与「直接粘贴 URL」共用同一个保存字段。
+  const [welcomeUploading, setWelcomeUploading] = useState(false)
+  const [ringingUploading, setRingingUploading] = useState(false)
   const [delOpen, setDelOpen] = useState(false)
   const [delId, setDelId] = useState<number | null>(null)
   const [delLoading, setDelLoading] = useState(false)
@@ -165,6 +178,8 @@ const SIPTrunkNumbers = () => {
       effectiveTime: eff,
       expirationTime: exp,
       voiceDialogWsUrl: r.voiceDialogWsUrl || '',
+      welcomeAudioUrl: r.welcomeAudioUrl || '',
+      transferRingingUrl: r.transferRingingUrl || '',
       outboundTrunkNumberId: String(r.outboundTrunkNumberId ?? 0),
     })
     setModalOpen(true)
@@ -174,6 +189,61 @@ const SIPTrunkNumbers = () => {
     setModalOpen(false)
     setEditingId(null)
   }
+
+  // uploadTrunkAudio 是所有「上传 WAV」按钮的公共逻辑：
+  //   1) 前端拦截非 .wav 扩展名 + 大于 16MiB 文件；
+  //   2) 调用传入的 uploadFn（后端再做 RIFF/WAVE magic 校验）；
+  //   3) 成功后调用 onUploaded(url) 让调用方决定写回哪个字段。
+  // 这样 welcome / ringing 两个按钮不用拷贝代码，取裁黑吃不同的 uploadFn 即可。
+  const uploadTrunkAudio = async (
+    file: File,
+    uploadFn: (f: File) => Promise<{ code: number; msg?: string; data?: { url?: string } | null }>,
+    setBusy: (b: boolean) => void,
+    onUploaded: (url: string) => void,
+    successMsg: string,
+  ) => {
+    const lower = (file.name || '').toLowerCase()
+    if (!lower.endsWith('.wav')) {
+      showAlert('仅支持 .wav 文件', 'error')
+      return
+    }
+    if (file.size > 16 * 1024 * 1024) {
+      showAlert('WAV 文件不能超过 16MiB', 'error')
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await uploadFn(file)
+      if (res.code === 200 && res.data?.url) {
+        onUploaded(res.data.url)
+        showAlert(successMsg, 'success')
+      } else {
+        showAlert(res.msg || '上传失败', 'error')
+      }
+    } catch (e: unknown) {
+      showAlert(e instanceof Error ? e.message : '上传失败', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const uploadWelcome = (file: File) =>
+    uploadTrunkAudio(
+      file,
+      uploadTrunkNumberWelcomeAudio,
+      setWelcomeUploading,
+      (url) => setForm((f) => ({ ...f, welcomeAudioUrl: url })),
+      '上传成功，已写入欢迎语 URL',
+    )
+
+  const uploadRinging = (file: File) =>
+    uploadTrunkAudio(
+      file,
+      uploadTrunkNumberTransferRingingAudio,
+      setRingingUploading,
+      (url) => setForm((f) => ({ ...f, transferRingingUrl: url })),
+      '上传成功，已写入转接回铃 URL',
+    )
 
   const save = async () => {
     const trunkId = parseInt(form.trunkId, 10)
@@ -207,6 +277,8 @@ const SIPTrunkNumbers = () => {
       effectiveTime: eff ?? null,
       expirationTime: exp ?? null,
       voiceDialogWsUrl: form.voiceDialogWsUrl.trim(),
+      welcomeAudioUrl: form.welcomeAudioUrl.trim(),
+      transferRingingUrl: form.transferRingingUrl.trim(),
       outboundTrunkNumberId: (() => {
         const v = parseInt(form.outboundTrunkNumberId, 10)
         return Number.isFinite(v) && v > 0 ? v : 0
@@ -467,6 +539,108 @@ const SIPTrunkNumbers = () => {
               />
               <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
                 与本条「号码」入局匹配时生效；网关会自动追加 token、call_id 查询参数。
+              </Typography.Paragraph>
+            </div>
+            <div>
+              <Typography.Text style={{ fontSize: 12 }}>入局欢迎语 WAV</Typography.Text>
+              <Input
+                placeholder="留空=回退到 scripts/welcome.wav；可粘贴外链 URL 或点「上传 WAV」"
+                value={form.welcomeAudioUrl}
+                onChange={(v) => setForm((f) => ({ ...f, welcomeAudioUrl: v }))}
+                style={{ fontFamily: 'monospace', fontSize: 12 }}
+              />
+              <Space size={8} style={{ marginTop: 8 }}>
+                <Button
+                  size="small"
+                  loading={welcomeUploading}
+                  onClick={() => {
+                    // 隐藏式 <input type="file"> 弹原生选择器；这样 Drawer 内
+                    // 不需要再嵌 Arco Upload 组件，避免它的 action/headers 跨域配置。
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = '.wav,audio/wav,audio/x-wav'
+                    input.onchange = () => {
+                      const f = input.files?.[0]
+                      if (f) void uploadWelcome(f)
+                    }
+                    input.click()
+                  }}
+                >
+                  上传 WAV
+                </Button>
+                {form.welcomeAudioUrl.trim() && (
+                  <Button
+                    size="small"
+                    type="text"
+                    status="danger"
+                    onClick={() => setForm((f) => ({ ...f, welcomeAudioUrl: '' }))}
+                  >
+                    清除
+                  </Button>
+                )}
+              </Space>
+              {form.welcomeAudioUrl.trim() && (
+                <audio
+                  controls
+                  preload="none"
+                  src={form.welcomeAudioUrl.trim()}
+                  style={{ display: 'block', width: '100%', marginTop: 8 }}
+                >
+                  当前浏览器不支持 audio 元素，请直接复制 URL 在外部播放器试听。
+                </audio>
+              )}
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                呼入匹配本号码时播放的欢迎语音频（PCM WAV，建议 16-bit / 8-48 kHz mono）。可直接粘贴外链 URL，或点「上传 WAV」交由平台托管；保存时后端会做可达性 + RIFF/WAVE magic 双重校验。留空则回退到 SIP_WELCOME_WAV_PATH env / scripts/welcome.wav；都不存在则跳过欢迎语阶段。
+              </Typography.Paragraph>
+            </div>
+            <div>
+              <Typography.Text style={{ fontSize: 12 }}>转接回铃 WAV</Typography.Text>
+              <Input
+                placeholder="留空=回退到 scripts/ringing.wav；可粘贴外链 URL 或点「上传 WAV」"
+                value={form.transferRingingUrl}
+                onChange={(v) => setForm((f) => ({ ...f, transferRingingUrl: v }))}
+                style={{ fontFamily: 'monospace', fontSize: 12 }}
+              />
+              <Space size={8} style={{ marginTop: 8 }}>
+                <Button
+                  size="small"
+                  loading={ringingUploading}
+                  onClick={() => {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = '.wav,audio/wav,audio/x-wav'
+                    input.onchange = () => {
+                      const f = input.files?.[0]
+                      if (f) void uploadRinging(f)
+                    }
+                    input.click()
+                  }}
+                >
+                  上传 WAV
+                </Button>
+                {form.transferRingingUrl.trim() && (
+                  <Button
+                    size="small"
+                    type="text"
+                    status="danger"
+                    onClick={() => setForm((f) => ({ ...f, transferRingingUrl: '' }))}
+                  >
+                    清除
+                  </Button>
+                )}
+              </Space>
+              {form.transferRingingUrl.trim() && (
+                <audio
+                  controls
+                  preload="none"
+                  src={form.transferRingingUrl.trim()}
+                  style={{ display: 'block', width: '100%', marginTop: 8 }}
+                >
+                  当前浏览器不支持 audio 元素，请直接复制 URL 在外部播放器试听。
+                </audio>
+              )}
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                转接/转人工阶段（SIP 透传 ringback 与 voicedialog transfer-loading）播放给主叫的回铃 WAV。校验规则与上传流程同欢迎语完全一致；留空则回退到 SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav。
               </Typography.Paragraph>
             </div>
             <div>

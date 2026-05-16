@@ -33,6 +33,13 @@ export interface TrunkNumberRow {
   expirationTime?: string | null
   providerCode?: string
   voiceDialogWsUrl?: string
+  // welcomeAudioUrl 入局欢迎语音频 URL（http/https）。空字符串=回退到 scripts/welcome.wav。
+  // 由用户直接粘贴外链 OR 通过 uploadTrunkNumberWelcomeAudio 上传 WAV 拿到平台 URL。
+  welcomeAudioUrl?: string
+  // transferRingingUrl 转接阶段回铃 WAV URL（http/https）。空字符串=回退到
+  // SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav。与 welcomeAudioUrl
+  // 同套校验、同种上传流程，只是平台落盘目录不同。
+  transferRingingUrl?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -102,6 +109,8 @@ export async function createTrunkNumber(body: {
   effectiveTime?: string | null
   expirationTime?: string | null
   voiceDialogWsUrl?: string
+  welcomeAudioUrl?: string
+  transferRingingUrl?: string
 }): Promise<ApiResponse<TrunkNumberRow>> {
   return post('/sip-center/trunk-numbers', body)
 }
@@ -123,8 +132,27 @@ export async function updateTrunkNumber(id: number, body: {
   effectiveTime?: string | null
   expirationTime?: string | null
   voiceDialogWsUrl?: string
+  welcomeAudioUrl?: string
+  transferRingingUrl?: string
 }): Promise<ApiResponse<TrunkNumberRow>> {
   return put(`/sip-center/trunk-numbers/${id}`, body)
+}
+
+// uploadTrunkNumberWelcomeAudio 把 WAV 上传到后端 stores.Default()，
+// 返回 { url, key, size }。前端拿到 url 后写入表单 welcomeAudioUrl 字段，
+// 与「直接粘贴外链 URL」共用同一个保存字段（保存时由后端再次校验）。
+export async function uploadTrunkNumberWelcomeAudio(file: File): Promise<ApiResponse<{ url: string; key: string; size: number }>> {
+  const fd = new FormData()
+  fd.append('file', file)
+  return post('/sip-center/trunk-numbers/welcome-audio', fd)
+}
+
+// uploadTrunkNumberTransferRingingAudio 与 welcome-audio 完全等价，仅落盘
+// 前缀不同（transfer-ringing-audio/）。后端做相同的 WAV magic 校验。
+export async function uploadTrunkNumberTransferRingingAudio(file: File): Promise<ApiResponse<{ url: string; key: string; size: number }>> {
+  const fd = new FormData()
+  fd.append('file', file)
+  return post('/sip-center/trunk-numbers/transfer-ringing-audio', fd)
 }
 
 export async function deleteTrunkNumber(id: number): Promise<ApiResponse<{ id: number }>> {

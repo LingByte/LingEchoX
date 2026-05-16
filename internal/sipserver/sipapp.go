@@ -319,6 +319,50 @@ func Start(cfg Config) (*Embedded, error) {
 		}
 		return ""
 	})
+	// Per-DID welcome WAV URL resolver. Same lookup pattern as the
+	// VoiceDialog WS one above: inbound Call-ID → sip_calls.to_number
+	// → TrunkNumber.WelcomeAudioURL. Empty result lets AttachVoicePipeline
+	// fall back to scripts/welcome.wav.
+	conversation.SetWelcomeAudioResolver(func(callID string) string {
+		cid := strings.TrimSpace(callID)
+		if cid == "" || acdDB == nil {
+			return ""
+		}
+		callRow, err := persist.FindActiveSIPCallByCallID(context.Background(), acdDB, cid)
+		if err != nil {
+			return ""
+		}
+		called := strings.TrimSpace(callRow.ToNumber)
+		if called == "" {
+			return ""
+		}
+		if tn, ok := models.FindTrunkNumberByInboundDID(acdDB, called); ok {
+			return strings.TrimSpace(tn.WelcomeAudioURL)
+		}
+		return ""
+	})
+	// Per-DID transfer-ringback URL resolver. Identical lookup path
+	// (Call-ID → sip_calls.to_number → TrunkNumber) but reads the
+	// TransferRingingURL column instead. Used by both the SIP transfer
+	// ringback loop and the voicedialog transfer-loading loop.
+	conversation.SetTransferRingingResolver(func(callID string) string {
+		cid := strings.TrimSpace(callID)
+		if cid == "" || acdDB == nil {
+			return ""
+		}
+		callRow, err := persist.FindActiveSIPCallByCallID(context.Background(), acdDB, cid)
+		if err != nil {
+			return ""
+		}
+		called := strings.TrimSpace(callRow.ToNumber)
+		if called == "" {
+			return ""
+		}
+		if tn, ok := models.FindTrunkNumberByInboundDID(acdDB, called); ok {
+			return strings.TrimSpace(tn.TransferRingingURL)
+		}
+		return ""
+	})
 	conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
 		sipCallPersist.SaveConversationTurn(ctx, callID, turn)
 	})
