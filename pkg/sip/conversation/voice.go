@@ -456,6 +456,29 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	var welcomePlaying atomic.Bool
 	var welcomeCancelMu sync.Mutex
 	var welcomeCancel context.CancelFunc
+
+	// cancelWelcomeIfPlaying 同时取消正在播放的欢迎语并清掉播放状态，
+	// 无论 VAD barge-in 是否启用都能保证「welcome 永不与 TTS 同框」。
+	// 任何会让 AI 开口（ASR 触发 / 转接 / script TTS）的路径都应当先调它，
+	// 避免坐席 / 主叫听到 welcome 还没念完 TTS 已经压上去的"双语重叠"。
+	cancelWelcomeIfPlaying := func(reason string) {
+		if !welcomePlaying.Load() {
+			return
+		}
+		welcomeCancelMu.Lock()
+		cancel := welcomeCancel
+		welcomeCancel = nil
+		welcomeCancelMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		welcomePlaying.Store(false)
+		if lg != nil {
+			lg.Info("sip voice: welcome interrupted",
+				zap.String("call_id", cs.CallID),
+				zap.String("reason", reason))
+		}
+	}
 	var vadDet *sipvad.Detector
 	if config.GlobalConfig.SIP.SIPVADBargeIn {
 		vadDet = sipvad.NewDetector()
@@ -535,6 +558,13 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 					})
 				}
 			} else {
+				// Welcome and TTS must not speak together. Even on
+				// SIP_VAD_BARGE_IN=off paths (or before VAD has accumulated
+				// enough consecutive frames to fire), once ASR resolves to
+				// an LLM turn we are about to send synthesized PCM into the
+				// SAME output bus that's playing welcome.wav — cancel it
+				// here so the two audio streams never overlap on-wire.
+				cancelWelcomeIfPlaying("tts_start")
 				ttsPipe.Start(ms.GetContext())
 				defer func() {
 					ttsPlaying.Store(false)
@@ -715,16 +745,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			if welcomePlaying.Load() {
 				// Same RMS VAD path as TTS barge-in (requires SIP_VAD_BARGE_IN enabled).
 				if vadDet != nil && vadDet.CheckBargeIn(pcm16, true) {
-					welcomeCancelMu.Lock()
-					if welcomeCancel != nil {
-						welcomeCancel()
-					}
-					welcomeCancelMu.Unlock()
-					welcomePlaying.Store(false)
-					if lg != nil {
-						lg.Info("sip voice: welcome interrupted by user speech (VAD)",
-							zap.String("call_id", cs.CallID))
-					}
+					cancelWelcomeIfPlaying("vad_user_speech")
 				} else {
 					return nil
 				}
@@ -780,40 +801,97 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	}
 
 	if !scriptMode {
-		welcomePlaying.Store(true)
-		welcomeCtx, cancelWelcome := context.WithCancel(ms.GetContext())
-		welcomeCancelMu.Lock()
-		welcomeCancel = cancelWelcome
-		welcomeCancelMu.Unlock()
-		go func() {
-			defer welcomePlaying.Store(false)
-			defer func() {
-				welcomeCancelMu.Lock()
-				welcomeCancel = nil
-				welcomeCancelMu.Unlock()
+		// Resolve the welcome WAV path UP FRONT so a missing file
+		// (operator deliberately removed scripts/welcome.wav, or test
+		// environment without static assets) short-circuits cleanly
+		// without spawning a goroutine, flipping welcomePlaying, or
+		// emitting a Warn — "skip this phase" is normal, not an error.
+		welcomePath := resolveWelcomeWavPath()
+		if exists, _ := welcomeWavExists(welcomePath); !exists {
+			lg.Info("sip voice: welcome wav not found, skipping welcome phase",
+				zap.String("call_id", cs.CallID),
+				zap.String("path", welcomePath))
+		} else {
+			welcomePlaying.Store(true)
+			welcomeCtx, cancelWelcome := context.WithCancel(ms.GetContext())
+			welcomeCancelMu.Lock()
+			welcomeCancel = cancelWelcome
+			welcomeCancelMu.Unlock()
+			go func() {
+				defer welcomePlaying.Store(false)
+				defer func() {
+					welcomeCancelMu.Lock()
+					welcomeCancel = nil
+					welcomeCancelMu.Unlock()
+				}()
+				if err := playResolvedWelcomeWav(welcomeCtx, welcomePath, ms, lg, pcmBridgeSR, cs.WriteAIPCM); err != nil {
+					// Context cancellation = legitimate barge-in / TTS-start
+					// pre-emption (cancelWelcomeIfPlaying), not an error.
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					lg.Warn("sip voice welcome playback failed", zap.String("call_id", cs.CallID), zap.Error(err))
+					return
+				}
+				lg.Info("sip voice welcome playback finished", zap.String("call_id", cs.CallID))
 			}()
-			if err := playWelcomeWav(welcomeCtx, ms, lg, pcmBridgeSR, cs.WriteAIPCM); err != nil {
-				lg.Warn("sip voice welcome playback failed", zap.String("call_id", cs.CallID), zap.Error(err))
-				return
-			}
-			lg.Info("sip voice welcome playback finished", zap.String("call_id", cs.CallID))
-		}()
+		}
 	}
 
 	lg.Info("sip voice pipeline attached", zap.String("call_id", cs.CallID))
 	return nil
 }
 
-func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger, sampleRate int, recordTap func(pcm []byte)) error {
-	if ms == nil {
-		return fmt.Errorf("media session is nil")
-	}
+// resolveWelcomeWavPath returns the cleaned filesystem path that the
+// welcome WAV would be loaded from. Resolution order:
+//
+//  1. SIP_WELCOME_WAV_PATH env (highest, ops override).
+//  2. scripts/welcome.wav (project default).
+//
+// Relative paths are cleaned but NOT made absolute — `LoadWAVAsPCM16Mono`
+// honours the process working directory the same way.
+func resolveWelcomeWavPath() string {
 	path := utils.GetEnv("SIP_WELCOME_WAV_PATH")
 	if path == "" {
 		path = "scripts/welcome.wav"
 	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Clean(path)
+	}
+	return path
+}
+
+// welcomeWavExists reports whether the welcome WAV exists at path AND is
+// a regular file (not a directory). Errors other than IsNotExist surface
+// to the caller so the operator can see permission / I-O issues; for
+// "skip this phase" semantics callers should treat (false, _) the same.
+func welcomeWavExists(path string) (bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return false, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !info.IsDir(), nil
+}
+
+// playWelcomeWav resolves the welcome WAV path itself and plays it.
+// Retained as a thin shim so any external callers (cmd/sip standalone
+// binaries, tests) keep working.
+func playWelcomeWav(ctx context.Context, ms *media.MediaSession, lg *zap.Logger, sampleRate int, recordTap func(pcm []byte)) error {
+	return playResolvedWelcomeWav(ctx, resolveWelcomeWavPath(), ms, lg, sampleRate, recordTap)
+}
+
+// playResolvedWelcomeWav is the actual playback loop. Caller supplies a
+// pre-resolved path so the "skip when missing" decision can short-circuit
+// before any goroutine is spawned (see AttachVoicePipeline above).
+func playResolvedWelcomeWav(ctx context.Context, path string, ms *media.MediaSession, lg *zap.Logger, sampleRate int, recordTap func(pcm []byte)) error {
+	if ms == nil {
+		return fmt.Errorf("media session is nil")
 	}
 	pcm, err := LoadWAVAsPCM16Mono(path, sampleRate)
 	if err != nil {
