@@ -51,8 +51,10 @@ func (s *SIPServer) handleReInvite(msg *stack.Message, addr *net.UDPAddr, cs *si
 		return s.makeResponse(msg, 488, "Not Acceptable Here", "", toWithTag)
 	}
 
-	if strings.Contains(strings.ToUpper(offer.Proto), "SAVP") {
-		if _, ok := sdp.PickAESCM128Offer(offer.CryptoOffers); !ok {
+	if strings.Contains(strings.ToUpper(offer.Proto), "SAVP") && !sdp.IsDTLSTransport(offer.Proto) {
+		// re-INVITE keeps the dialog's SDES path (DTLS-SRTP rekey on
+		// re-INVITE is unimplemented — peers that need it will 488).
+		if _, ok := sdp.PickSupportedSDESOffer(offer.CryptoOffers); !ok {
 			return s.makeResponse(msg, 488, "Not Acceptable Here", "", toWithTag)
 		}
 	}
@@ -83,7 +85,11 @@ func (s *SIPServer) handleReInvite(msg *stack.Message, addr *net.UDPAddr, cs *si
 	rtpSess.SetRemoteAddr(remoteAddr)
 
 	var sdpExtras []string
-	if co, ok := sdp.PickAESCM128Offer(offer.CryptoOffers); ok && strings.Contains(strings.ToUpper(offer.Proto), "SAVP") {
+	if co, ok := sdp.PickSupportedSDESOffer(offer.CryptoOffers); ok && strings.Contains(strings.ToUpper(offer.Proto), "SAVP") && !sdp.IsDTLSTransport(offer.Proto) {
+		prof, profOK := sdp.PionProfileForSuite(co.Suite)
+		if !profOK {
+			return s.makeResponse(msg, 488, "Not Acceptable Here", "", toWithTag)
+		}
 		rk, rsalt, err := sdp.DecodeSDESInline(co.KeyParams)
 		if err != nil {
 			return s.makeResponse(msg, 488, "Not Acceptable Here", "", toWithTag)
@@ -96,12 +102,12 @@ func (s *SIPServer) handleReInvite(msg *stack.Message, addr *net.UDPAddr, cs *si
 		if _, err := rand.Read(lsalt); err != nil {
 			return s.makeResponse(msg, 500, "Internal Server Error", "", toWithTag)
 		}
-		cryptoLine, err := sdp.FormatCryptoLine(co.Tag, sdp.SuiteAESCM128HMACSHA180, lk, lsalt)
+		cryptoLine, err := sdp.FormatCryptoLine(co.Tag, co.Suite, lk, lsalt)
 		if err != nil {
 			return s.makeResponse(msg, 488, "Not Acceptable Here", "", toWithTag)
 		}
 		sdpExtras = append(sdpExtras, cryptoLine)
-		if err := rtpSess.EnableSDESSRTP(rk, rsalt, lk, lsalt); err != nil {
+		if err := rtpSess.EnableSDESSRTPWithProfile(prof, rk, rsalt, lk, lsalt); err != nil {
 			return s.makeResponse(msg, 500, "Internal Server Error", "", toWithTag)
 		}
 	}

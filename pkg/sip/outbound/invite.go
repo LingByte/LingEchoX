@@ -63,6 +63,19 @@ type inviteParams struct {
 	// emit BOTH headers on transfer scenarios; downstream picks whichever
 	// it understands. Empty chain → header omitted.
 	Diversion []historyinfo.Diversion
+
+	// ViaTransport drives the Via header's transport token (RFC 3261
+	// §7.1: "SIP/2.0/UDP|TCP|TLS"). Empty / TransportUnset falls back
+	// to UDP for backward compatibility with the original UDP-only
+	// outbound path. Set in Manager.Dial via ResolveTransport(target).
+	ViaTransport Transport
+
+	// IdentityHeader is the **already-rendered** RFC 8224 Identity
+	// header value (everything after "Identity: "). Empty → header
+	// omitted. Populated in Manager.Dial when ManagerConfig.STIRSigner
+	// is set; the actual signing happens upstream of buildINVITE to
+	// keep this builder side-effect free.
+	IdentityHeader string
 }
 
 // sipFormatDisplayName renders a SIP From display-name in a wire format
@@ -160,9 +173,22 @@ func sanitizeSIPUser(user string) string {
 	return s
 }
 
+// formatVia renders a Via header line using the supplied transport.
+// Empty / unset transport degrades to UDP (the original outbound
+// behaviour) so this helper is safe to call from every existing
+// build* function without behavioural changes when ViaTransport is
+// not yet populated.
+func formatVia(transport Transport, host string, port int, branch string) string {
+	tok := transport.ViaToken()
+	if !transport.IsValid() {
+		tok = TransportUDP.ViaToken()
+	}
+	return fmt.Sprintf("%s %s:%d;branch=z9hG4bK%s;rport",
+		tok, nonEmpty(host, "127.0.0.1"), nonZero(port, 6050), branch)
+}
+
 func buildINVITE(p inviteParams) *stack.Message {
-	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
-		nonEmpty(p.SIPHost, "127.0.0.1"), nonZero(p.SIPPort, 6050), p.Branch)
+	via := formatVia(p.ViaTransport, p.SIPHost, p.SIPPort, p.Branch)
 
 	from := formatOutboundFromHeader(p.FromDisplayName, p.FromUser, p.SIPHost, p.SIPPort, p.FromTag)
 	to := formatToHeader(p.RequestURI)
@@ -212,17 +238,25 @@ func buildINVITE(p inviteParams) *stack.Message {
 	if d := historyinfo.FormatDiversionChain(p.Diversion); d != "" {
 		msg.SetHeader("Diversion", d)
 	}
+	// RFC 8224 Identity (SHAKEN). The header value is rendered upstream
+	// by ManagerConfig.STIRSigner; empty means "don't sign this leg"
+	// (signer absent or signing failed soft-fail; see outbound/stir.go).
+	if id := strings.TrimSpace(p.IdentityHeader); id != "" {
+		msg.SetHeader("Identity", id)
+	}
 	msg.SetHeader("User-Agent", "SoulNexus-SIP/1.0")
 	msg.SetHeader("Content-Type", "application/sdp")
 	msg.SetHeader("Allow", "INVITE, ACK, BYE, CANCEL, OPTIONS, UPDATE")
-	// RFC 4028 — advertise our willingness to participate in
-	// session timers. We deliberately do NOT propose a Session-Expires
-	// here: until we implement UAC-initiated refresh (in-dialog re-
-	// INVITE / UPDATE machinery), letting the peer set the timer means
-	// the peer is the refresher (RFC 4028 §7.1 default) and we just
-	// have to answer their refreshes — which our UAS path already does
-	// via handleReInvite + handleUpdate. See docs/sip_gap_analysis.md
-	// §1C for follow-up scope on UAC-side refresh sending.
+	// RFC 4028 — advertise capability for session timers (Supported:
+	// timer). We still don't *propose* Session-Expires in this INVITE
+	// because UAC-side refreshing is opt-in based on peer policy:
+	//   - If peer responds with `Session-Expires: <N>;refresher=uac`,
+	//     manager.handleResponse arms `outRefresher` (see refresher.go)
+	//     which sends UPDATE refreshes at N/2.
+	//   - If peer responds with `refresher=uas` (or no Session-Expires),
+	//     peer owns refresh and we stay passive.
+	// Note: inbound mid-dialog refreshes from peer are NOT yet honored
+	// (outbound connPeer drops mid-dialog requests — see peer.go:223).
 	msg.SetHeader("Supported", "timer, 100rel, replaces")
 	msg.SetHeader("Content-Length", strconv.Itoa(stack.BodyBytesLen(p.SDPBody)))
 	return msg

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -16,7 +17,7 @@ import (
 func (h *Handlers) registerTenantOrgRoutes(g *gin.RouterGroup) {
 	org := g.Group("tenant-org")
 	read := org.Group("")
-	read.Use(middleware.RequireTenantPermissionAll("api.tenant_org.read"))
+	read.Use(middleware.RequireTenantPermissionAll(constants.PermAPITenantOrgRead))
 	{
 		read.GET("/permissions", h.listOrgPermissions)
 		read.GET("/groups", h.listOrgGroups)
@@ -24,7 +25,7 @@ func (h *Handlers) registerTenantOrgRoutes(g *gin.RouterGroup) {
 		read.GET("/roles/:id", h.getOrgRole)
 	}
 	write := org.Group("")
-	write.Use(middleware.RequireTenantPermissionAll("api.tenant_org.write"))
+	write.Use(middleware.RequireTenantPermissionAll(constants.PermAPITenantOrgWrite))
 	{
 		write.POST("/groups", h.createOrgGroup)
 		write.PUT("/groups/:id", h.updateOrgGroup)

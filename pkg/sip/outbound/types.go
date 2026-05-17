@@ -36,6 +36,17 @@ type DialTarget struct {
 
 	// ACDPoolTargetID is set when the target comes from acd_pool_targets (transfer routing); used for retries / bookkeeping.
 	ACDPoolTargetID uint `json:"-"`
+
+	// Transport is the trunk-configured signaling transport for this
+	// target (UDP / TCP / TLS). Empty (TransportUnset) means "use
+	// default precedence": Request-URI's ;transport= wins, else this
+	// field, else TransportUDP. See ResolveTransport.
+	//
+	// Wire-up status (2026-05-17): the routing layer can populate
+	// this; outbound dialing logic (manager.go) currently still
+	// hardcodes UDP. Slice 2 of batch 2A-out will switch the
+	// connection layer over.
+	Transport Transport
 }
 
 // DialRequest is one outbound attempt.
@@ -84,6 +95,21 @@ type DialRequest struct {
 	HistoryInfo []historyinfo.Entry
 	// Diversion (RFC 5806) — see inviteParams.Diversion.
 	Diversion []historyinfo.Diversion
+
+	// OfferDTLSSRTP enables outbound DTLS-SRTP (RFC 5763 + RFC 5764)
+	// instead of SDES. When true:
+	//
+	//   * INVITE body uses `m=audio … UDP/TLS/RTP/SAVP`
+	//   * `a=fingerprint:sha-256 …` + `a=setup:actpass` extras
+	//   * post-2xx the manager runs the DTLS handshake on the RTP
+	//     socket and derives SRTP keys (RFC 5764 §4.2)
+	//
+	// Cannot be combined with MediaProfileTransferBridge (whose
+	// downstream peers reject SAVP+ entirely). Carrier trunks
+	// typically reject this with 488; flip it on only for WebRTC
+	// gateway or known DTLS-capable endpoints. Default false keeps
+	// the existing SDES offer path intact.
+	OfferDTLSSRTP bool
 }
 
 // MediaProfile selects post-connect behavior on the established CallSession.

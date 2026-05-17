@@ -73,6 +73,26 @@ type Session struct {
 	// SRTP SDES (RFC 3711 + RFC 4568): optional; when set, ReceiveRTP decrypts and SendRTP encrypts.
 	srtpDecrypt *srtp.Context
 	srtpEncrypt *srtp.Context
+
+	// dtlsRoute is the active DTLS demux route on this socket.
+	// Non-nil only during DTLS handshake (single-socket multiplex
+	// per RFC 5764 §5.1). ReceiveRTP routes packets with first byte
+	// 20-63 here when set; bytes 128-191 take the existing RTP path.
+	// See dtls_session.go for the full lifecycle.
+	dtlsMu    sync.Mutex
+	dtlsRoute *dtlsConn
+
+	// RFC 3550 RTCP companion socket on RTP port + 1. nil when bind
+	// failed (best-effort) or before startRTCP / after stopRTCP.
+	// rtcpConn / rtcpStopCh are guarded by rtcpMu to keep the close
+	// path race-free vs. the read/send goroutines.
+	rtcpMu            sync.Mutex
+	rtcpConn          *net.UDPConn
+	rtcpStopCh        chan struct{}
+	rtcpTxWarnOnce    sync.Once
+	rtcpLastSentRTPTS uint32 // atomic: last RTP timestamp we transmitted (for SR.RTPTime)
+	rxStats           rtcpReceiverStats
+	txEcho            rtcpSenderEcho
 }
 
 type mirrorRemote struct {
@@ -124,7 +144,7 @@ func NewSession(localPort int) (*Session, error) {
 		ssrc = 0xBADC0FFE
 	}
 
-	return &Session{
+	s := &Session{
 		LocalAddr:     conn.LocalAddr().(*net.UDPAddr),
 		Conn:          conn,
 		SSRC:          ssrc,
@@ -132,7 +152,12 @@ func NewSession(localPort int) (*Session, error) {
 		Timestamp:     ts,
 		firstPacketCh: make(chan struct{}),
 		statsStopCh:   make(chan struct{}),
-	}, nil
+	}
+	// RFC 3550 §6: best-effort RTCP companion socket on RTP-port + 1.
+	// Failure is logged but never fatal — the call still works,
+	// peers just won't get our SR/RR.
+	s.startRTCP(s.LocalAddr.Port)
+	return s, nil
 }
 
 // FirstPacket returns a channel that is closed once the first RTP packet is received.
@@ -261,6 +286,8 @@ func (s *Session) SendRTP(payload []byte, payloadType uint8, samples uint32) err
 	s.sendMirrorRTP(out, s.RemoteAddr)
 	atomic.AddUint64(&s.txPackets, 1)
 	atomic.AddUint64(&s.txBytes, uint64(len(payload)))
+	// Latch the RTP timestamp we just sent for the next SR.RTPTime.
+	atomic.StoreUint32(&s.rtcpLastSentRTPTS, s.Timestamp)
 	nowUnix := time.Now().UnixNano()
 	_ = atomic.CompareAndSwapInt64(&s.firstTxUnixNano, 0, nowUnix)
 	s.startStatsLoop()
@@ -335,6 +362,18 @@ func (s *Session) ReceiveRTP(buffer []byte) (n int, from *net.UDPAddr, packet *R
 		}
 	}
 
+	// RFC 5764 §5.1.2 demux: if there's an active DTLS handshake on
+	// this socket, route packets typed as DTLS (first byte 20-63) to
+	// it. RTP packets (128-191) continue down the existing path.
+	if n >= 1 && IsDTLSPacket(buffer[0]) {
+		if s.routeDTLSPacket(buffer[:n]) {
+			return n, addr, nil, ErrRTPDiscard
+		}
+		// Stray DTLS packet (handshake already finished or never
+		// started) — drop quietly.
+		return n, addr, nil, ErrRTPDiscard
+	}
+
 	work := buffer[:n]
 	if s.srtpDecrypt != nil {
 		s.srtpMu.Lock()
@@ -370,6 +409,11 @@ func (s *Session) ReceiveRTP(buffer []byte) (n int, from *net.UDPAddr, packet *R
 		break
 	}
 
+	// Feed the RTCP receiver-stats machine. RFC 3550 §A.1 + §A.8
+	// require running this on every accepted RTP packet so the
+	// jitter EWMA and seq-cycle tracking stay current.
+	s.recordIncomingRTPForRTCP(pkt.Header.SequenceNumber, pkt.Header.Timestamp, ssrc)
+
 	return n, addr, pkt, nil
 }
 
@@ -383,6 +427,9 @@ func (s *Session) Close() error {
 		if s.statsStopCh != nil {
 			close(s.statsStopCh)
 		}
+		// Stop RTCP BEFORE closing the RTP socket so the RTCP loop
+		// doesn't try to read from a freed FD.
+		s.stopRTCP()
 		if s.Conn != nil {
 			err = s.Conn.Close()
 		}

@@ -91,12 +91,35 @@ func AbortWithStatusJSON(c *gin.Context, httpStatus int, err error) {
 		}
 	}
 
-	// Server errors: log details internally, return generic message to client.
+	// Unmatched error path. We split by status class:
+	//
+	//  - 5xx → "unknown server error" path: the original message is
+	//    surfaced to the client (verbatim) tagged UNKNOWN_ERROR. This
+	//    is intentional: a 5xx that didn't match a known-error
+	//    pattern indicates a programmer/runtime issue, and hiding
+	//    the cause behind a generic string forces ops to grep
+	//    server logs for every report. The downside is leaking
+	//    internal phrases — keep this in mind when writing error
+	//    messages on the server side.
+	//
+	//  - Anything else (4xx) → "internal" sanitised path: callers
+	//    that pass an unmapped error with a 4xx status are presumed
+	//    misusing the helper; we hide the message and stamp
+	//    INTERNAL_ERROR so the client gets a stable signal.
 	logger.Error("internal server error",
 		zap.String("path", c.Request.URL.Path),
 		zap.String("method", c.Request.Method),
 		zap.Error(err),
 	)
+	if httpStatus >= 500 {
+		c.AbortWithStatusJSON(httpStatus, gin.H{
+			"code":  httpStatus,
+			"msg":   errorMsg,
+			"error": "UNKNOWN_ERROR",
+			"data":  nil,
+		})
+		return
+	}
 	c.AbortWithStatusJSON(httpStatus, gin.H{
 		"code":  httpStatus,
 		"msg":   "internal error",

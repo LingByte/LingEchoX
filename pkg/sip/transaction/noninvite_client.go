@@ -183,6 +183,11 @@ func (m *Manager) RunNonInviteClient(ctx context.Context, req *stack.Message, re
 	go tx.retransmitLoop()
 	select {
 	case <-ctx.Done():
+		// Timer F (non-INVITE timeout, RFC 3261 §17.1.2.2). Only
+		// deadline expiry counts; caller cancellation is normal.
+		if ctx.Err() == context.DeadlineExceeded {
+			onTransactionTimeout(strings.ToUpper(req.Method))
+		}
 		return nil, ctx.Err()
 	case r := <-tx.finalCh:
 		tx.respSrcMu.Lock()

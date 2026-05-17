@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 )
 
@@ -19,9 +20,7 @@ func buildBYE(inv inviteParams, toHeader200, requestURI string, cseq int, branch
 		RequestURI: reqURI,
 		Version:    "SIP/2.0",
 	}
-	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
-		nonEmpty(inv.SIPHost, "127.0.0.1"), nonZero(inv.SIPPort, 6050), branch)
-	msg.SetHeader("Via", via)
+	msg.SetHeader("Via", formatVia(inv.ViaTransport, inv.SIPHost, inv.SIPPort, branch))
 	msg.SetHeader("Max-Forwards", "70")
 	msg.SetHeader("From", formatOutboundFromHeader(inv.FromDisplayName, inv.FromUser, inv.SIPHost, inv.SIPPort, inv.FromTag))
 	if strings.TrimSpace(toHeader200) != "" {
@@ -67,7 +66,11 @@ func (m *Manager) SendBYE(callID string) error {
 	leg.byeCSeqNext = cseq + 1
 	branch := randomHex(10)
 	msg := buildBYE(leg.params, leg.byeToHeader, leg.byeRequestURI, cseq, branch)
-	return m.send(msg, dst)
+	// Reuse the same signaling peer as the INVITE so TCP/TLS in-
+	// dialog requests stay on the same connection per RFC 5923. Fall
+	// back to UDP via the shared sender when no peer is bound (e.g.
+	// the leg was constructed by older code that didn't set one).
+	return leg.sendOnPeer(msg, dst)
 }
 
 // InboundCallIDForEstablishedTransferBridge returns the DialRequest.CorrelationID (inbound PSTN Call-ID)
@@ -97,8 +100,12 @@ func (m *Manager) InboundCallIDForEstablishedTransferBridge(outboundCallID strin
 	return in, true
 }
 
-// CleanupLegIfPresent removes outbound leg state (RTP + maps) when no longer needed, e.g. after remote BYE.
-func (m *Manager) CleanupLegIfPresent(callID string) {
+// CleanupLegIfPresent removes outbound leg state (RTP + maps) when
+// no longer needed, e.g. after remote BYE. reasonClass is the
+// bounded enum extracted from the peer's RFC 3326 Reason header
+// (empty string → default "normal"). Both the BYE counter and the
+// CDR hangup_reason inherit this value.
+func (m *Manager) CleanupLegIfPresent(callID, reasonClass string) {
 	if m == nil {
 		return
 	}
@@ -110,6 +117,14 @@ func (m *Manager) CleanupLegIfPresent(callID string) {
 	if leg == nil {
 		return
 	}
+	if reasonClass == "" {
+		reasonClass = sipMetrics.ByeReasonNormal
+	}
+	// Remote-initiated BYE. Tag the metric with the parsed reason
+	// class so dashboards can split normal hang-ups from carrier
+	// errors or session-timer expiry.
+	sipMetrics.Bye(sipMetrics.ByeByRemote, reasonClass)
+	leg.cdrSetHangup("remote", reasonClass)
 	leg.cleanupLeg()
 }
 

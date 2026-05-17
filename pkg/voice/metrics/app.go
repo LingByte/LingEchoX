@@ -31,13 +31,41 @@ const (
 	MetricDialogReconnectTotal = "voiceserver_dialog_reconnect_total"
 )
 
+// init declares the cardinality whitelist for all app-level metrics
+// defined in this file. Adding a new label key requires updating
+// this list — that's the whole point of the soft defense.
+func init() {
+	RegisterLabels(MetricActiveCalls, "transport")
+	RegisterLabels(MetricCallsTotal, "transport", "status")
+	RegisterLabels(MetricASRErrors, "transport")
+	RegisterLabels(MetricTTSErrors, "transport")
+	RegisterLabels(MetricBargeInTotal, "transport")
+	RegisterLabels(MetricDialogReconnectTotal, "transport", "outcome")
+	// Self-observability counters intentionally include "metric"
+	// (the offending or stalled metric's name) as a label.
+	RegisterLabels(MetricUnknownLabelTotal, "metric", "key")
+	RegisterLabels(MetricObserveDroppedTotal, "metric")
+}
+
+// labelTransport returns the pre-allocated map for a single
+// "transport" label. Hot-path safe (no allocation on known values).
+func labelTransport(transport string) map[string]string {
+	switch transport {
+	case "sip":
+		return LabelsTransportSIP
+	case "webrtc":
+		return LabelsTransportWebRTC
+	}
+	return map[string]string{"transport": transport}
+}
+
 // CallStarted increments the active-calls gauge and the calls_total
 // counter for the given transport. Call at the moment the session
 // becomes "live" (ASR/TTS wired + dialog plane connected).
 func CallStarted(transport string) {
 	Default.AddGauge(MetricActiveCalls,
 		"currently-active calls broken down by transport",
-		map[string]string{"transport": transport}, 1)
+		labelTransport(transport), 1)
 }
 
 // CallEnded mirrors CallStarted. status is a short classification like
@@ -46,10 +74,10 @@ func CallStarted(transport string) {
 func CallEnded(transport, status string) {
 	Default.AddGauge(MetricActiveCalls,
 		"currently-active calls broken down by transport",
-		map[string]string{"transport": transport}, -1)
+		labelTransport(transport), -1)
 	Default.IncCounter(MetricCallsTotal,
 		"total calls handled since process start, by transport + end status",
-		map[string]string{"transport": transport, "status": status})
+		LabelsCall(transport, status))
 }
 
 // ASRError bumps the ASR error counter. Called from the recognizer
@@ -57,7 +85,7 @@ func CallEnded(transport, status string) {
 func ASRError(transport string) {
 	Default.IncCounter(MetricASRErrors,
 		"total recognizer errors since process start, by transport",
-		map[string]string{"transport": transport})
+		labelTransport(transport))
 }
 
 // TTSError bumps the TTS error counter. Called when Speak returns an
@@ -65,7 +93,7 @@ func ASRError(transport string) {
 func TTSError(transport string) {
 	Default.IncCounter(MetricTTSErrors,
 		"total synthesis errors since process start, by transport",
-		map[string]string{"transport": transport})
+		labelTransport(transport))
 }
 
 // BargeIn counts how often the VAD interrupted the AI's TTS because
@@ -74,7 +102,7 @@ func TTSError(transport string) {
 func BargeIn(transport string) {
 	Default.IncCounter(MetricBargeInTotal,
 		"total barge-in (user interrupted AI) events",
-		map[string]string{"transport": transport})
+		labelTransport(transport))
 }
 
 // DialogReconnect counts reconnect attempts to the dialog plane
@@ -83,7 +111,7 @@ func BargeIn(transport string) {
 func DialogReconnect(transport, outcome string) {
 	Default.IncCounter(MetricDialogReconnectTotal,
 		"dialog-plane WebSocket reconnect attempts, by outcome",
-		map[string]string{"transport": transport, "outcome": outcome})
+		LabelsDialogOutcome(transport, outcome))
 }
 
 // ObserveE2EFirstByte records the user-perceived latency from ASR

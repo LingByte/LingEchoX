@@ -90,7 +90,24 @@ func (r *Registry) IncCounter(name, help string, labels map[string]string) {
 // AddCounter adds `n` to the counter. n must be >= 0 (Prometheus
 // counters are monotonic); negative values are silently ignored so a
 // buggy call site doesn't corrupt the series.
+//
+// Labels are filtered through the cardinality whitelist registered
+// via RegisterLabels (see labels.go). Unknown keys are dropped and
+// reported via metrics_unknown_label_total.
 func (r *Registry) AddCounter(name, help string, labels map[string]string, n uint64) {
+	if n == 0 {
+		return
+	}
+	r.addCounterRaw(name, help, filterLabels(name, labels), n)
+}
+
+// addCounterRaw is the unfiltered path used by:
+//   - the public AddCounter (after filtering)
+//   - reportUnknownLabel (to avoid infinite recursion when the
+//     self-observability counter itself isn't whitelisted)
+//
+// External callers must not use this directly.
+func (r *Registry) addCounterRaw(name, help string, labels map[string]string, n uint64) {
 	if n == 0 {
 		return
 	}
@@ -111,13 +128,15 @@ func (r *Registry) AddCounter(name, help string, labels map[string]string, n uin
 // ----- GAUGES ----------------------------------------------------------
 
 // SetGauge stores a value for a gauge.
+// Labels run through the cardinality whitelist (see labels.go).
 func (r *Registry) SetGauge(name, help string, labels map[string]string, v float64) {
-	r.getOrCreateGauge(name, help).store(labels, v)
+	r.getOrCreateGauge(name, help).store(filterLabels(name, labels), v)
 }
 
 // AddGauge increments (v > 0) / decrements (v < 0) a gauge atomically.
+// Labels run through the cardinality whitelist (see labels.go).
 func (r *Registry) AddGauge(name, help string, labels map[string]string, v float64) {
-	r.getOrCreateGauge(name, help).add(labels, v)
+	r.getOrCreateGauge(name, help).add(filterLabels(name, labels), v)
 }
 
 func (r *Registry) getOrCreateGauge(name, help string) *gauge {

@@ -196,3 +196,29 @@ func TestBuildINVITE_HistoryInfoOmittedWhenEmpty(t *testing.T) {
 		t.Errorf("Diversion should be absent when chain empty; got %q", d)
 	}
 }
+
+// TestBuildINVITE_ViaTransport verifies the Via header transport
+// token follows inviteParams.ViaTransport: UDP default for backward
+// compat, TCP/TLS when explicitly set. This is what RFC 3261 §17.1.1.3
+// pins responses to the right transaction layer.
+func TestBuildINVITE_ViaTransport(t *testing.T) {
+	base := inviteParams{
+		LocalIP: "127.0.0.1", SIPHost: "127.0.0.1", SIPPort: 6050,
+		RequestURI: "sip:bob@example.com", CallID: "c@h", FromTag: "t",
+		Branch: "br", CSeq: 1, FromUser: "alice",
+	}
+	cases := map[Transport]string{
+		TransportUnset: "SIP/2.0/UDP", // backward compat default
+		TransportUDP:   "SIP/2.0/UDP",
+		TransportTCP:   "SIP/2.0/TCP",
+		TransportTLS:   "SIP/2.0/TLS",
+	}
+	for tr, wantToken := range cases {
+		p := base
+		p.ViaTransport = tr
+		via := buildINVITE(p).GetHeader("Via")
+		if !strings.HasPrefix(via, wantToken+" ") {
+			t.Errorf("ViaTransport=%q: Via=%q, want prefix %q", tr, via, wantToken)
+		}
+	}
+}

@@ -63,6 +63,41 @@ func TestApplyOutboundAnswerSRTP_negotiatesWithAnswerCrypto(t *testing.T) {
 	}
 }
 
+// TestApplyOutboundAnswerSRTP_acceptsSHA32Downgrade is the
+// regression test for AES_CM_128_HMAC_SHA1_32 interop (Cisco /
+// Avaya): we offer SHA1_80, peer downgrades to SHA1_32 in the
+// answer, and we MUST install SRTP with the _32 profile rather
+// than reject the call.
+func TestApplyOutboundAnswerSRTP_acceptsSHA32Downgrade(t *testing.T) {
+	sess, err := rtp.NewSession(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	offerK := bytesRepeat(16, 0x11)
+	offerS := bytesRepeat(14, 0x22)
+	answerK := bytesRepeat(16, 0x33)
+	answerS := bytesRepeat(14, 0x44)
+
+	// Peer answers with SHA1_32 (NOT what we offered).
+	line, err := sdp.FormatCryptoLine(1, sdp.SuiteAESCM128HMACSHA132, answerK, answerS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := strings.Index(line, "inline:")
+	kp := strings.TrimSpace(line[idx:])
+	ans := &sdp.Info{
+		Proto: "RTP/SAVPF",
+		CryptoOffers: []sdp.CryptoOffer{
+			{Tag: 1, Suite: sdp.SuiteAESCM128HMACSHA132, KeyParams: kp},
+		},
+	}
+	if err := applyOutboundAnswerSRTP(sess, offerK, offerS, ans); err != nil {
+		t.Fatalf("expected SHA1_32 downgrade to be accepted, got: %v", err)
+	}
+}
+
 func TestApplyOutboundAnswerSRTP_missingCryptoErrors(t *testing.T) {
 	sess, err := rtp.NewSession(0)
 	if err != nil {

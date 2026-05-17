@@ -15,6 +15,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
@@ -68,8 +69,12 @@ type SIPServer struct {
 	voiceWSLookupMu sync.RWMutex
 	voiceWSLookup   func(callID string) string
 
-	// Optional: outbound.Manager — drop UAC leg after BYE is fully handled (transfer bridge / generic).
-	outboundBYELegCleanup func(callID string)
+	// Optional: outbound.Manager — drop UAC leg after BYE is fully
+	// handled (transfer bridge / generic). The reasonClass argument
+	// is the bounded enum from classifyBYEReason() so outbound can
+	// stamp the CDR / metrics without re-parsing. Empty string means
+	// "use default" (normal).
+	outboundBYELegCleanup func(callID, reasonClass string)
 	// Optional: map established transfer_bridge outbound Call-ID → inbound PSTN Call-ID (DialRequest.CorrelationID).
 	transferBridgeInboundFromOutbound func(outboundCallID string) (inboundCallID string, ok bool)
 
@@ -116,6 +121,36 @@ type SIPServer struct {
 
 	terminateMu    sync.Mutex
 	terminateHooks map[string]func(reason string)
+
+	// stir holds the inbound RFC 8224 Identity verification policy.
+	// nil = STIR disabled (default). See server/stir.go for the
+	// hook + soft/hard rejection knobs.
+	stir *STIRConfig
+
+	// dtlsAcceptInbound, when true, accepts DTLS-SRTP offers
+	// (UDP/TLS/RTP/SAVP[F] + a=fingerprint + a=setup). Default off
+	// because most carriers still use SDES — flip to on when
+	// peering with WebRTC gateways. See dtls.go for the full
+	// handshake lifecycle.
+	dtlsAcceptInbound atomic.Bool
+
+	// pendingDTLSMu / pendingDTLS hold per-call state populated by
+	// handleInvite (cert, key, peer fingerprints, role) and consumed
+	// by handleAck — the handshake itself runs on a goroutine off
+	// the SIP signaling path so a 30-byte ClientHello can't stall
+	// other dialogs.
+	pendingDTLSMu sync.Mutex
+	pendingDTLS   map[string]*dtlsPendingState
+}
+
+// SetSTIRConfig installs the inbound STIR/SHAKEN verification
+// policy. Call before Start; concurrent modification after Start is
+// safe but the new policy applies only to subsequent INVITEs.
+func (s *SIPServer) SetSTIRConfig(cfg *STIRConfig) {
+	if s == nil {
+		return
+	}
+	s.stir = cfg
 }
 
 var (
@@ -212,8 +247,12 @@ type Config struct {
 	// Typically set to outbound.Manager.HandleSIPResponse.
 	OnSIPResponse func(resp *stack.Message, addr *net.UDPAddr)
 
-	// OutboundBYELegCleanup drops outbound.Manager leg state for this Call-ID after BYE handling. Optional.
-	OutboundBYELegCleanup func(callID string)
+	// OutboundBYELegCleanup drops outbound.Manager leg state for
+	// this Call-ID after BYE handling. The second argument is the
+	// RFC 3326 reasonClass enum extracted from the BYE request
+	// (sipMetrics.ByeReason*); empty string means caller didn't
+	// know and the implementor should default to "normal". Optional.
+	OutboundBYELegCleanup func(callID, reasonClass string)
 	// TransferBridgeInboundFromOutbound maps established transfer_bridge outbound Call-ID to inbound PSTN Call-ID. Optional.
 	TransferBridgeInboundFromOutbound func(outboundCallID string) (inboundCallID string, ok bool)
 }
@@ -301,9 +340,38 @@ func New(cfg Config) *SIPServer {
 		},
 	}
 	s.ep = stack.NewEndpoint(epCfg)
-	s.ep.RegisterHandler(stack.MethodInvite, s.handleInvite)
+	// Inbound counters wrap the real handlers so every response
+	// flows through one observation point regardless of how many
+	// early-return paths the handler has. Nil response = absorbed
+	// retransmit or stateful 100 — we don't count those because
+	// the underlying transaction already counted the first response.
+	s.ep.RegisterHandler(stack.MethodInvite, func(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
+		resp := s.handleInvite(msg, addr)
+		if resp != nil && resp.StatusCode > 0 {
+			sipMetrics.InviteResult(sipMetrics.DirectionInbound, resp.StatusCode)
+		}
+		return resp
+	})
 	s.ep.RegisterHandler(stack.MethodAck, s.handleAck)
-	s.ep.RegisterHandler(stack.MethodBye, s.handleBye)
+	s.ep.RegisterHandler(stack.MethodBye, func(msg *stack.Message, addr *net.UDPAddr) *stack.Message {
+		resp := s.handleBye(msg, addr)
+		// An inbound BYE arriving here means the REMOTE side
+		// initiated the hangup. Classify by RFC 3326 Reason header
+		// when present so dashboards split "normal hangup" from
+		// "session timer expired" / "carrier rejected" cleanly.
+		if resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			reasonClass, _ := classifyBYEReason(msg)
+			sipMetrics.BYE(sipMetrics.DirectionInbound,
+				sipMetrics.ByeByRemote, reasonClass)
+			// Active-calls gauge / calls_total counter: pair the +1
+			// from markInboundCallStarted (handleAck) with exactly
+			// one -1 here. Status maps the bounded reason class onto
+			// the calls_total status enum.
+			callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
+			markInboundCallEnded(callID, classToCallEndedStatus(reasonClass))
+		}
+		return resp
+	})
 	s.ep.RegisterHandler(stack.MethodOptions, s.handleOptions)
 	s.ep.RegisterHandler(stack.MethodRegister, s.handleRegister)
 	s.ep.RegisterHandler(stack.MethodInfo, s.handleInfo)
@@ -674,6 +742,15 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		return resp
 	}
 
+	// RFC 8224 SHAKEN inbound verification (no-op when STIR disabled).
+	// Done BEFORE SDP parsing for the same reason as Session-Timer:
+	// a hard-rejected call doesn't need RTP allocation. The hook
+	// inside fires for every verdict (pass + fail) so the call-center
+	// layer can still attach the verdict to its CDR even on accept.
+	if reject := s.verifyInboundIdentity(msg); reject != nil {
+		return reject
+	}
+
 	// Parse remote RTP endpoint from SDP.
 	offer, err := sdp.Parse(msg.Body)
 	if err != nil {
@@ -687,8 +764,28 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 		return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
 	}
 
-	if strings.Contains(strings.ToUpper(offer.Proto), "SAVP") {
-		if _, ok := sdp.PickAESCM128Offer(offer.CryptoOffers); !ok {
+	// SAVP-family acceptance check.
+	//
+	// Two flavours both share "SAVP" in proto:
+	//   * RTP/SAVP[F]            — SDES (RFC 4568); a=crypto required
+	//   * UDP/TLS/RTP/SAVP[F]    — DTLS-SRTP (RFC 5764); a=fingerprint
+	//
+	// We check DTLS first because IsDTLSTransport is a stricter
+	// match — when it's true we skip the SDES check entirely.
+	if sdp.IsDTLSTransport(offer.Proto) {
+		if !s.dtlsAcceptInbound.Load() {
+			logger.Warn("sip invite rejected (DTLS-SRTP not enabled on this server)",
+				zap.String("call_id", callID),
+				zap.String("proto", offer.Proto))
+			return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+		}
+		if len(offer.Fingerprints) == 0 {
+			logger.Warn("sip invite rejected (DTLS-SRTP offer missing a=fingerprint)",
+				zap.String("call_id", callID))
+			return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+		}
+	} else if strings.Contains(strings.ToUpper(offer.Proto), "SAVP") {
+		if _, ok := sdp.PickSupportedSDESOffer(offer.CryptoOffers); !ok {
 			logger.Warn("sip invite rejected (SRTP media without usable a=crypto)",
 				zap.String("call_id", callID),
 				zap.String("proto", offer.Proto),
@@ -819,7 +916,24 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 	rtpSess.SetRemoteAddr(remoteAddr)
 
 	var sdpExtras []string
-	if co, ok := sdp.PickAESCM128Offer(offer.CryptoOffers); ok && strings.Contains(strings.ToUpper(offer.Proto), "SAVP") {
+	// SDES (RFC 4568) negotiation. PickSupportedSDESOffer prefers
+	// AES_CM_128_HMAC_SHA1_80 (WebRTC default) but falls back to
+	// _32 (Cisco/Avaya interop) when the peer didn't list _80.
+	// Both suites use 16-byte key + 14-byte salt — only the auth
+	// tag length differs — so the wire material is identical and
+	// the suite is purely a pion-profile selection.
+	if co, ok := sdp.PickSupportedSDESOffer(offer.CryptoOffers); ok && strings.Contains(strings.ToUpper(offer.Proto), "SAVP") && !sdp.IsDTLSTransport(offer.Proto) {
+		prof, profOK := sdp.PionProfileForSuite(co.Suite)
+		if !profOK {
+			_ = rtpSess.Close()
+			if flight != nil && fk != "" {
+				s.inviteFlights.Delete(fk)
+			}
+			logger.Warn("sip invite rejected (unsupported SRTP suite)",
+				zap.String("call_id", callID),
+				zap.String("suite", co.Suite))
+			return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+		}
 		rk, rsalt, err := sdp.DecodeSDESInline(co.KeyParams)
 		if err != nil {
 			_ = rtpSess.Close()
@@ -845,7 +959,9 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 			}
 			return s.makeResponse(msg, 500, "Internal Server Error", "", "")
 		}
-		cryptoLine, err := sdp.FormatCryptoLine(co.Tag, sdp.SuiteAESCM128HMACSHA180, lk, lsalt)
+		// Echo the peer's chosen suite back. Mixing suites within
+		// one m=audio block violates RFC 4568 §6.1.
+		cryptoLine, err := sdp.FormatCryptoLine(co.Tag, co.Suite, lk, lsalt)
 		if err != nil {
 			_ = rtpSess.Close()
 			if flight != nil && fk != "" {
@@ -855,7 +971,7 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 			return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
 		}
 		sdpExtras = append(sdpExtras, cryptoLine)
-		if err := rtpSess.EnableSDESSRTP(rk, rsalt, lk, lsalt); err != nil {
+		if err := rtpSess.EnableSDESSRTPWithProfile(prof, rk, rsalt, lk, lsalt); err != nil {
 			_ = rtpSess.Close()
 			if flight != nil && fk != "" {
 				s.inviteFlights.Delete(fk)
@@ -863,6 +979,24 @@ func (s *SIPServer) handleInvite(msg *stack.Message, addr *net.UDPAddr) *stack.M
 			logger.Warn("sip invite SRTP enable failed", zap.String("call_id", callID), zap.Error(err))
 			return s.makeResponse(msg, 500, "Internal Server Error", "", "")
 		}
+	}
+
+	// RFC 5763/5764 DTLS-SRTP answer prep. Mints our cert, renders
+	// `a=fingerprint:` + `a=setup:` extras, and stashes the per-call
+	// material so handleAck can drive the handshake. No-op when the
+	// offer isn't DTLS or inbound DTLS isn't enabled.
+	if dtlsAns, derr := s.prepareDTLSAnswer(offer); derr != nil {
+		_ = rtpSess.Close()
+		if flight != nil && fk != "" {
+			s.inviteFlights.Delete(fk)
+		}
+		logger.Warn("sip invite rejected (DTLS-SRTP prep failed)",
+			zap.String("call_id", callID),
+			zap.Error(derr))
+		return s.makeResponse(msg, 488, "Not Acceptable Here", "", "")
+	} else if dtlsAns != nil {
+		sdpExtras = append(sdpExtras, dtlsAns.ExtraLines...)
+		s.stashPendingDTLS(callID, dtlsAns.Pending)
 	}
 
 	// Store session for BYE.
@@ -1109,6 +1243,18 @@ func (s *SIPServer) handleAck(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 		if p := s.callPersistStore(); p != nil {
 			p.OnEstablished(context.Background(), callID)
 		}
+		// RFC 5764 DTLS-SRTP: if the INVITE answer negotiated DTLS,
+		// kick off the handshake on a goroutine BEFORE StartOnACK so
+		// the demux route is installed when the peer's ClientHello
+		// arrives. Media-pipeline start is independent — the Session
+		// will silently drop pre-handshake SRTP-looking bytes until
+		// EnableDTLSSRTP installs the contexts.
+		if pending := s.takePendingDTLS(callID); pending != nil {
+			go s.runInboundDTLSHandshake(callID, cs.RTPSession(), pending)
+		}
+		// Active-calls gauge: bump on the first ACK we see for this
+		// Call-ID. Idempotent against ACK retransmits.
+		markInboundCallStarted(callID)
 		cs.StartOnACK()
 	}
 	// ACK has no SIP response.
@@ -1119,6 +1265,10 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	if msg == nil || !msg.IsRequest || strings.ToUpper(msg.Method) != "BYE" {
 		return nil
 	}
+	// Parse Reason header (RFC 3326) once; the bounded enum is
+	// passed to the outbound cleanup callback so it can stamp the
+	// CDR / metrics without re-parsing.
+	byeReasonClass, _ := classifyBYEReason(msg)
 	if s.absorbNonInviteRetransmit(msg, addr) {
 		return nil
 	}
@@ -1136,7 +1286,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 		conversation.CleanupCallState(tb.InboundCallID)
 		s.endVoiceDialogBridge(tb.InboundCallID)
 		if s.outboundBYELegCleanup != nil && strings.TrimSpace(tb.OutboundCallID) != "" {
-			s.outboundBYELegCleanup(tb.OutboundCallID)
+			s.outboundBYELegCleanup(tb.OutboundCallID, byeReasonClass)
 		}
 		if p := s.callPersistStore(); p != nil {
 			go p.OnBye(context.Background(), ByePersistParams{
@@ -1163,7 +1313,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 			conversation.CleanupCallState(inbound)
 			s.endVoiceDialogBridge(inbound)
 			if s.outboundBYELegCleanup != nil {
-				s.outboundBYELegCleanup(callID)
+				s.outboundBYELegCleanup(callID, byeReasonClass)
 			}
 			if tb != nil && s.callPersistStore() != nil {
 				go s.callPersistStore().OnBye(context.Background(), ByePersistParams{
@@ -1225,7 +1375,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	s.forgetUASDialog(callID)
 	s.releaseInboundCapacity(callID)
 	if s.outboundBYELegCleanup != nil {
-		s.outboundBYELegCleanup(callID)
+		s.outboundBYELegCleanup(callID, byeReasonClass)
 	}
 	return s.makeResponse(msg, 200, "OK", "", "")
 }

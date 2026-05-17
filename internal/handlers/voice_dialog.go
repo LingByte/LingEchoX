@@ -15,7 +15,6 @@ import (
 func voiceDialogWebSocket(c *gin.Context) {
 	w, r := c.Writer, c.Request
 	remote := r.RemoteAddr
-
 	if !voicedialog.WebSocketHubReady() {
 		logger.Warn("voicedialog ws: upgrade refused (hub not initialized)", zap.String("remote", remote))
 		http.Error(w, "voice dialog not initialized", http.StatusServiceUnavailable)

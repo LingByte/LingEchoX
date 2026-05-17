@@ -17,6 +17,7 @@ import (
 	sipvad "github.com/LinByte/VoiceServer/pkg/sip/vad"
 	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	sipasr "github.com/LinByte/VoiceServer/pkg/voice/asr"
+	voiceMetrics "github.com/LinByte/VoiceServer/pkg/voice/metrics"
 	"go.uber.org/zap"
 )
 
@@ -194,6 +195,7 @@ func attachGatewayMedia(sess *dialogSession) error {
 	})
 
 	pipe.SetErrorCallback(func(err error, fatal bool) {
+		voiceMetrics.ASRError("sip")
 		logger.Warn("voicedialog gateway asr error",
 			zap.String(KeyCallID, callID),
 			zap.Error(err),
@@ -233,6 +235,7 @@ func attachGatewayMedia(sess *dialogSession) error {
 				}
 			}
 			if allowBargeIn && vadDet != nil && ttsPlaying.Load() && vadDet.CheckBargeIn(pcm16, true) {
+				voiceMetrics.BargeIn("sip")
 				logger.Info("voicedialog gateway interrupt (VAD barge-in)", zap.String(KeyCallID, callID))
 				// Invalidate every tts.speak that has been queued so far so the queued
 				// chain of segments is dropped, not just the currently-playing one. The

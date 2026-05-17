@@ -51,6 +51,16 @@ type InterpolatingConverter struct {
 	targetRate int
 	buffer     []byte
 	useCubic   bool // Use cubic interpolation for better quality (slower)
+	// antiAlias is the streaming low-pass FIR applied BEFORE
+	// downsampling to prevent aliasing of out-of-band energy into
+	// the audible 0..target/2 region. nil for no-op (sourceRate <=
+	// targetRate). See lowpass.go for design rationale.
+	antiAlias *lowPassFIR
+	// antiImage is the streaming low-pass FIR applied AFTER
+	// upsampling to suppress spectral images of the source band
+	// folded around multiples of the original Nyquist. nil unless
+	// targetRate > sourceRate. See lowpass.go for design rationale.
+	antiImage *lowPassFIR
 }
 
 // NewInterpolatingConverter creates a new interpolating converter with linear interpolation (fast)
@@ -59,6 +69,8 @@ func NewInterpolatingConverter(sourceRate, targetRate int) SampleRateConverter {
 		sourceRate: sourceRate,
 		targetRate: targetRate,
 		useCubic:   false, // Default to linear for performance
+		antiAlias:  newDownsamplingLowPass(sourceRate, targetRate),
+		antiImage:  newUpsamplingAntiImagingLowPass(sourceRate, targetRate),
 	}
 }
 
@@ -68,16 +80,28 @@ func NewCubicInterpolatingConverter(sourceRate, targetRate int) SampleRateConver
 		sourceRate: sourceRate,
 		targetRate: targetRate,
 		useCubic:   true,
+		antiAlias:  newDownsamplingLowPass(sourceRate, targetRate),
+		antiImage:  newUpsamplingAntiImagingLowPass(sourceRate, targetRate),
 	}
 }
 
-// ConvertSamples performs interpolation (linear by default, cubic if enabled)
+// ConvertSamples performs interpolation (linear by default, cubic if enabled).
+// When downsampling, an anti-aliasing FIR low-pass is applied first
+// (see lowpass.go) so that energy above the new Nyquist doesn't fold
+// back into the audible band as buzz/distortion.
 func (ic *InterpolatingConverter) ConvertSamples(samples []byte) []byte {
 	if ic.sourceRate == ic.targetRate {
 		return samples
 	}
 	if len(samples)&1 != 0 {
 		return nil
+	}
+
+	// Anti-aliasing pre-filter for downsampling. The FIR is stateful
+	// across calls so successive Write() chunks splice cleanly.
+	if ic.antiAlias != nil {
+		filtered := ic.antiAlias.filter(pcm16BytesToSamples(samples))
+		samples = samplesToPCM16Bytes(filtered)
 	}
 
 	rateRatio := float64(ic.targetRate) / float64(ic.sourceRate)
@@ -130,6 +154,13 @@ func (ic *InterpolatingConverter) ConvertSamples(samples []byte) []byte {
 
 		output[outputIdx] = byte(interpolated)
 		output[outputIdx+1] = byte(interpolated >> 8)
+	}
+	// Anti-imaging post-filter for upsampling. Suppresses spectral
+	// images above the source Nyquist that linear/cubic interpolation
+	// leaves behind (see lowpass.go).
+	if ic.antiImage != nil {
+		filtered := ic.antiImage.filter(pcm16BytesToSamples(output))
+		output = samplesToPCM16Bytes(filtered)
 	}
 	return output
 }

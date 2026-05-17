@@ -192,6 +192,13 @@ func (m *Manager) RunInviteClient(ctx context.Context, invite *stack.Message, re
 
 	select {
 	case <-ctx.Done():
+		// Distinguish "caller cancelled" from "timer B expired".
+		// Only the latter counts as a transaction timeout per RFC
+		// 3261 §17.1.1.2. A user-driven Cancel is not a protocol
+		// failure and should not pollute the dashboard.
+		if ctx.Err() == context.DeadlineExceeded {
+			onTransactionTimeout("INVITE")
+		}
 		return nil, ctx.Err()
 	case r := <-tx.finalCh:
 		tx.respSrcMu.Lock()

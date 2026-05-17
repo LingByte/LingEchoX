@@ -25,6 +25,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	sipasr "github.com/LinByte/VoiceServer/pkg/voice/asr"
+	voiceMetrics "github.com/LinByte/VoiceServer/pkg/voice/metrics"
 	siprecorder "github.com/LinByte/VoiceServer/pkg/voice/recorder"
 	siptts "github.com/LinByte/VoiceServer/pkg/voice/tts"
 	"go.uber.org/zap"
@@ -630,13 +631,23 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			if env.ASRModelType != "" {
 				asrProv = env.ASRModelType
 			}
+			pipelineMs := int(time.Since(pipelineT0).Milliseconds())
 			dt := DialogTurn{
 				ASRText: userText, LLMText: reply, ASRProvider: asrProv,
 				LLMModel: llmModel, TTSProvider: "qcloud_tts", Trigger: trigger,
 				RouteIntent: "",
 				LLMFirstMs:  streamMeta.LLMFirstMs, LLMWallMs: streamMeta.LLMWallMs,
-				TTSMs: streamMeta.TTSMs, PipelineMs: int(time.Since(pipelineT0).Milliseconds()),
+				TTSMs: streamMeta.TTSMs, PipelineMs: pipelineMs,
 			}
+			// Per-turn latency histograms — one sample per assistant
+			// reply, on the order of seconds-per-call so the
+			// synchronous Observe path is fine (no async drain needed).
+			// E2E first byte ≈ pipeline wall time (ASR final → first
+			// audio out) because TTSMs already starts ticking at the
+			// first Speak call inside streamLLMToTTS.
+			voiceMetrics.ObserveLLMFirstByte(streamMeta.LLMFirstMs)
+			voiceMetrics.ObserveTTSFirstByte(streamMeta.TTSMs)
+			voiceMetrics.ObserveE2EFirstByte(pipelineMs)
 			go RecordDialogTurn(context.Background(), cs.CallID, dt)
 		}(userText, asrIsFinal, trigger)
 	}

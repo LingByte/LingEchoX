@@ -18,6 +18,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
 	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
+	"github.com/LinByte/VoiceServer/pkg/voice/cdr"
 	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -36,6 +37,10 @@ type Embedded struct {
 	sipServer   *server.SIPServer
 	campaignSvc *CampaignService
 	outMgr      *outbound.Manager
+	// cdrWriter writes per-call detail records to a local
+	// JSON-Lines file. Owned by Embedded so Shutdown can flush +
+	// rotate the in-flight file before the process exits.
+	cdrWriter *cdr.Writer
 }
 
 func (e *Embedded) CampaignService() *CampaignService {
@@ -246,6 +251,38 @@ func Start(cfg Config) (*Embedded, error) {
 	em := &Embedded{
 		sipServer: sipServerPtr,
 		outMgr:    outMgr,
+	}
+
+	// Best-effort CDR writer. Failure to mkdir / open the spool
+	// directory is logged but NOT fatal — SIP can still function
+	// without call-detail records, and operators may legitimately
+	// run with CDR disabled in dev.
+	//
+	// Default path: ./trace (process working directory). Sits
+	// alongside the repo so dev runs see CDR output without root.
+	// Production: set LINGECHOX_CDR_DIR to an absolute path that
+	// the log-shipper has read access to.
+	cdrDir := strings.TrimSpace(os.Getenv("LINGECHOX_CDR_DIR"))
+	if cdrDir == "" {
+		cdrDir = "trace"
+	}
+	cw := cdr.NewWriter(cdr.Config{
+		Dir:      cdrDir,
+		BaseName: "cdr",
+	})
+	if err := cw.Start(); err != nil {
+		if logger.Lg != nil {
+			logger.Lg.Warn("sipapp: CDR writer disabled — could not open spool directory",
+				zap.String("dir", cdrDir),
+				zap.Error(err))
+		}
+	} else {
+		em.cdrWriter = cw
+		outMgr.SetCDRSink(cw)
+		if logger.Lg != nil {
+			logger.Lg.Info("sipapp: CDR writer started",
+				zap.String("dir", cdrDir))
+		}
 	}
 
 	campaignSvc = NewCampaignService(cfg.DB)
@@ -543,6 +580,12 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 	}
 	if e.sipServer != nil {
 		_ = e.sipServer.Stop()
+	}
+	// CDR writer is stopped LAST so any per-leg cleanup that fired
+	// during sipServer.Stop above gets to enqueue its final record
+	// before the drain goroutine exits.
+	if e.cdrWriter != nil {
+		e.cdrWriter.Stop()
 	}
 }
 

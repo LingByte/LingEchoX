@@ -3,6 +3,7 @@ package outbound
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -13,10 +14,13 @@ import (
 	"time"
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
+	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/sip/sdp"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/sip/session_timer"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
+	"github.com/LinByte/VoiceServer/pkg/voice/cdr"
 	"go.uber.org/zap"
 )
 
@@ -25,9 +29,18 @@ var (
 	outboundRTPPortNext    int
 )
 
-// applyOutboundAnswerSRTP enables SRTP on the RTP session when this UAC INVITE offered SDES crypto
-// and the 200 OK SDP remains RTP/SAVP(F) with a matching AES_CM_128 offer. Plain RTP/AVP answers
-// skip SRTP (interoperability downgrade).
+// applyOutboundAnswerSRTP enables SRTP on the RTP session when this
+// UAC INVITE offered SDES crypto and the 200 OK SDP remains
+// RTP/SAVP(F) with a supported AES_CM_128 suite. Plain RTP/AVP
+// answers skip SRTP (interoperability downgrade).
+//
+// Accepts BOTH AES_CM_128_HMAC_SHA1_80 (our offer default) and
+// AES_CM_128_HMAC_SHA1_32 — Cisco / Avaya peers commonly downgrade
+// to _32 in the answer for bandwidth, and we'd previously fail the
+// call with a misleading "missing a=crypto" error.
+//
+// DTLS-SRTP (UDP/TLS/RTP/SAVP) is handled by the dtlsPending branch
+// in handleResponse; this function is a no-op for that proto.
 func applyOutboundAnswerSRTP(sess *rtp.Session, offerKey, offerSalt []byte, answer *sdp.Info) error {
 	if sess == nil || answer == nil || len(offerKey) == 0 {
 		return nil
@@ -35,15 +48,23 @@ func applyOutboundAnswerSRTP(sess *rtp.Session, offerKey, offerSalt []byte, answ
 	if !strings.Contains(strings.ToUpper(answer.Proto), "SAVP") {
 		return nil
 	}
-	co, ok := sdp.PickAESCM128Offer(answer.CryptoOffers)
+	if sdp.IsDTLSTransport(answer.Proto) {
+		// DTLS-SRTP doesn't carry SDES — caller's DTLS path handles it.
+		return nil
+	}
+	co, ok := sdp.PickSupportedSDESOffer(answer.CryptoOffers)
 	if !ok {
-		return fmt.Errorf("sip/outbound: SRTP answer missing %s a=crypto", sdp.SuiteAESCM128HMACSHA180)
+		return fmt.Errorf("sip/outbound: SRTP answer missing supported AES_CM_128 a=crypto")
+	}
+	prof, profOK := sdp.PionProfileForSuite(co.Suite)
+	if !profOK {
+		return fmt.Errorf("sip/outbound: unsupported SRTP suite in answer: %s", co.Suite)
 	}
 	rk, rs, err := sdp.DecodeSDESInline(co.KeyParams)
 	if err != nil {
 		return fmt.Errorf("sip/outbound: SRTP answer inline: %w", err)
 	}
-	return sess.EnableSDESSRTP(rk, rs, offerKey, offerSalt)
+	return sess.EnableSDESSRTPWithProfile(prof, rk, rs, offerKey, offerSalt)
 }
 
 func isPrivateIPv4(ip net.IP) bool {
@@ -162,12 +183,36 @@ type ManagerConfig struct {
 
 	// OnEvent reports dial lifecycle transitions for queue workers and metrics.
 	OnEvent func(DialEvent)
+
+	// TLSConfig is the *tls.Config used for outbound SIPS / TLS
+	// signaling dials. nil → built lazily with system roots and
+	// ServerName = dial host (strict verification by default per
+	// product decision 2026-05-17). Callers that need skip-verify
+	// for staging must populate this with InsecureSkipVerify=true;
+	// no env-driven knob is exposed here on purpose so prod configs
+	// don't accidentally inherit it.
+	TLSConfig *tls.Config
+
+	// STIRSigner is the RFC 8224 SHAKEN signer. nil = no Identity
+	// header on outbound INVITEs (default; most deployments don't
+	// have an STI-CA cert yet). When set, every outbound INVITE
+	// where the FromUser and dest are E.164 numbers will carry a
+	// signed PASSporT. Signing failures are soft (logged, then dial
+	// without Identity) — STIR never blocks a legitimate call.
+	STIRSigner *STIRSigner
 }
 
 // Manager owns outbound SIP legs keyed by Call-ID.
 type Manager struct {
 	cfg  ManagerConfig
 	send func(*stack.Message, *net.UDPAddr) error
+
+	// pool dispenses signalingPeers per (transport, host:port) for
+	// connection-oriented transports (TCP/TLS). UDP short-circuits
+	// to a fresh udpPeer wrapping `send`. Lazy-initialised on first
+	// Dial because BindSender comes after NewManager.
+	poolMu sync.Mutex
+	pool   *signalingPool
 
 	dialGateMu sync.RWMutex
 	dialGate   func(context.Context, DialRequest, string) error
@@ -178,6 +223,13 @@ type Manager struct {
 	mu       sync.Mutex
 	legs     map[string]*outLeg // keyed by local outbound Call-ID
 	legsByTx map[string]*outLeg // keyed by INVITE transaction (Via branch + CSeq)
+
+	// cdrSinkMu protects the optional CDR writer pointer. Held as
+	// a RWMutex so emitCDR's read on the hot cleanup path is cheap.
+	// The pointer is set once from bootstrap (SetCDRSink) and never
+	// races with itself, but tests inject and clear it freely.
+	cdrSinkMu sync.RWMutex
+	cdrSinkV  *cdr.Writer
 }
 
 // NewManager constructs a manager; call BindSender before Dial.
@@ -200,6 +252,44 @@ func (m *Manager) BindSender(s SignalingSender) {
 	m.send = func(msg *stack.Message, addr *net.UDPAddr) error {
 		return s.SendSIP(msg, addr)
 	}
+}
+
+// signalingPoolForDial returns the lazy-initialised pool; created on
+// first call so we don't spin up a sweeper goroutine for managers
+// that never dial TCP/TLS. tlsConfig is read off cfg.TLSConfig (set
+// via SetTLSConfig before the first dial that needs it).
+func (m *Manager) signalingPoolForDial() *signalingPool {
+	if m == nil {
+		return nil
+	}
+	m.poolMu.Lock()
+	defer m.poolMu.Unlock()
+	if m.pool != nil {
+		return m.pool
+	}
+	m.pool = newSignalingPool(poolConfig{
+		UDPSend:      m.send,
+		ResponseSink: m.HandleSIPResponse,
+		TLSConfig:    m.cfg.TLSConfig,
+	})
+	return m.pool
+}
+
+// ClosePool shuts the signaling pool (closes pooled TCP/TLS conns +
+// stops the idle sweeper). Call from Manager teardown / process
+// shutdown. Idempotent / nil-safe.
+func (m *Manager) ClosePool() error {
+	if m == nil {
+		return nil
+	}
+	m.poolMu.Lock()
+	pool := m.pool
+	m.pool = nil
+	m.poolMu.Unlock()
+	if pool == nil {
+		return nil
+	}
+	return pool.Close()
 }
 
 // SetDialGate runs after Call-ID allocation and before RTP allocation on Dial; non-nil error aborts the outbound INVITE.
@@ -310,10 +400,16 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		}
 	}
 
+	// Resolve via UDP-style addr regardless of transport: the
+	// destination IP+Port is the same; only the wire transport
+	// differs. We carry the *net.UDPAddr through outLeg / pool
+	// because most downstream code (NAT detection, logging) reads
+	// IP+Port off it; the actual TCP/TLS conn is held by the peer.
 	addr, err := net.ResolveUDPAddr("udp", req.Target.SignalingAddr)
 	if err != nil {
 		return "", fmt.Errorf("sip/outbound: resolve signaling: %w", err)
 	}
+	transport := ResolveTransport(req.Target)
 
 	localPort := m.cfg.SIPPort
 	if localPort <= 0 {
@@ -348,11 +444,32 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		sdpExtras     []string
 		srtpOfferKey  []byte
 		srtpOfferSalt []byte
+		dtlsPending   *outboundDTLSPending
 	)
+	if req.OfferDTLSSRTP && req.MediaProfile == MediaProfileTransferBridge {
+		// DTLS-SRTP toward bridge profile peers is almost guaranteed
+		// to 488 (most softphones don't speak it). Don't fail the
+		// dial — just downgrade to RTP/AVP and log so the operator
+		// knows their flag was ignored.
+		logger.Warn("sip outbound: OfferDTLSSRTP ignored on MediaProfileTransferBridge (downgrading to RTP/AVP)",
+			zap.String("scenario", string(req.Scenario)))
+	}
 	if req.Scenario == ScenarioTransferAgent && req.MediaProfile == MediaProfileTransferBridge {
 		// Bridged agent leg targets desk phones / common softphones; many reject RTP/SAVPF+SDES with 488.
 		// Plain RTP/AVP keeps SRTP on the customer inbound leg only.
 		mediaProto = "RTP/AVP"
+	} else if req.OfferDTLSSRTP {
+		// RFC 5763/5764 DTLS-SRTP offer. We don't carry SDES extras
+		// alongside — the proto value forbids interleaving SAVP and
+		// SAVP-DTLS in the same m= block.
+		proto, extras, pending, derr := prepareOutboundDTLSOffer()
+		if derr != nil {
+			_ = rtpSess.Close()
+			return "", fmt.Errorf("sip/outbound: dtls offer prep: %w", derr)
+		}
+		mediaProto = proto
+		sdpExtras = extras
+		dtlsPending = pending
 	} else {
 		// Standard outbound offers RTP/SAVPF + SDES; plain RTP answers downgrade via applyOutboundAnswerSRTP.
 		mediaProto = "RTP/SAVPF"
@@ -414,6 +531,18 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		PrivacyTokens:               req.PrivacyTokens,
 		HistoryInfo:                 req.HistoryInfo,
 		Diversion:                   req.Diversion,
+		ViaTransport:                transport,
+	}
+
+	// RFC 8224 SHAKEN signing — opt-in via ManagerConfig.STIRSigner.
+	// We pull TNs from the From user and Request-URI; both must be
+	// E.164 for SHAKEN. Non-E.164 destinations (SIP URIs, alphanumeric)
+	// silently skip signing. Failures are soft per outbound/stir.go.
+	if m.cfg.STIRSigner != nil {
+		destTN := extractTNFromRequestURI(params.RequestURI)
+		if id, ok := signOutboundIdentity(m.cfg.STIRSigner, callID, fromUser, destTN); ok {
+			params.IdentityHeader = id
+		}
 	}
 
 	invite := buildINVITE(params)
@@ -423,10 +552,35 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		req:           req,
 		rtpSess:       rtpSess,
 		dst:           addr,
+		transport:     transport,
 		txKey:         inviteTxKey(params.Branch, params.CSeq),
 		srtpOfferKey:  srtpOfferKey,
 		srtpOfferSalt: srtpOfferSalt,
+		dtlsPending:   dtlsPending,
 	}
+
+	// Acquire signaling peer (UDP wraps shared listener;
+	// TCP/TLS dials + pools per-target). Done BEFORE registering
+	// the leg so a dial failure aborts cleanly without leaking
+	// txKey state.
+	pool := m.signalingPoolForDial()
+	if pool == nil {
+		_ = rtpSess.Close()
+		return "", fmt.Errorf("sip/outbound: signaling pool unavailable")
+	}
+	peer, err := pool.Get(ctx, transport, addr)
+	if err != nil {
+		_ = rtpSess.Close()
+		return "", fmt.Errorf("sip/outbound: dial %s: %w", transport, err)
+	}
+	leg.peerMu.Lock()
+	leg.peer = peer
+	leg.peerMu.Unlock()
+
+	// Stamp the CDR start time before the INVITE hits the wire —
+	// this is the closest moment to "user pressed dial". No-op when
+	// no sink is configured.
+	leg.beginCDR()
 
 	m.mu.Lock()
 	m.legs[callID] = leg
@@ -435,7 +589,7 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 	}
 	m.mu.Unlock()
 
-	if err := m.send(invite, addr); err != nil {
+	if err := peer.Send(invite); err != nil {
 		m.mu.Lock()
 		delete(m.legs, callID)
 		m.mu.Unlock()
@@ -567,6 +721,16 @@ type outLeg struct {
 	rtpSess *rtp.Session
 	dst     *net.UDPAddr
 
+	// transport is the resolved wire transport for this leg's
+	// signalling. Drives Via header rendering and ACK/BYE peer
+	// reuse. Set in Dial via ResolveTransport(req.Target).
+	transport Transport
+	// peer is the live signalingPeer used to write request bytes.
+	// For UDP it's a fresh udpPeer; for TCP/TLS it's a shared
+	// pooled connPeer. nil after cleanupLeg.
+	peerMu sync.Mutex
+	peer   signalingPeer
+
 	mu          sync.Mutex
 	established bool
 	callSession *sipSession.CallSession
@@ -580,6 +744,19 @@ type outLeg struct {
 
 	srtpOfferKey  []byte
 	srtpOfferSalt []byte
+
+	// dtlsPending is non-nil when the INVITE offered DTLS-SRTP.
+	// Consumed by handleResponse once we have the answer SDP.
+	dtlsPending *outboundDTLSPending
+
+	// refreshMu guards refresher (start/stop is racy with cleanupLeg).
+	refreshMu sync.Mutex
+	refresher *outRefresher // RFC 4028 UAC-side refresh loop; nil unless armed by 2xx OK
+
+	// cdr accumulates per-leg CDR state (start time, codec,
+	// classification). Held by value so legs without a configured
+	// CDR sink pay only the zero-value cost.
+	cdr cdrState
 }
 
 func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from *net.UDPAddr) {
@@ -590,7 +767,32 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 	cseqAll := strings.ToUpper(resp.GetHeader("CSeq"))
 	if strings.Contains(cseqAll, "BYE") {
 		if st >= 200 && st < 300 {
+			// Local BYE acknowledged. Counted as "by=local" since we
+			// initiated; remote-initiated BYEs come through the
+			// inbound BYE handler (see bye.go / CleanupLegIfPresent).
+			sipMetrics.Bye(sipMetrics.ByeByLocal, sipMetrics.ByeReasonNormal)
+			leg.cdrSetHangup("local", "normal")
 			leg.cleanupLeg()
+		}
+		return
+	}
+	// Bump the INVITE-result counter for any INVITE-CSeq response.
+	// We do this at the response classifier rather than at every
+	// branch below so 1xx / non-200 / 200 are all covered with a
+	// single line.
+	if strings.Contains(cseqAll, "INVITE") {
+		sipMetrics.InviteResult(sipMetrics.DirectionOutbound, st)
+	}
+	// RFC 4028 / 3311: route responses to in-dialog UPDATE refreshes
+	// into the refresher state machine BEFORE the generic INVITE
+	// response handler (which would otherwise treat 422 as a hard
+	// failure and tear the leg down).
+	if strings.Contains(cseqAll, stack.MethodUpdate) {
+		leg.refreshMu.Lock()
+		r := leg.refresher
+		leg.refreshMu.Unlock()
+		if r != nil && !r.handleUPDATEResponse(resp) {
+			leg.stopRefresher()
 		}
 		return
 	}
@@ -625,6 +827,9 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 		if reason == "" {
 			reason = "non_200"
 		}
+		// Record the failure into the CDR before logging / event
+		// emission so even an Emit during cleanup carries the cause.
+		leg.cdrSetError(st, reason)
 		logger.Warn("sip outbound non-200 response",
 			zap.String("call_id", leg.params.CallID),
 			zap.Int("status", st),
@@ -701,7 +906,21 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 
 	leg.m.adoptOutboundDialogCallIDIfNeeded(leg, resp)
 
-	if err := applyOutboundAnswerSRTP(leg.rtpSess, leg.srtpOfferKey, leg.srtpOfferSalt, answer); err != nil {
+	// RFC 5763/5764: if we offered DTLS-SRTP, run the handshake on
+	// the RTP socket and install the derived contexts. Otherwise
+	// fall through to the SDES negotiator. The two paths are
+	// mutually exclusive (proto string can't be both
+	// UDP/TLS/RTP/SAVP and RTP/SAVPF in the same m= block).
+	if leg.dtlsPending != nil {
+		if !sdp.IsDTLSTransport(answer.Proto) {
+			logger.Warn("sip outbound dtls offer answered with non-DTLS proto (488 expected, got 2xx)",
+				zap.String("call_id", leg.params.CallID),
+				zap.String("answer_proto", answer.Proto))
+			leg.cleanupLeg()
+			return
+		}
+		startOutboundDTLSHandshake(leg, leg.dtlsPending, answer)
+	} else if err := applyOutboundAnswerSRTP(leg.rtpSess, leg.srtpOfferKey, leg.srtpOfferSalt, answer); err != nil {
 		logger.Warn("sip outbound SRTP negotiation failed", zap.String("call_id", leg.params.CallID), zap.Error(err))
 		leg.cleanupLeg()
 		return
@@ -721,11 +940,12 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 		leg.cleanupLeg()
 		return
 	}
-	dst := from
-	if dst == nil {
-		dst = leg.dst
-	}
-	if err := leg.m.send(ack, dst); err != nil {
+	// ACK travels on the same transport as the INVITE — for TCP/TLS
+	// the peer holds the live conn; for UDP it wraps the shared
+	// listener and delivers to `from` (the actual response source,
+	// in case of NAT rebinding). Falling back to leg.dst is fine
+	// when the peer abstraction handles the address itself.
+	if err := leg.sendOnPeer(ack, from); err != nil {
 		logger.Warn("sip outbound ACK failed", zap.String("call_id", leg.params.CallID), zap.Error(err))
 		cs.Stop()
 		leg.cleanupLeg()
@@ -747,6 +967,23 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 	leg.established = true
 	leg.callSession = cs
 	leg.mu.Unlock()
+
+	// CDR: mark the call as answered with the negotiated codec. The
+	// first codec in the answer is the one we'll actually use (RFC
+	// 3264 §6.1 — accepted offer's first format is preferred).
+	codecName := ""
+	if len(answer.Codecs) > 0 {
+		codecName = answer.Codecs[0].Name
+	}
+	leg.cdrSetAnswered(codecName)
+
+	// RFC 4028 §10: arm UAC-side refresher IFF peer's 200 OK assigned
+	// us the refresher role. Peer-as-refresher is handled implicitly:
+	// we have no watchdog (see refresher.go scope notes), so a silent
+	// dialog will eventually be torn down by the peer's own timer.
+	if peerSE, peerRefresher, _ := session_timer.ParseSessionExpires(resp.GetHeader("Session-Expires")); peerSE > 0 {
+		leg.startRefresherIfUAC(peerSE, peerRefresher)
+	}
 
 	if leg.m.cfg.OnRegisterSession != nil {
 		leg.m.cfg.OnRegisterSession(leg.params.CallID, cs)
@@ -869,6 +1106,23 @@ func (leg *outLeg) cleanupLeg() {
 	if leg == nil || leg.m == nil {
 		return
 	}
+	// Stop the session-timer refresher BEFORE we drop the peer ref —
+	// otherwise a tick fired between the two could try to send on a
+	// nil peer and log a misleading "send failed" warning.
+	leg.stopRefresher()
+	// Flush per-call QoS into the metrics histograms BEFORE we close
+	// the RTP session. After Close() the snapshot would be empty.
+	// This is the once-per-call observation point — one RTCP read,
+	// no hot-path cost.
+	flushOutboundCallQoS(leg)
+	// Emit the CDR record (no-op if no sink is configured). Reads
+	// RTCP one more time internally so it captures the same QoS
+	// numbers we just flushed to the histograms.
+	leg.emitCDR()
+	// Always-on accounting (independent of the CDR sink): decrement
+	// active-calls gauge + bump calls_total by end status. Safe on
+	// legs that never reached "answered" — internal idempotent gate.
+	leg.endCDRActiveCount()
 	callID := leg.params.CallID
 	m := leg.m
 	m.mu.Lock()
@@ -880,6 +1134,12 @@ func (leg *outLeg) cleanupLeg() {
 	if leg.rtpSess != nil {
 		_ = leg.rtpSess.Close()
 	}
+	// Drop the peer reference but DON'T close it — the connection
+	// is pool-owned and may be in use by another call to the same
+	// target. The pool's idle sweeper closes it when truly unused.
+	leg.peerMu.Lock()
+	leg.peer = nil
+	leg.peerMu.Unlock()
 	m.releaseOutboundCapacity(callID)
 }
 

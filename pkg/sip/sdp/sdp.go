@@ -24,6 +24,15 @@ type Info struct {
 	Codecs []Codec
 	// CryptoOffers lists a=crypto attributes from the first m=audio section (RFC 4568 SDES), if present.
 	CryptoOffers []CryptoOffer
+	// Fingerprints lists a=fingerprint values from the first m=audio
+	// section (RFC 8122). Multiple entries are allowed when the peer
+	// has both an EC and an RSA cert configured; we accept any. Empty
+	// when DTLS-SRTP isn't negotiated.
+	Fingerprints []Fingerprint
+	// DTLSRole is the parsed a=setup value from the first m=audio
+	// section (RFC 5763 §5). DTLSRoleActPass is the default when the
+	// attribute is absent, per RFC 5763 §5.
+	DTLSRole DTLSRole
 }
 
 var (
@@ -129,6 +138,21 @@ func Parse(body string) (*Info, error) {
 						KeyParams: keyParams,
 					})
 				}
+			}
+		}
+
+		// RFC 8122 a=fingerprint:<hash> <hex>
+		if inAudioSection && strings.HasPrefix(strings.ToLower(line), "a=fingerprint:") {
+			rest := strings.TrimSpace(line[len("a=fingerprint:"):])
+			if fp := ParseFingerprint(rest); fp.HashFunc != "" {
+				info.Fingerprints = append(info.Fingerprints, fp)
+			}
+		}
+		// RFC 5763 a=setup:active|passive|actpass|holdconn
+		if inAudioSection && strings.HasPrefix(strings.ToLower(line), "a=setup:") {
+			rest := strings.TrimSpace(line[len("a=setup:"):])
+			if r := ParseRole(rest); r.IsValid() {
+				info.DTLSRole = r
 			}
 		}
 

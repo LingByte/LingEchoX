@@ -1,7 +1,6 @@
 package outbound
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
@@ -23,10 +22,9 @@ func buildACK(inv inviteParams, resp200 *stack.Message, requestURI string) *stac
 		RequestURI: reqURI,
 		Version:    "SIP/2.0",
 	}
-	// Via must match INVITE (single Via for our client)
-	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%s;rport",
-		nonEmpty(inv.SIPHost, "127.0.0.1"), nonZero(inv.SIPPort, 6050), inv.Branch)
-	msg.SetHeader("Via", via)
+	// Via must match INVITE (single Via for our client) including
+	// the same transport token (RFC 3261 §17.1.1.3).
+	msg.SetHeader("Via", formatVia(inv.ViaTransport, inv.SIPHost, inv.SIPPort, inv.Branch))
 	msg.SetHeader("Max-Forwards", "70")
 
 	msg.SetHeader("From", formatOutboundFromHeader(inv.FromDisplayName, inv.FromUser, inv.SIPHost, inv.SIPPort, inv.FromTag))

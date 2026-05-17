@@ -24,6 +24,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/backup"
+	voiceMetrics "github.com/LinByte/VoiceServer/pkg/voice/metrics"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -139,6 +140,13 @@ func main() {
 
 	// 11. Register routes
 	app.RegisterRoutes(r)
+
+	// Expose the in-process metrics registry over Prometheus text
+	// exposition. Mounted before the SIP stack starts so a scrape
+	// during boot sees a valid (empty) registry. No auth — bind the
+	// listener to an internal interface or front it with mTLS if it
+	// faces the internet.
+	r.GET("/metrics", gin.WrapH(voiceMetrics.Handler()))
 	// 12. Initialize system listeners
 	listeners.InitSystemListeners()
 	// 13. Emit system initialization signal
