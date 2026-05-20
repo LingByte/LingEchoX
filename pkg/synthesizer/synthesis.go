@@ -302,6 +302,7 @@ func (player *SynthesisPlayer) Run(handler media.MediaHandler, ctx context.Conte
 		return
 	}
 	t := time.NewTicker(player.Format.FrameDuration)
+	defer t.Stop() // 否则 Run 退出后 ticker 一直跑，进程级泄漏。
 	frameSize := utils.ComputeSampleByteCount(player.Format.SampleRate, player.Format.BitDepth, player.Format.Channels) * int(player.Format.FrameDuration.Milliseconds())
 	st := time.Now()
 	for {

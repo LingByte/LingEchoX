@@ -143,7 +143,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		startTransferRinging(ctx, inboundCallID, lg)
 		notifyTransferPhase(inboundCallID, "ringing", nil)
 		scheduleWebSeatJoinWatch(inboundCallID, tgt.ACDPoolTargetID)
-		go func() { webFn(inboundCallID, lg) }()
+		logger.SafeGo("webseat-handoff", func() { webFn(inboundCallID, lg) })
 		return
 	}
 
@@ -175,7 +175,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		inboundTo, inboundHistory, inboundDiversion = inSess.InboundRetargetHeaders()
 	}
 
-	go func() {
+	logger.SafeGo("transfer-outbound-dial", func() {
 		req := outbound.DialRequest{
 			Scenario:      outbound.ScenarioTransferAgent,
 			Target:        tgt,
@@ -208,7 +208,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 			return
 		}
 		lg.Info("sip transfer: agent leg INVITE sent", zap.String("inbound_call_id", inboundCallID), zap.String("outbound_call_id", cid))
-	}()
+	})
 }
 
 // extractInboundCallerNumber 取该入站通话的 SIP From URI 的 user 部分（即
@@ -280,12 +280,12 @@ func startTransferRinging(ctx context.Context, inboundCallID string, lg *zap.Log
 	transferRingStop[inboundCallID] = cancel
 	transferRingMu.Unlock()
 
-	go func() {
+	logger.SafeGo("transfer-ringing-loop", func() {
 		defer stopTransferRinging(inboundCallID)
 		if err := playTransferRingingLoop(runCtx, inbound, lg); err != nil && !errorsIsCtxDone(err) {
 			lg.Warn("sip transfer ring playback failed", zap.String("inbound_call_id", inboundCallID), zap.Error(err))
 		}
-	}()
+	})
 }
 
 func stopTransferRinging(inboundCallID string) {
@@ -417,7 +417,7 @@ func startNoAgentRetryLoop(inboundCallID string, lg *zap.Logger) {
 		cancel()
 		return
 	}
-	go func() {
+	logger.SafeGo("transfer-no-agent-retry", func() {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		defer transferNoAgentRetry.Delete(inboundCallID)
@@ -439,7 +439,7 @@ func startNoAgentRetryLoop(inboundCallID string, lg *zap.Logger) {
 			}
 			TriggerTransferToAgent(context.Background(), inboundCallID, lg)
 		}
-	}()
+	})
 }
 
 func stopNoAgentRetryLoop(inboundCallID string) {

@@ -24,6 +24,33 @@ export function webSeatWsToken(): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
+/**
+ * HTTP header name the backend's webseatTokenOK() reads first (it falls back
+ * to ?token=). Using a header avoids leaking the secret into access logs and
+ * Referer headers — query strings get logged everywhere.
+ *
+ * Keep in sync with pkg/sip/webseat/hub.go HeaderWebseatToken.
+ */
+export const WebSeatTokenHeader = 'X-Webseat-Token'
+
+/**
+ * fetch() init for POST /lingecho/webseat/v1/{join,hangup,reject}.
+ *
+ * Backend now requires the same SIP_WEBSEAT_WS_TOKEN check on these HTTP
+ * endpoints (was previously only on /ws). Without this, prod returns 401
+ * and the agent UI silently fails to answer / hang up calls.
+ */
+export function webSeatJSONInit(body: unknown): RequestInit {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const t = webSeatWsToken()
+  if (t) headers[WebSeatTokenHeader] = t
+  return {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  }
+}
+
 /** WebSocket URL for agent signaling; uses VITE_API_BASE_URL + VITE_WS_BASE_URL like other app WS. */
 export function buildWebSeatWebSocketURL(token: string): string {
   const path = webSeatWsPathUnderApi()

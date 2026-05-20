@@ -205,30 +205,75 @@ func RegisterAwaiting(callID string, cs *sipSession.CallSession, lg *zap.Logger)
 		return fmt.Errorf("webseat: call %q already bridged", callID)
 	}
 	h.awaiting[callID] = &awaitEntry{cs: cs, lg: lg, at: time.Now()}
-	go h.awaitWatchdog(callID)
+	logger.SafeGo("webseat-await-watchdog", func() { h.awaitWatchdog(callID) })
 	if lg != nil {
 		lg.Info("webseat: awaiting browser join", zap.String("call_id", callID))
 	}
-	go h.broadcastIncoming(callID)
+	logger.SafeGo("webseat-broadcast-incoming", func() { h.broadcastIncoming(callID) })
 	return nil
 }
 
-func webseatWSTokenOK(r *http.Request) bool {
-	expected := utils.GetEnv(EnvWSToken)
-	got := strings.TrimSpace(r.URL.Query().Get("token"))
+// HeaderWebseatToken lets browsers POST without leaking the token in
+// query strings (which can land in access logs / referrers). Both
+// query (?token=...) and header are accepted; header wins when both
+// are set.
+const HeaderWebseatToken = "X-Webseat-Token"
+
+// EnvAllowEmptyToken makes empty SIP_WEBSEAT_WS_TOKEN behave like
+// "accept any client" — only meant for local/dev. Production must
+// keep this unset so a missing/empty token results in 401 instead
+// of silently disabling auth.
+const EnvAllowEmptyToken = "SIP_WEBSEAT_ALLOW_EMPTY_TOKEN"
+
+// webseatTokenOK gates every webseat HTTP / WS endpoint. It used to
+// only check ?token=... and **silently allowed all clients** when
+// SIP_WEBSEAT_WS_TOKEN was empty — which means in production an
+// attacker could POST to /join (taking over a pending PSTN call) or
+// /hangup (DoS any active call) by guessing a Call-ID. Now:
+//
+//   - read token from X-Webseat-Token header first, fall back to ?token=
+//   - empty env → reject 401, unless SIP_WEBSEAT_ALLOW_EMPTY_TOKEN=true
+//     (explicit local-dev opt-in)
+//   - constant-time compare to defeat timing oracles
+func webseatTokenOK(r *http.Request) bool {
+	expected := strings.TrimSpace(utils.GetEnv(EnvWSToken))
+	got := strings.TrimSpace(r.Header.Get(HeaderWebseatToken))
+	if got == "" {
+		got = strings.TrimSpace(r.URL.Query().Get("token"))
+	}
 	if expected == "" {
+		if strings.EqualFold(strings.TrimSpace(utils.GetEnv(EnvAllowEmptyToken)), "true") {
+			wsTokenMissingOnce.Do(func() {
+				if logger.Lg != nil {
+					logger.Lg.Warn("webseat: SIP_WEBSEAT_WS_TOKEN empty + ALLOW_EMPTY_TOKEN=true → accepting all clients (DEV ONLY)")
+				}
+			})
+			return true
+		}
+		// Strict-by-default: production must configure a token. Logged
+		// once so misconfiguration is loud at startup.
 		wsTokenMissingOnce.Do(func() {
 			if logger.Lg != nil {
-				logger.Lg.Warn("webseat: SIP_WEBSEAT_WS_TOKEN is empty; WebSocket accepts any client")
+				logger.Lg.Error("webseat: SIP_WEBSEAT_WS_TOKEN is empty; rejecting all webseat requests (set SIP_WEBSEAT_ALLOW_EMPTY_TOKEN=true to allow in dev)")
 			}
 		})
-		return true
+		return false
 	}
 	if len(got) != len(expected) {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
+
+// webseatWSTokenOK kept as a thin alias for callers that wired the old
+// name; new code should call webseatTokenOK.
+func webseatWSTokenOK(r *http.Request) bool { return webseatTokenOK(r) }
+
+// HTTPTokenOK is the exported wrapper for callers in the handlers
+// package that need to enforce the webseat token gate (e.g. the
+// status endpoint mounted directly on the gin router rather than
+// through the package-internal http.Handler chain).
+func HTTPTokenOK(r *http.Request) bool { return webseatTokenOK(r) }
 
 func (h *Hub) wsAdd(c *websocket.Conn) {
 	if h == nil || c == nil {
@@ -610,6 +655,10 @@ func (h *Hub) handleJoin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method", http.StatusMethodNotAllowed)
 		return
 	}
+	if !webseatTokenOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	var body joinBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "json", http.StatusBadRequest)
@@ -661,6 +710,10 @@ func (h *Hub) handleAgentHangup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method", http.StatusMethodNotAllowed)
 		return
 	}
+	if !webseatTokenOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	var body struct {
 		CallID string `json:"call_id"`
 	}
@@ -684,6 +737,10 @@ func (h *Hub) handleAgentHangup(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) handleAgentReject(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	if !webseatTokenOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	var body struct {
@@ -794,7 +851,9 @@ func (h *Hub) completeJoin(ctx context.Context, callID string, inbound *sipSessi
 		h.cfg.OnWebSeatBridgeEstablished(callID)
 	}
 
-	go h.waitRemoteTrackAndBridge(callID, inbound, pc, txLocal, trackCh, lg)
+	logger.SafeGo("webseat-bridge-wait-track", func() {
+		h.waitRemoteTrackAndBridge(callID, inbound, pc, txLocal, trackCh, lg)
+	})
 
 	ld := pc.LocalDescription()
 	lg.Info("webseat: answer sent, waiting for browser RTP / OnTrack", zap.String("call_id", callID))

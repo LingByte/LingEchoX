@@ -178,10 +178,10 @@ func scheduleWebSeatJoinWatch(inbound string, acdTargetID uint) {
 		if lg == nil {
 			lg = zap.NewNop()
 		}
-		go func() {
+		logger.SafeGo("transfer-retry-after-fail", func() {
 			time.Sleep(60 * time.Millisecond)
 			TriggerTransferToAgent(context.Background(), inbound, lg)
-		}()
+		})
 	})
 	webSeatJoinTimers.Store(inbound, t)
 }
@@ -276,10 +276,10 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 	transferLastACDRowByInbound.Delete(inbound)
 
 	notifyTransferPhase(inbound, "retrying", map[string]any{"sip_code": evt.StatusCode, "reason": evt.Reason})
-	go func() {
+	logger.SafeGo("transfer-retry-on-status", func() {
 		time.Sleep(60 * time.Millisecond)
 		TriggerTransferToAgent(context.Background(), inbound, lg)
-	}()
+	})
 }
 
 // ResetTransferRoutingState clears per-call transfer routing scratch state after a successful handoff.
@@ -318,8 +318,8 @@ func OnWebSeatJoinTimeout(inboundCallID string, acdTargetID uint) {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
-	go func() {
+	logger.SafeGo("transfer-retry-join-timeout", func() {
 		time.Sleep(60 * time.Millisecond)
 		TriggerTransferToAgent(context.Background(), inboundCallID, lg)
-	}()
+	})
 }

@@ -100,13 +100,21 @@ func Init(config *LogConfig, mode string) (err error) {
 				return lvl < zapcore.ErrorLevel
 			})
 
+			// Wrap each leaf individually rather than the Tee. Wrapping
+			// the Tee bypasses per-leaf level filtering: Tee.Write
+			// dispatches to all sub-cores unconditionally, so an INFO
+			// entry routed through a single outer-wrapper Write call
+			// would hit both the stdout-low leaf AND the stderr-high
+			// leaf, printing the same line twice in a terminal that
+			// merges both streams. Wrapping at the leaf preserves the
+			// leaf's LevelEnabler in Check.
 			core = zapcore.NewTee(
-				zapcore.NewCore(encoder, writeSyncer, l),
-				zapcore.NewCore(consoleEncoder, zapcore.Lock(os.Stdout), lowPriority),
-				zapcore.NewCore(consoleEncoder, zapcore.Lock(os.Stderr), highPriority),
+				WrapCoreWithReqIDPrefix(zapcore.NewCore(encoder, writeSyncer, l)),
+				WrapCoreWithReqIDPrefix(zapcore.NewCore(consoleEncoder, zapcore.Lock(os.Stdout), lowPriority)),
+				WrapCoreWithReqIDPrefix(zapcore.NewCore(consoleEncoder, zapcore.Lock(os.Stderr), highPriority)),
 			)
 		} else {
-			core = zapcore.NewCore(encoder, writeSyncer, l)
+			core = WrapCoreWithReqIDPrefix(zapcore.NewCore(encoder, writeSyncer, l))
 		}
 
 		Lg = zap.New(core, zap.AddCaller()) // zap.AddCaller() 添加调用栈信息

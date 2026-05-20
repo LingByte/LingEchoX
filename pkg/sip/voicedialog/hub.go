@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -243,19 +244,39 @@ func (h *Hub) endCall(callID, reason string) {
 	)
 }
 
-// WebSocketTokenOK validates ?token= against VOICE_DIALOG_WS_TOKEN (constant-time when set).
+// envAllowEmptyVoiceDialogToken is the explicit dev-only opt-in to
+// keep the legacy "empty token = accept all" behaviour. Production
+// must leave it unset so missing VOICE_DIALOG_WS_TOKEN → 401 instead
+// of silently disabling auth (matches webseat's strict-by-default).
+const envAllowEmptyVoiceDialogToken = "VOICE_DIALOG_ALLOW_EMPTY_TOKEN"
+
+// WebSocketTokenOK validates ?token= against VOICE_DIALOG_WS_TOKEN
+// (constant-time when set). Empty env → reject 401, unless
+// VOICE_DIALOG_ALLOW_EMPTY_TOKEN=true is set explicitly. The SIP
+// inbound loopback dialer (sipapp) reads the same env, so as long as
+// VOICE_DIALOG_WS_TOKEN is configured both sides agree.
 func WebSocketTokenOK(r *http.Request) bool {
 	expected := wsTokenExpected()
 	got := strings.TrimSpace(r.URL.Query().Get("token"))
 	if expected == "" {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv(envAllowEmptyVoiceDialogToken)), "true") {
+			if defaultHub != nil {
+				defaultHub.tokenMissingOnce.Do(func() {
+					logger.Warn("voice dialog VOICE_DIALOG_WS_TOKEN empty + ALLOW_EMPTY_TOKEN=true → accepting all clients (DEV ONLY)",
+						zap.Bool("inbound_loopback_ws", defaultHub.cfg.InboundLoopbackWS),
+					)
+				})
+			}
+			return true
+		}
 		if defaultHub != nil {
 			defaultHub.tokenMissingOnce.Do(func() {
-				logger.Warn("voice dialog VOICE_DIALOG_WS_TOKEN is empty; WebSocket accepts any client (set VOICE_DIALOG_WS_TOKEN in production)",
+				logger.Error("voice dialog VOICE_DIALOG_WS_TOKEN is empty; rejecting all WS upgrades (set VOICE_DIALOG_ALLOW_EMPTY_TOKEN=true to allow in dev)",
 					zap.Bool("inbound_loopback_ws", defaultHub.cfg.InboundLoopbackWS),
 				)
 			})
 		}
-		return true
+		return false
 	}
 	if len(got) != len(expected) {
 		return false

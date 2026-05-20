@@ -18,12 +18,25 @@ func TestCmdKeysSorted(t *testing.T) {
 func TestWsTokenOK(t *testing.T) {
 	t.Cleanup(func() { defaultHub = nil })
 
-	t.Run("empty_expected_allows", func(t *testing.T) {
+	// Strict-by-default: empty env now rejects. Old "empty allows"
+	// behaviour is gated behind VOICE_DIALOG_ALLOW_EMPTY_TOKEN=true.
+	t.Run("empty_expected_rejects", func(t *testing.T) {
 		t.Setenv("VOICE_DIALOG_WS_TOKEN", "")
+		t.Setenv("VOICE_DIALOG_ALLOW_EMPTY_TOKEN", "")
+		defaultHub = nil
+		r := httptest.NewRequest("GET", "/?token=nothing", nil)
+		if WebSocketTokenOK(r) {
+			t.Fatal("expected reject when both envs unset")
+		}
+	})
+
+	t.Run("empty_expected_allows_with_dev_opt_in", func(t *testing.T) {
+		t.Setenv("VOICE_DIALOG_WS_TOKEN", "")
+		t.Setenv("VOICE_DIALOG_ALLOW_EMPTY_TOKEN", "true")
 		defaultHub = nil
 		r := httptest.NewRequest("GET", "/?token=nothing", nil)
 		if !WebSocketTokenOK(r) {
-			t.Fatal()
+			t.Fatal("expected allow when ALLOW_EMPTY_TOKEN=true")
 		}
 	})
 

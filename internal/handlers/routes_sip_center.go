@@ -13,6 +13,7 @@ import (
 //   - SIP user CRUD / trunk CRUD / trunk-number write   → platform admin only.
 //   - Call records / ACD pool / scripts / campaigns / trunk-numbers read
 //     → tenant RBAC permission codes (api.sip.*).
+//
 // The split is deliberate: tenants manage their own dial flows but
 // can't enumerate other tenants' SIP credentials or trunk wiring.
 func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
@@ -35,6 +36,11 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 	{
 		callsRead.GET("/calls", h.listSIPCalls)
 		callsRead.GET("/calls/:id", h.getSIPCall)
+		// Authenticated streaming endpoint for the call's WAV recording.
+		// Replaces the legacy approach of pointing <audio> at /uploads/...
+		// directly; gates by tenant + RBAC, supports Range on local disk.
+		callsRead.GET("/calls/:id/recording", h.streamSIPCallRecording)
+		callsRead.HEAD("/calls/:id/recording", h.streamSIPCallRecording)
 	}
 
 	acdRead := g.Group("")

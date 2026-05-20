@@ -5,7 +5,7 @@ import { clearWebSeatAcdPoolAnchor, ensureWebSeatAcdPoolRowOnline, postWebSeatAc
 import { showAlert } from '@/utils/notification'
 import { WebSeatContext, type WebSeatContextValue, type WebSeatTrunkPick, type WebSeatWsState } from './WebSeatContext'
 import { getUserMediaAudioOnly } from './getUserMediaCompat'
-import { buildWebSeatWebSocketURL, webSeatHttpBase, webSeatV1URL, webSeatWsToken } from './webseatEnv'
+import { buildWebSeatWebSocketURL, webSeatHttpBase, webSeatJSONInit, webSeatV1URL, webSeatWsToken } from './webseatEnv'
 import { WebSeatIncomingCallCard } from './WebSeatIncomingCallCard'
 
 const WEBSEAT_ACD_HEARTBEAT_MS = 30_000
@@ -291,11 +291,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     const ra = remoteAudioRef.current
     const stayOnline = acdHeartbeatTimerRef.current != null
     if (cid && httpBase) {
-      void fetch(webSeatV1URL(httpBase, 'hangup'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ call_id: cid }),
-      }).catch(() => {})
+      void fetch(webSeatV1URL(httpBase, 'hangup'), webSeatJSONInit({ call_id: cid })).catch(() => {})
     }
     if (pc) {
       try {
@@ -425,11 +421,10 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       logSignal('setLocalDescription offer')
       const ld = pc.localDescription
       if (!ld) throw new Error('no localDescription')
-      const res = await fetch(webSeatV1URL(httpBase, 'join'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ call_id: cid, sdp: ld.sdp, type: ld.type, candidates: [] }),
-      })
+      const res = await fetch(
+        webSeatV1URL(httpBase, 'join'),
+        webSeatJSONInit({ call_id: cid, sdp: ld.sdp, type: ld.type, candidates: [] }),
+      )
       logSignal('POST .../lingecho/webseat/v1/join', res.status)
       const ans = await res.json()
       if (!ans.sdp || !ans.type) throw new Error('bad answer')
@@ -451,11 +446,7 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
     if (!cid || !httpBase) return
     setPendingIncomingCallId(null)
     try {
-      const res = await fetch(webSeatV1URL(httpBase, 'reject'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ call_id: cid }),
-      })
+      const res = await fetch(webSeatV1URL(httpBase, 'reject'), webSeatJSONInit({ call_id: cid }))
       logSignal('reject sent', cid, res.status)
     } catch {}
   }, [httpBase, logSignal, pendingIncomingCallId])

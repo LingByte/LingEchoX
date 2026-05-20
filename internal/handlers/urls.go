@@ -36,6 +36,10 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	if uploadDir == "" {
 		uploadDir = "./uploads"
 	}
+	// Gate /uploads/sip/recordings/** behind a JWT before the static
+	// handler runs. Avatars / trunk-audio remain public.
+	// See pkg/middleware/uploads_acl.go for the threat model.
+	engine.Use(middleware.UploadsACL())
 	engine.Static("/uploads", uploadDir)
 
 	r := engine.Group(config.GlobalConfig.Server.APIPrefix)

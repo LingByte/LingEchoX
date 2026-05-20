@@ -145,11 +145,12 @@ func main() {
 	app.RegisterRoutes(r)
 
 	// Expose the in-process metrics registry over Prometheus text
-	// exposition. Mounted before the SIP stack starts so a scrape
-	// during boot sees a valid (empty) registry. No auth — bind the
-	// listener to an internal interface or front it with mTLS if it
-	// faces the internet.
-	r.GET("/metrics", gin.WrapH(voiceMetrics.Handler()))
+	// exposition. Default-deny via METRICS_ALLOWED_IPS — this used to
+	// be wide-open and leaked deployment topology / live traffic
+	// patterns to anyone who could reach the listener. Configure the
+	// env to a comma list of IPs or CIDRs (e.g. "127.0.0.1,10.0.0.0/8")
+	// or "*" if you front /metrics with mTLS / k8s NetworkPolicy.
+	r.GET("/metrics", middleware.MetricsACL(), gin.WrapH(voiceMetrics.Handler()))
 	// 12. Initialize system listeners
 	listeners.InitSystemListeners()
 	// 13. Emit system initialization signal
