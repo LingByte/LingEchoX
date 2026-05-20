@@ -32,6 +32,15 @@ type Tenant struct {
 	AsrConfig    datatypes.JSON `json:"asrConfig,omitempty" gorm:"column:asr_config;comment:ASR配置JSON"`
 	TtsConfig    datatypes.JSON `json:"ttsConfig,omitempty" gorm:"column:tts_config;comment:TTS配置JSON"`
 	LlmConfig    datatypes.JSON `json:"llmConfig,omitempty" gorm:"column:llm_config;comment:LLM配置JSON"`
+	// VoiceMode selects the SIP voice pipeline kind: "pipeline" (default,
+	// legacy 3-layer ASR→LLM→TTS) or "realtime" (single full-duplex
+	// multimodal model, see RealtimeConfig). Empty = pipeline.
+	VoiceMode string `json:"voiceMode,omitempty" gorm:"column:voice_mode;size:32;default:pipeline;comment:对话模式 pipeline|realtime"`
+	// RealtimeConfig is the credential blob for the realtime multimodal
+	// provider (Qwen-Omni, GPT-4o realtime, …). Layout follows the same
+	// `{provider, ...vendorFields}` convention as AsrConfig/TtsConfig/
+	// LlmConfig. Only consulted when VoiceMode == "realtime".
+	RealtimeConfig datatypes.JSON `json:"realtimeConfig,omitempty" gorm:"column:realtime_config;comment:实时多模态配置JSON"`
 }
 
 func (Tenant) TableName() string {
@@ -67,6 +76,8 @@ func TenantPlatformDetail(t Tenant) map[string]any {
 	h["asrConfig"] = utils.JSONValueFromBytes(t.AsrConfig)
 	h["ttsConfig"] = utils.JSONValueFromBytes(t.TtsConfig)
 	h["llmConfig"] = utils.JSONValueFromBytes(t.LlmConfig)
+	h["voiceMode"] = strings.TrimSpace(t.VoiceMode)
+	h["realtimeConfig"] = utils.JSONValueFromBytes(t.RealtimeConfig)
 	return h
 }
 
@@ -298,7 +309,11 @@ func SoftDeleteTenant(db *gorm.DB, id uint, updateBy string) error {
 }
 
 // PatchTenantAIConfigJSON updates optional AI config columns.
-func PatchTenantAIConfigJSON(db *gorm.DB, id uint, asr, tts, llm *json.RawMessage, updateBy string) error {
+// `voiceMode` is a non-pointer because empty string == "no change"; the
+// handler is responsible for sending the literal value only when the
+// operator actually flipped the switch. `realtime` mirrors `asr`/`tts`/`llm`
+// semantics: nil = leave column untouched, non-nil = overwrite.
+func PatchTenantAIConfigJSON(db *gorm.DB, id uint, asr, tts, llm, realtime *json.RawMessage, voiceMode string, updateBy string) error {
 	patch := map[string]any{
 		"updated_at": time.Now(),
 		"update_by":  updateBy,
@@ -312,7 +327,19 @@ func PatchTenantAIConfigJSON(db *gorm.DB, id uint, asr, tts, llm *json.RawMessag
 	if llm != nil {
 		patch["llm_config"] = datatypes.JSON(utils.CloneRawMessage(*llm))
 	}
-	if len(patch) <= 1 {
+	if realtime != nil {
+		patch["realtime_config"] = datatypes.JSON(utils.CloneRawMessage(*realtime))
+	}
+	if vm := strings.TrimSpace(voiceMode); vm != "" {
+		// Allowlist guard: only "pipeline" / "realtime" are valid. Other
+		// values silently degrade to "pipeline" so a malformed request
+		// can never flip a tenant into an unknown mode.
+		if vm != "pipeline" && vm != "realtime" {
+			vm = "pipeline"
+		}
+		patch["voice_mode"] = vm
+	}
+	if len(patch) <= 2 {
 		return nil
 	}
 	return db.Model(&Tenant{}).Where("id = ?", id).Updates(patch).Error

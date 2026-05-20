@@ -20,6 +20,9 @@ export interface TenantDetail extends TenantRow {
   asrConfig?: Record<string, unknown> | null
   ttsConfig?: Record<string, unknown> | null
   llmConfig?: Record<string, unknown> | null
+  /** 'pipeline'（默认，三层 ASR→LLM→TTS）或 'realtime'（单条 WS 多模态） */
+  voiceMode?: 'pipeline' | 'realtime' | null
+  realtimeConfig?: Record<string, unknown> | null
 }
 
 export async function listTenants(
@@ -58,6 +61,8 @@ export async function updateTenantPlatform(
     asrConfig?: Record<string, unknown> | null
     ttsConfig?: Record<string, unknown> | null
     llmConfig?: Record<string, unknown> | null
+    voiceMode?: 'pipeline' | 'realtime' | null
+    realtimeConfig?: Record<string, unknown> | null
   },
 ): Promise<ApiResponse<{ tenant: TenantDetail }>> {
   return put(`/tenants/${id}`, body)

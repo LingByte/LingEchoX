@@ -21,6 +21,7 @@ const (
 	TTS_COQUI          = "tts.coqui"
 	TTS_VOLCENGINE     = "tts.volcengine"
 	TTS_MINIMAX        = "tts.minimax"
+	TTS_ALIYUN         = "tts.aliyun"
 )
 
 // TTSProvider TTS服务提供商类型

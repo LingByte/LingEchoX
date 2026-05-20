@@ -5,7 +5,7 @@
  * 说明：当前 SIP 嵌入式管线仅执行 qcloud ASR+TTS；其余厂商 JSON 可存盘供后续扩展或网关侧使用。
  */
 
-export type AiFieldType = 'text' | 'password' | 'number'
+export type AiFieldType = 'text' | 'password' | 'number' | 'textarea'
 
 export interface AiFieldRule {
   key: string
@@ -13,6 +13,8 @@ export interface AiFieldRule {
   type: AiFieldType
   required?: boolean
   placeholder?: string
+  /** 仅 type=textarea：最小可见行数 */
+  textareaMinRows?: number
 }
 
 export interface AiProviderRule {
@@ -79,7 +81,20 @@ export const TENANT_TTS_PROVIDER_RULES: AiProviderRule[] = [
   { provider: 'qcloud', label: '腾讯云 TTS', fields: [...qcloudTtsFields] },
   { provider: 'qiniu', label: '七牛 TTS', fields: [...apiKeyModel, { key: 'voice', label: '音色', type: 'text' }] },
   { provider: 'xunfei', label: '讯飞 TTS', fields: [{ key: 'appId', label: 'AppId', type: 'text', required: true }, { key: 'apiKey', label: 'API Key', type: 'password', required: true }, { key: 'apiSecret', label: 'API Secret', type: 'password', required: true }] },
-  { provider: 'aliyun', label: '阿里云 TTS', fields: [...apiKeyBase, { key: 'voice', label: '音色', type: 'text' }] },
+  {
+    provider: 'aliyun',
+    label: '阿里云 Qwen-TTS 实时',
+    fields: [
+      { key: 'apiKey', label: 'DashScope API Key', type: 'password', required: true, placeholder: 'sk-xxx (DASHSCOPE_API_KEY)' },
+      { key: 'model', label: '模型', type: 'text', placeholder: 'qwen3-tts-flash-realtime（默认）/ qwen3-tts-instruct-flash-realtime' },
+      { key: 'voice', label: '音色', type: 'text', placeholder: 'Cherry（默认）/ Ethan / Chelsie / ...' },
+      { key: 'languageType', label: '语言', type: 'text', placeholder: 'Auto / Chinese / English / Japanese ...' },
+      { key: 'mode', label: '模式', type: 'text', placeholder: 'server_commit（默认）/ commit' },
+      { key: 'sampleRate', label: '采样率 Hz', type: 'number', placeholder: '24000（默认）/ 22050 / 16000' },
+      { key: 'baseUrl', label: 'WS 端点（可选）', type: 'text', placeholder: '留空=北京区；新加坡区 wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime' },
+      { key: 'instructions', label: '风格指令（可选，需 instruct 模型）', type: 'textarea', textareaMinRows: 6, placeholder: '语速快、上扬，适合介绍时尚单品' },
+    ],
+  },
   { provider: 'baidu', label: '百度 TTS', fields: [{ key: 'apiKey', label: 'API Key', type: 'password', required: true }, { key: 'secretKey', label: 'Secret Key', type: 'password', required: true }] },
   { provider: 'azure', label: 'Azure TTS', fields: [...apiKeyBase, { key: 'region', label: 'Region', type: 'text', required: true }, { key: 'voice', label: 'Voice', type: 'text', required: true }] },
   { provider: 'google', label: 'Google Cloud TTS', fields: [...apiKeyBase, { key: 'voice', label: 'Voice', type: 'text' }] },
@@ -137,11 +152,38 @@ export const TENANT_LLM_PROVIDER_RULES: AiProviderRule[] = [
   },
 ]
 
-export type AiTab = 'asr' | 'tts' | 'llm'
+/**
+ * 实时多模态供应商（Qwen-Omni / GPT-4o realtime / …）。
+ * 选 voiceMode='realtime' 时 SIP 走 pkg/realtime 单条 WS，跳过 ASR/TTS/LLM 三层。
+ * 后端字段对齐 pkg/realtime/aliyunomni/client.go 的 Config 解析。
+ */
+export const TENANT_REALTIME_PROVIDER_RULES: AiProviderRule[] = [
+  {
+    provider: 'aliyun_omni',
+    label: '阿里云 Qwen-Omni 实时多模态',
+    fields: [
+      { key: 'apiKey', label: 'DashScope API Key', type: 'password', required: true, placeholder: 'sk-xxx (DASHSCOPE_API_KEY)' },
+      { key: 'model', label: '模型', type: 'text', placeholder: 'qwen3-omni-flash-realtime（默认）' },
+      { key: 'voice', label: '音色', type: 'text', placeholder: 'Cherry / Ethan / Chelsie / Serena ...' },
+      {
+        key: 'instructions',
+        label: '人设/系统指令（可选）',
+        type: 'textarea',
+        textareaMinRows: 14,
+        placeholder: '例：你是售后客服，回答简洁专业；可粘贴较长话术与业务规则',
+      },
+      { key: 'temperature', label: '温度（可选）', type: 'number', placeholder: '0.6 ~ 1.2（留空=0.6，越低越稳定）' },
+      { key: 'baseUrl', label: 'WS 端点（可选）', type: 'text', placeholder: '留空=北京区；新加坡区 wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime' },
+    ],
+  },
+]
+
+export type AiTab = 'asr' | 'tts' | 'llm' | 'realtime'
 
 export function providerRulesFor(tab: AiTab): AiProviderRule[] {
   if (tab === 'asr') return TENANT_ASR_PROVIDER_RULES
   if (tab === 'tts') return TENANT_TTS_PROVIDER_RULES
+  if (tab === 'realtime') return TENANT_REALTIME_PROVIDER_RULES
   return TENANT_LLM_PROVIDER_RULES
 }
 

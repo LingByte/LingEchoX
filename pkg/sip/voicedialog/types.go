@@ -11,10 +11,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// gatewayQcloudTTSStream is defined in gateway_media.go; declare here as opaque type
-// reference for dialogSession.ttsService. Importing synthesizer keeps the dependency
-// graph documented (the actual SDK is wrapped inside gatewayQcloudTTSStream).
-var _ = (*synthesizer.QCloudService)(nil)
+// gatewayTTSStream is the provider-agnostic streaming TTS interface
+// (resolved from tenant TTS JSON in attachGatewayMedia). The SDK details
+// live inside synthesizer.StreamingSynthesizer implementations.
+var _ = synthesizer.StreamingSynthesizer(nil)
 
 // --- Wire protocol: JSON field keys (gateway ↔ WebSocket client) ---
 
@@ -177,6 +177,16 @@ type dialogSession struct {
 	mu         sync.Mutex
 	conn       *websocket.Conn
 	clientSeen bool
+	// writeMu serialises every WriteJSON / SetWriteDeadline pair on
+	// `conn`. gorilla/websocket explicitly forbids concurrent writes
+	// (it panics with "concurrent write to websocket connection"),
+	// and multiple goroutines legitimately want to emit events
+	// here: the TTS player (tts.started/ended), the media reader
+	// (asr.partial/final, interrupt from VAD or ASR barge-in), the
+	// hub's endCall (call.ended), and the read loop itself (pong).
+	// Holding writeMu across the deadline+write keeps frames atomic
+	// without serialising unrelated session state under sess.mu.
+	writeMu sync.Mutex
 
 	gatewayMu     sync.Mutex
 	ttsPlayingPtr *atomic.Bool
@@ -190,7 +200,7 @@ type dialogSession struct {
 	ttsBridgeSR int
 	// ttsService is the TTS service adapter (Tencent Cloud SDK wrapped). Owned by
 	// attachGatewayMedia, consumed by per-segment prefetch goroutines.
-	ttsService *gatewayQcloudTTSStream
+	ttsService synthesizer.StreamingSynthesizer
 	// ttsSegmentCh feeds the single player goroutine. Buffered; closed in stopTTSPlayer.
 	ttsSegmentCh chan *ttsSegmentJob
 	// Lifecycle guards for the player goroutine.
@@ -204,6 +214,16 @@ type dialogSession struct {
 
 	transferLoadingMu     sync.Mutex
 	transferLoadingCancel context.CancelFunc
+
+	// welcomeCancel preempts the welcome WAV playback (runDialogWelcome).
+	// Set when welcome enters its play loop; cleared on exit. The TTS
+	// player calls cancelWelcome() at the start of the first real reply
+	// so the welcome and the AI reply never overlap on the same RTP
+	// output (symptom: caller hears two voices at once during the first
+	// 1-3 seconds of the reply). Combined with MediaSession.DrainOutputs,
+	// this also drops welcome PCM already queued in the SIP RTP transport.
+	welcomeMu     sync.Mutex
+	welcomeCancel context.CancelFunc
 
 	// Last ASR final transcript for correlating with the next tts.speak (persisted as SIPCall turns).
 	dialogTurnMu       sync.Mutex

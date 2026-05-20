@@ -279,6 +279,10 @@ func Start(cfg Config) (*Embedded, error) {
 	} else {
 		em.cdrWriter = cw
 		outMgr.SetCDRSink(cw)
+		// Same writer also serves inbound CDRs (pkg/sip/server emits
+		// a row per completed inbound call). One sink, both
+		// directions — keeps the JSONL stream homogeneous.
+		server.SetInboundCDRSink(cw)
 		if logger.Lg != nil {
 			logger.Lg.Info("sipapp: CDR writer started",
 				zap.String("dir", cdrDir))
@@ -472,15 +476,17 @@ func Start(cfg Config) (*Embedded, error) {
 		}
 		sipServerPtr.HangupInboundCall(callID)
 	})
-	conversation.SetTenantVoiceJSONLoader(func(ctx context.Context, tenantID uint) ([]byte, []byte, []byte, bool) {
+	conversation.SetTenantVoiceJSONLoader(func(ctx context.Context, tenantID uint) (
+		asr, tts, llm, realtime []byte, voiceMode string, ok bool) {
 		if acdDB == nil || tenantID == 0 {
-			return nil, nil, nil, false
+			return nil, nil, nil, nil, "", false
 		}
 		var t models.Tenant
 		if err := acdDB.WithContext(ctx).Where("id = ?", tenantID).First(&t).Error; err != nil {
-			return nil, nil, nil, false
+			return nil, nil, nil, nil, "", false
 		}
-		return []byte(t.AsrConfig), []byte(t.TtsConfig), []byte(t.LlmConfig), true
+		return []byte(t.AsrConfig), []byte(t.TtsConfig), []byte(t.LlmConfig),
+			[]byte(t.RealtimeConfig), t.VoiceMode, true
 	})
 	webseat.InitDefault(webseat.Config{
 		RemoveCallSession:     sipServerPtr.RemoveCallSession,

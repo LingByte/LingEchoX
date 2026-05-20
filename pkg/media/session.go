@@ -847,6 +847,40 @@ func (s *MediaSession) SendToOutput(sender any, packet MediaPacket) {
 	s.putPacket(DirectionOutput, packet)
 }
 
+// DrainOutputs non-blockingly drops every pending packet from each
+// output transport's send queue. Used by realtime / TTS attach paths to
+// implement barge-in: when the caller starts speaking, queued AI audio
+// must be cleared *immediately* — otherwise the caller hears the AI
+// finish a sentence while their own voice is being captured, defeating
+// the "interrupt and listen" UX. It is safe to call from any goroutine;
+// each TransportManager guards its own queue with `tl.mtx`.
+//
+// Returns the number of packets dropped (for logging / metrics).
+func (s *MediaSession) DrainOutputs() int {
+	dropped := 0
+	for _, tl := range s.outputs {
+		dropped += tl.drain()
+	}
+	return dropped
+}
+
+func (tl *TransportManager) drain() int {
+	tl.mtx.Lock()
+	defer tl.mtx.Unlock()
+	if tl.txqueue == nil {
+		return 0
+	}
+	n := 0
+	for {
+		select {
+		case <-tl.txqueue:
+			n++
+		default:
+			return n
+		}
+	}
+}
+
 func (s *MediaSession) AddMetric(key string, duration time.Duration) {
 	// Metrics functionality has been removed
 

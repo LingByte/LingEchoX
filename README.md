@@ -129,8 +129,6 @@ This project includes an AGPL-3.0 license file (`LICENSE`).
 //   - SIP_VAD_BARGE_IN: 0/false/off/no disables RMS barge-in during TTS (default enabled).
 //   - SIP_VAD_THRESHOLD: RMS threshold (default 3200).
 //   - SIP_VAD_CONSEC_FRAMES: frames for barge-in (default 3).
-//   - SIP_ASR_TRIGGER_PARTIAL: enable partial ASR → LLM (default off).
-//   - SIP_ASR_PARTIAL_TIMEOUT_MS: fallback final trigger on partials (default 1200; min 300 when set).
 //   - SIP_WELCOME_WAIT_FIRST_RTP_MS: delay before welcome WAV (default 2000; 0 disables wait).
 //   - SIP_WELCOME_WAV_PATH: optional welcome clip path.
 //

@@ -32,47 +32,29 @@ func pcmBridgeHz(sess *dialogSession) int {
 	return sr
 }
 
-func gatewayTTSCloudSR(ttsSampleRate int, pcmBridge int) int {
+// gatewayTTSCloudSR picks the cloud-side sample rate to request.
+//
+//   - When the tenant TTS JSON pins `sampleRate`, honor it (caller already
+//     accepted the resample cost downstream).
+//   - Otherwise prefer the synthesizer's native rate; for QCloud we hand back
+//     the bridge rate so the SDK emits at the exact PCM rate the call leg
+//     uses (avoids a 16→8 kHz decimation with audible aliasing on G.711).
+//     For providers that produce a fixed rate (e.g. Aliyun Qwen-TTS @ 24
+//     kHz) we trust the synthesizer's reported sample rate instead.
+//
+// `synthRate` is the rate the resolved synthesizer claims via Format(); 0
+// means "no preference" and we fall through to the bridge.
+func gatewayTTSCloudSR(ttsSampleRate, synthRate, pcmBridge int) int {
 	if ttsSampleRate > 0 {
 		return ttsSampleRate
 	}
-	// 关键判断：通过 SIP_TTS_RAW_DUMP_DIR 落盘的 QCloud 16 kHz 原始 PCM 实测干净
-	// （用户 2026-05-16 验证），所以"电流音"出在我们的 16 → 8 kHz 降采上：
-	// 旧的 chanReplayService.streamingHalveDecimate16to8 是 2-tap 平均，在 4 kHz
-	// 衰减仅 0 dB、2/6 kHz 仅 -3 dB，远不够压住 4-8 kHz 的能量，全部混叠回基带 →
-	// 听觉为持续高频"嘶嘶"。`media.ResamplePCM` 的线性插值在 16k→8k 也是纯
-	// decimation 同样无抗混叠 LPF。
-	// 短期最稳的修法：让 QCloud 直接吐桥接率（8 kHz for G.711），整体绕过本地降采；
-	// QCloud 的 8 kHz 模型本身即是电话场景训练，已正确做过抗混叠。配合新 Pipeline
-	// 后再无 DC-hold/time.After/odd-byte 等老 bug，听感应当与 welcome.wav 对齐。
-	// 若桥接是宽带（≥16k），云端 == 桥接率即可。
+	if synthRate > 0 {
+		return synthRate
+	}
 	if pcmBridge > 0 {
 		return pcmBridge
 	}
 	return 16000
-}
-
-// gatewayQcloudTTSStream adapts synthesizer.QCloudService to a streaming PCM callback
-// signature consumed by tts_segmenter.go.
-//
-// 走 WebSocket 路径（QCloudService.SynthesizeStream），每段一条 WS 连接但首字节
-// 比 HTTPS 路径低 50~150ms（PCM 直接 binary frame 推送，无 HTTP chunk 编码开销）。
-// 段间的 WS 握手开销由 tts_segmenter.go 的 prefetch 并行化继续 hide。
-type gatewayQcloudTTSStream struct {
-	svc *synthesizer.QCloudService
-}
-
-func (q *gatewayQcloudTTSStream) SynthesizeStream(ctx context.Context, text string, callback func(pcm []byte) error) error {
-	if q == nil || q.svc == nil {
-		return fmt.Errorf("voicedialog gateway: nil tts")
-	}
-	// WS path: PCM frames arrive directly via callback; no WAV header to strip.
-	return q.svc.SynthesizeStream(ctx, text, func(pcm []byte) error {
-		if len(pcm) == 0 {
-			return nil
-		}
-		return callback(pcm)
-	})
 }
 
 // attachGatewayMedia wires ASR→WebSocket events and WebSocket tts.speak→TTS→RTP on the SIP leg.
@@ -84,18 +66,29 @@ func attachGatewayMedia(sess *dialogSession) error {
 	if vErr != nil {
 		return fmt.Errorf("voicedialog gateway: tenant voice env: %w", vErr)
 	}
-	if !vLoaded || !conversation.TenantVoiceReady(voiceEnv) {
-		return fmt.Errorf("voicedialog gateway: tenant ASR/TTS/LLM JSON missing or incomplete (need qcloud ASR+TTS + LLM)")
+	if !vLoaded {
+		return fmt.Errorf("voicedialog gateway: tenant config not loaded")
+	}
+	// Voicedialog gateway protocol assumes the WS client drives turns
+	// (tts.speak / asr.* events). Realtime providers (Qwen-Omni, GPT-4o
+	// realtime) generate replies internally on a single full-duplex
+	// session, so the per-segment tts.speak surface has no equivalent.
+	// Refuse cleanly when the tenant is on realtime mode — either by
+	// explicit voice_mode column or by inference (only realtime creds
+	// populated). Same inference rule the embedded SIP path uses, so
+	// behavior is consistent across both attach surfaces.
+	realtimeIntent := strings.EqualFold(voiceEnv.VoiceMode, "realtime") ||
+		(voiceEnv.VoiceMode == "" && conversation.TenantRealtimeReady(voiceEnv))
+	if realtimeIntent {
+		return fmt.Errorf("voicedialog gateway: tenant voiceMode=realtime is not yet supported by gateway protocol; switch tenant to pipeline mode or use embedded SIP voice attach")
+	}
+	if !conversation.TenantVoiceReady(voiceEnv) {
+		return fmt.Errorf("voicedialog gateway: tenant ASR/TTS/LLM JSON missing or incomplete")
 	}
 	asrAppID := voiceEnv.ASRAppID
 	asrSecretID := voiceEnv.ASRSecretID
 	asrSecretKey := voiceEnv.ASRSecretKey
 	asrModelType := voiceEnv.ASRModelType
-	ttsAppID := voiceEnv.TTSAppID
-	ttsSecretID := voiceEnv.TTSSecretID
-	ttsSecretKey := voiceEnv.TTSSecretKey
-	ttsVoiceType := voiceEnv.TTSVoiceType
-	ttsSpeed := voiceEnv.TTSSpeed
 	ttsSampleRate := voiceEnv.TTSSampleRate
 
 	ms := sess.cs.MediaSession()
@@ -123,7 +116,6 @@ func attachGatewayMedia(sess *dialogSession) error {
 	}
 	asrInRate := pcmBridgeHz(sess)
 	pcmBridgeSR := asrInRate
-	ttsCloudSR := gatewayTTSCloudSR(ttsSampleRate, pcmBridgeSR)
 
 	pipe, err := sipasr.New(sipasr.Options{
 		ASR:        asrSvc,
@@ -135,14 +127,21 @@ func attachGatewayMedia(sess *dialogSession) error {
 		return fmt.Errorf("voicedialog gateway: asr pipeline: %w", err)
 	}
 
-	voiceType := ttsVoiceType
-	if voiceType == 0 {
-		voiceType = 101007
+	// Provider-agnostic TTS: drive every vendor in TENANT_TTS_PROVIDER_RULES
+	// through the same StreamingSynthesizer contract. The credential JSON
+	// (tenant ttsConfig) carries `provider + per-vendor fields`; the
+	// factory wires the fastest streaming path it can (QCloud WS / Aliyun
+	// DashScope realtime WS / etc.) and falls back to one-shot Synthesize
+	// wrapping for providers without a native streaming entry yet.
+	if voiceEnv.TTSConfigRaw == nil {
+		return fmt.Errorf("voicedialog gateway: tenant TTS config missing")
 	}
-	ttsCfg := synthesizer.NewQcloudTTSConfig(ttsAppID, ttsSecretID, ttsSecretKey, voiceType, "pcm", ttsCloudSR)
-	ttsCfg.Speed = ttsSpeed
-	qcTTS := synthesizer.NewQCloudService(ttsCfg)
-	ttsStream := &gatewayQcloudTTSStream{svc: qcTTS}
+	handle, err := synthesizer.NewStreamingFromCredential(voiceEnv.TTSConfigRaw)
+	if err != nil {
+		return fmt.Errorf("voicedialog gateway: tts provider: %w", err)
+	}
+	ttsCloudSR := gatewayTTSCloudSR(ttsSampleRate, handle.SampleRate, pcmBridgeSR)
+	ttsStream := handle.Stream
 
 	// Wire the new pipelined TTS player. Each tts.speak segment kicks off its own SDK
 	// call in parallel (prefetch); a single player goroutine drains segments serially
@@ -154,6 +153,48 @@ func attachGatewayMedia(sess *dialogSession) error {
 	sess.gatewayMu.Unlock()
 	sess.startTTSPlayer()
 	_ = zlg // logger captured by player loop directly via the global logger.Lg
+
+	// TTS prewarm: fire a tiny background synthesis so the FIRST real
+	// tts.speak in this call doesn't pay full cold-start cost. Saves
+	// roughly the DNS+TCP+TLS+WebSocket handshake budget (~50-150ms)
+	// — server-side processing time can't be reduced from here. Runs
+	// concurrent with welcome.wav playback so it's effectively free.
+	go func(stream synthesizer.StreamingSynthesizer, provider string, cid string) {
+		if stream == nil {
+			return
+		}
+		// 1.5s ceiling: prewarm must NEVER block real traffic. Anything
+		// slower than that is failing for reasons (auth / quota /
+		// network) we can't fix from a warmup goroutine.
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		t0 := time.Now()
+		// "嗯" — single rune, valid syllable, will produce a few ms of PCM
+		// then the SDK hangs up. We only care that the WS handshake +
+		// auth happened; output is intentionally discarded by no-op cb.
+		err := stream.SynthesizeStream(ctx, "嗯", func(_ []byte) error {
+			// First PCM frame received → handshake done. Cancel the
+			// context to short-circuit the rest of the synthesis so
+			// the SDK doesn't waste server-side time on audio we
+			// won't use.
+			cancel()
+			return nil
+		})
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			logger.Warn("voicedialog gateway tts prewarm failed",
+				zap.String(KeyCallID, cid),
+				zap.String("provider", provider),
+				zap.Duration("elapsed", time.Since(t0)),
+				zap.Error(err),
+			)
+			return
+		}
+		logger.Info("voicedialog gateway tts prewarm done",
+			zap.String(KeyCallID, cid),
+			zap.String("provider", provider),
+			zap.Duration("elapsed", time.Since(t0)),
+		)
+	}(ttsStream, string(handle.Service.Provider()), sess.meta.CallID)
 
 	var ttsPlaying atomic.Bool
 	var ttsStartedAtNS atomic.Int64
@@ -180,6 +221,43 @@ func attachGatewayMedia(sess *dialogSession) error {
 		trimmed := strings.TrimSpace(text)
 		if trimmed == "" {
 			return
+		}
+		// ASR-driven barge-in. The RMS-VAD path above only fires for
+		// loud speech (configurable threshold, 3200 by default) — soft
+		// callers / phones with AGC normalisation can drop below that
+		// while still producing a perfectly clear ASR transcript. If
+		// the recogniser is emitting words while TTS is playing, the
+		// AI is talking over the caller; cancel it immediately.
+		//
+		// Mirrors the VAD path's 700ms post-start grace so a final
+		// transcript landing in the same tick as a tts.started doesn't
+		// kill the reply we just queued.
+		if ttsPlaying.Load() {
+			pastGrace := true
+			if started := ttsStartedAtNS.Load(); started > 0 && time.Since(time.Unix(0, started)) < 700*time.Millisecond {
+				pastGrace = false
+			}
+			if pastGrace {
+				voiceMetrics.BargeIn("sip")
+				logger.Info("voicedialog gateway interrupt (ASR barge-in)",
+					zap.String(KeyCallID, callID),
+					zap.Bool("final", isFinal),
+					zap.String("text_preview", truncateRunes(trimmed, 60)),
+				)
+				sess.invalidateQueuedTTS()
+				sess.cancelCurrentTTSSegment()
+				if cs := sess.cs; cs != nil {
+					if m := cs.MediaSession(); m != nil {
+						m.DrainOutputs()
+					}
+				}
+				sess.emitGateway(event(EvInterrupt, callID, map[string]any{
+					KeyOrigin: OriginGateway,
+					KeyCause:  CauseBargeIn,
+				}))
+				ttsPlaying.Store(false)
+				ttsStartedAtNS.Store(0)
+			}
 		}
 		if isFinal {
 			sess.setLastASRFinal(trimmed)
@@ -243,6 +321,11 @@ func attachGatewayMedia(sess *dialogSession) error {
 				// frame check and exits the in-flight segment.
 				sess.invalidateQueuedTTS()
 				sess.cancelCurrentTTSSegment()
+				// Drop PCM already sitting in the SIP RTP transport queue so
+				// the caller stops hearing the AI within ~one packet (20ms).
+				if m := ms; m != nil {
+					m.DrainOutputs()
+				}
 				sess.emitGateway(event(EvInterrupt, callID, map[string]any{
 					KeyOrigin: OriginGateway,
 					KeyCause:  CauseBargeIn,

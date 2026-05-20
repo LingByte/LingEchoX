@@ -279,6 +279,13 @@ func (sess *dialogSession) playSegment(
 		}
 	}()
 
+	// Preempt welcome playback the moment we're about to speak. The
+	// cancel + drain is idempotent and a no-op once welcome has ended,
+	// so it's safe to invoke at every segment start. This is what
+	// prevents the "two voices at once" symptom during the first reply
+	// of a call (see cancelWelcomePlayback for full rationale).
+	sess.cancelWelcomePlayback()
+
 	logger.Info("voicedialog gateway tts speak start",
 		zap.String(KeyCallID, callID),
 		zap.String(KeyUtteranceID, job.utteranceID),

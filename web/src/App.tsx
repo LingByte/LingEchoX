@@ -26,6 +26,7 @@ const Profile = lazy(() => import('@/pages/Profile'))
 const TenantDepartments = lazy(() => import('@/pages/TenantDepartments'))
 const TenantRolePermissions = lazy(() => import('@/pages/TenantRolePermissions'))
 const TenantManagement = lazy(() => import('@/pages/TenantManagement'))
+const TenantAiConfig = lazy(() => import('@/pages/TenantAiConfig'))
 const TenantMembers = lazy(() => import('@/pages/TenantMembers'))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -101,6 +102,16 @@ function App() {
                         <RequireAuth>
                           <RequirePlatform>
                             <TenantManagement />
+                          </RequirePlatform>
+                        </RequireAuth>
+                      }
+                    />
+                    <Route
+                      path="/tenant-management/:tenantId/ai"
+                      element={
+                        <RequireAuth>
+                          <RequirePlatform>
+                            <TenantAiConfig />
                           </RequirePlatform>
                         </RequireAuth>
                       }

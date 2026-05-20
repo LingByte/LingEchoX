@@ -112,6 +112,13 @@ type tenantPlatformUpdateReq struct {
 	AsrConfig    *json.RawMessage `json:"asrConfig"`
 	TtsConfig    *json.RawMessage `json:"ttsConfig"`
 	LlmConfig    *json.RawMessage `json:"llmConfig"`
+	// VoiceMode flips the SIP voice attach kind: "pipeline" (3-layer) or
+	// "realtime" (single full-duplex WS via pkg/realtime). Empty string =
+	// no change, so callers can patch just credentials without flipping.
+	VoiceMode string `json:"voiceMode"`
+	// RealtimeConfig is the credential blob (provider + per-vendor
+	// fields) consulted only when voiceMode == "realtime".
+	RealtimeConfig *json.RawMessage `json:"realtimeConfig"`
 }
 
 func (h *Handlers) getTenant(c *gin.Context) {
@@ -201,8 +208,11 @@ func (h *Handlers) updateTenantPlatform(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	if req.AsrConfig != nil || req.TtsConfig != nil || req.LlmConfig != nil {
-		if err := models.PatchTenantAIConfigJSON(h.db, id, req.AsrConfig, req.TtsConfig, req.LlmConfig, op); err != nil {
+	if req.AsrConfig != nil || req.TtsConfig != nil || req.LlmConfig != nil ||
+		req.RealtimeConfig != nil || strings.TrimSpace(req.VoiceMode) != "" {
+		if err := models.PatchTenantAIConfigJSON(h.db, id,
+			req.AsrConfig, req.TtsConfig, req.LlmConfig, req.RealtimeConfig,
+			req.VoiceMode, op); err != nil {
 			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 			return
 		}

@@ -369,6 +369,10 @@ func New(cfg Config) *SIPServer {
 			// the calls_total status enum.
 			callID := strings.TrimSpace(msg.GetHeader("Call-ID"))
 			markInboundCallEnded(callID, classToCallEndedStatus(reasonClass))
+			// Inbound CDR: emit one JSON-Lines row per completed call.
+			// No-op if CDR sink was never set.
+			_, rawReasonText := classifyBYEReason(msg)
+			trackInboundCallEnd(callID, "remote", reasonClass, rawReasonText)
 		}
 		return resp
 	})
@@ -1255,6 +1259,13 @@ func (s *SIPServer) handleAck(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 		// Active-calls gauge: bump on the first ACK we see for this
 		// Call-ID. Idempotent against ACK retransmits.
 		markInboundCallStarted(callID)
+		// Inbound CDR: stamp the start moment so end-of-call emits a
+		// JSON-Lines row into the configured sink. No-op when CDR is
+		// disabled (sink unset). Codec is the negotiated one; from /
+		// to are stored in inviteBrief.
+		cdrFromH, cdrToH, _ := s.peekInviteBrief(callID)
+		cdrCodec := strings.ToLower(cs.SourceCodec().Codec)
+		trackInboundCallStart(callID, cdrCodec, cdrFromH, cdrToH, "", 0)
 		cs.StartOnACK()
 	}
 	// ACK has no SIP response.

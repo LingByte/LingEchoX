@@ -9,33 +9,22 @@ import {
   Select,
   Space,
   Table,
-  Tabs,
   Typography,
 } from '@arco-design/web-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import BaseLayout from '@/components/Layout/BaseLayout'
 import {
   createTenantPlatform,
   deleteTenantPlatform,
-  getTenant,
   listTenants,
   updateTenantPlatform,
   type TenantRow,
 } from '@/api/tenants'
-import {
-  type AiTab,
-  defaultDraft,
-  draftToPayload,
-  normalizeDraft,
-  providerRulesFor,
-  ruleFor,
-  validateDraft,
-} from '@/constants/tenantAiConfigRules'
 
 const FormItem = Form.Item
-const TabPane = Tabs.TabPane
 
 export default function TenantManagement() {
+  const navigate = useNavigate()
   const [rows, setRows] = useState<TenantRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -49,15 +38,6 @@ export default function TenantManagement() {
   const [editOpen, setEditOpen] = useState(false)
   const [editForm] = Form.useForm()
   const [editing, setEditing] = useState<TenantRow | null>(null)
-
-  const [aiOpen, setAiOpen] = useState(false)
-  const [aiInitLoading, setAiInitLoading] = useState(false)
-  const [aiSaveLoading, setAiSaveLoading] = useState(false)
-  const [aiRow, setAiRow] = useState<TenantRow | null>(null)
-  const [aiTab, setAiTab] = useState<AiTab>('asr')
-  const [draftAsr, setDraftAsr] = useState<Record<string, unknown>>(() => defaultDraft('asr'))
-  const [draftTts, setDraftTts] = useState<Record<string, unknown>>(() => defaultDraft('tts'))
-  const [draftLlm, setDraftLlm] = useState<Record<string, unknown>>(() => defaultDraft('llm'))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -77,79 +57,6 @@ export default function TenantManagement() {
   useEffect(() => {
     void load()
   }, [load])
-
-  const openAiModal = async (row: TenantRow) => {
-    setAiRow(row)
-    setAiTab('asr')
-    setAiOpen(true)
-    setAiInitLoading(true)
-    try {
-      const r = await getTenant(row.id)
-      if (r.code !== 200 || !r.data?.tenant) {
-        Message.error(r.msg || '加载租户失败')
-        setAiOpen(false)
-        return
-      }
-      const t = r.data.tenant
-      setDraftAsr(normalizeDraft('asr', t.asrConfig))
-      setDraftTts(normalizeDraft('tts', t.ttsConfig))
-      setDraftLlm(normalizeDraft('llm', t.llmConfig))
-    } finally {
-      setAiInitLoading(false)
-    }
-  }
-
-  const renderAiFields = (
-    tab: AiTab,
-    draft: Record<string, unknown>,
-    setDraft: (next: Record<string, unknown>) => void,
-  ) => {
-    const provider = String(draft.provider ?? '')
-    const def = ruleFor(tab, provider)
-    const opts = providerRulesFor(tab).map((x) => ({ value: x.provider, label: x.label }))
-    return (
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
-        <div>
-          <Typography.Text style={{ display: 'block', marginBottom: 6 }}>厂商（provider）</Typography.Text>
-          <Select
-            style={{ width: '100%' }}
-            value={provider}
-            options={opts}
-            onChange={(v) => setDraft({ ...defaultDraft(tab), provider: String(v) })}
-          />
-        </div>
-        {def?.fields.map((f) => (
-          <div key={f.key}>
-            <Typography.Text style={{ display: 'block', marginBottom: 6 }}>
-              {f.label}
-              {f.required ? ' *' : ''}
-            </Typography.Text>
-            {f.type === 'password' ? (
-              <Input.Password
-                autoComplete="new-password"
-                placeholder={f.placeholder}
-                value={String(draft[f.key] ?? '')}
-                onChange={(val) => setDraft({ ...draft, [f.key]: val })}
-              />
-            ) : f.type === 'number' ? (
-              <Input
-                type="number"
-                placeholder={f.placeholder}
-                value={draft[f.key] === undefined || draft[f.key] === '' ? '' : String(draft[f.key])}
-                onChange={(val) => setDraft({ ...draft, [f.key]: val })}
-              />
-            ) : (
-              <Input
-                placeholder={f.placeholder}
-                value={String(draft[f.key] ?? '')}
-                onChange={(val) => setDraft({ ...draft, [f.key]: val })}
-              />
-            )}
-          </div>
-        ))}
-      </Space>
-    )
-  }
 
   return (
     <BaseLayout
@@ -228,7 +135,11 @@ export default function TenantManagement() {
                     >
                       编辑
                     </Button>
-                    <Button type="text" size="mini" onClick={() => void openAiModal(row)}>
+                    <Button
+                      type="text"
+                      size="mini"
+                      onClick={() => navigate(`/tenant-management/${row.id}/ai`)}
+                    >
                       AI 配置
                     </Button>
                     <Button
@@ -363,58 +274,6 @@ export default function TenantManagement() {
         </Form>
       </Modal>
 
-      <Modal
-        title={aiRow ? `AI 密钥与模型 — ${aiRow.name}` : 'AI 配置'}
-        style={{ width: 560 }}
-        visible={aiOpen}
-        confirmLoading={aiSaveLoading}
-        okButtonProps={{ disabled: aiInitLoading }}
-        onCancel={() => setAiOpen(false)}
-        onOk={async () => {
-          if (!aiRow) return
-          const e1 = validateDraft('asr', draftAsr)
-          const e2 = validateDraft('tts', draftTts)
-          const e3 = validateDraft('llm', draftLlm)
-          const err = e1 || e2 || e3
-          if (err) {
-            Message.error(err)
-            return
-          }
-          setAiSaveLoading(true)
-          try {
-            const r = await updateTenantPlatform(aiRow.id, {
-              asrConfig: draftToPayload('asr', draftAsr),
-              ttsConfig: draftToPayload('tts', draftTts),
-              llmConfig: draftToPayload('llm', draftLlm),
-            })
-            if (r.code !== 200) {
-              Message.error(r.msg || '保存失败')
-              return
-            }
-            Message.success('已保存 AI 配置')
-            setAiOpen(false)
-            await load()
-          } finally {
-            setAiSaveLoading(false)
-          }
-        }}
-      >
-        {aiInitLoading ? (
-          <Typography.Paragraph style={{ margin: 24, textAlign: 'center' }}>加载租户配置…</Typography.Paragraph>
-        ) : (
-          <Tabs activeTab={aiTab} onChange={(k) => setAiTab(k as AiTab)}>
-            <TabPane key="asr" title="ASR">
-              {renderAiFields('asr', draftAsr, setDraftAsr)}
-            </TabPane>
-            <TabPane key="tts" title="TTS">
-              {renderAiFields('tts', draftTts, setDraftTts)}
-            </TabPane>
-            <TabPane key="llm" title="LLM">
-              {renderAiFields('llm', draftLlm, setDraftLlm)}
-            </TabPane>
-          </Tabs>
-        )}
-      </Modal>
     </BaseLayout>
   )
 }

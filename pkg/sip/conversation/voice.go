@@ -93,6 +93,25 @@ type VoiceEnv struct {
 	TTSVoiceType  int64
 	TTSSpeed      int64
 	TTSSampleRate int
+	// TTSConfigRaw is the full tenant TTS JSON (provider + per-vendor fields)
+	// passed through to synthesizer.NewStreamingFromCredential. Tenant-stored
+	// config is the source of truth; the typed fields above are kept only for
+	// QCloud-specific tweaks (voiceType/speed) and legacy callers.
+	TTSConfigRaw map[string]any
+
+	// VoiceMode selects which SIP voice attach path runs:
+	//   "pipeline"  — legacy 3-layer ASR → LLM → TTS (default; everything
+	//                 above is consulted)
+	//   "realtime"  — single full-duplex multimodal model wired through
+	//                 pkg/realtime (RealtimeConfigRaw is consulted)
+	// Empty defaults to "pipeline".
+	VoiceMode string
+	// RealtimeProvider is a denormalised copy of RealtimeConfigRaw["provider"]
+	// for cheap readiness checks; all real provisioning reads RealtimeConfigRaw.
+	RealtimeProvider string
+	// RealtimeConfigRaw is the full tenant realtime JSON (provider +
+	// per-vendor fields), passed through to realtime.NewAgentFromCredential.
+	RealtimeConfigRaw map[string]any
 }
 
 // sipVoicePCMBridgeRate is the negotiated PCM rate between RTP decode and encode (must match MediaSession).
@@ -107,11 +126,18 @@ func sipVoicePCMBridgeRate(cs *sipSession.CallSession) int {
 	return sr
 }
 
-// sipVoiceTTSCloudSampleRate chooses QCloud output rate; when TTS_SAMPLE_RATE is unset, match the SIP PCM bridge.
-func sipVoiceTTSCloudSampleRate(env VoiceEnv, pcmBridgeSR int) int {
-	sr := env.TTSSampleRate
-	if sr > 0 {
-		return sr
+// sipVoiceTTSCloudSampleRate chooses the cloud-side output sample rate.
+//
+//   - When tenant TTS JSON pins `sampleRate`, honor it.
+//   - Else trust the resolved synthesizer's native rate (e.g. Aliyun Qwen-TTS
+//     emits 24 kHz; QCloud can match the bridge directly).
+//   - Else fall back to the SIP PCM bridge rate (8/16 kHz).
+func sipVoiceTTSCloudSampleRate(env VoiceEnv, synthRate, pcmBridgeSR int) int {
+	if env.TTSSampleRate > 0 {
+		return env.TTSSampleRate
+	}
+	if synthRate > 0 {
+		return synthRate
 	}
 	if pcmBridgeSR > 0 {
 		return pcmBridgeSR
@@ -142,7 +168,7 @@ func VoiceEnvFromProcess() VoiceEnv {
 	if apiKey == "" && strings.EqualFold(provider, "alibaba") {
 		apiKey = utils.GetEnv("ALIBABA_AI_API_KEY")
 	}
-	return VoiceEnv{
+	env := VoiceEnv{
 		LLMProvider: provider,
 		LLMBaseURL:  utils.GetEnv("LLM_BASEURL"),
 		LLMAppID:    appID,
@@ -154,6 +180,7 @@ func VoiceEnvFromProcess() VoiceEnv {
 		ASRSecretKey: utils.GetEnv("ASR_SECRET_KEY"),
 		ASRModelType: utils.GetEnv("ASR_MODEL_TYPE"),
 
+		TTSProvider:   "qcloud",
 		TTSAppID:      utils.GetEnv("TTS_APPID"),
 		TTSSecretID:   utils.GetEnv("TTS_SECRET_ID"),
 		TTSSecretKey:  utils.GetEnv("TTS_SECRET_KEY"),
@@ -161,6 +188,25 @@ func VoiceEnvFromProcess() VoiceEnv {
 		TTSSpeed:      ttsSpeed,
 		TTSSampleRate: sr,
 	}
+	// Synthesize a TTSConfigRaw map so legacy env-driven callers can use
+	// the same provider-agnostic factory the tenant path uses.
+	raw := map[string]any{
+		"provider":  "qcloud",
+		"appId":     env.TTSAppID,
+		"secretId":  env.TTSSecretID,
+		"secretKey": env.TTSSecretKey,
+	}
+	if env.TTSVoiceType != 0 {
+		raw["voiceType"] = env.TTSVoiceType
+	}
+	if env.TTSSpeed != 0 {
+		raw["speed"] = env.TTSSpeed
+	}
+	if env.TTSSampleRate > 0 {
+		raw["sampleRate"] = env.TTSSampleRate
+	}
+	env.TTSConfigRaw = raw
+	return env
 }
 
 // llmAPIURLForProvider returns the apiUrl argument for llm.NewLLMProvider (OpenAI-compatible base URL or Alibaba App ID).
@@ -211,11 +257,40 @@ func AttachVoicePipeline(ctx context.Context, cs *sipSession.CallSession, lg *za
 		lg.Info("sip voice tenant row missing or loader not ok", zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid))
 		return attachTenantConfigErrorPlayback(cs, lg)
 	}
-	if !TenantVoiceReady(env) {
-		lg.Info("sip voice tenant AI config incomplete or unsupported ASR/TTS provider for embedded pipeline",
+	// Last-mile mode normalization: if voice_mode persisted as "pipeline"
+	// (column default after AutoMigrate added the column for legacy rows)
+	// but pipeline credentials are unusable AND realtime credentials are
+	// valid, prefer realtime instead of bouncing to config_error.wav. The
+	// operator clearly filled in realtime — honoring that intent is much
+	// better UX than failing on a stale schema-default value.
+	if strings.EqualFold(env.VoiceMode, "pipeline") && !pipelineCredsUsable(env) && TenantRealtimeReady(env) {
+		lg.Warn("sip voice: pipeline credentials missing but realtime config present — auto-selecting realtime mode (please save tenant settings to persist voice_mode=realtime)",
 			zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid),
-			zap.String("asr_provider", env.ASRProvider), zap.String("tts_provider", env.TTSProvider),
-			zap.String("llm_provider", env.LLMProvider))
+			zap.String("realtime_provider", env.RealtimeProvider),
+		)
+		env.VoiceMode = "realtime"
+	}
+	if !TenantVoiceReady(env) {
+		// Per-mode diagnostic: report the right credential set so the
+		// operator doesn't have to grep "ASR/TTS/LLM" when they wired
+		// up realtime mode. The voice_mode field is included on every
+		// path so the runtime mode is obvious in logs.
+		if strings.EqualFold(env.VoiceMode, "realtime") {
+			lg.Info("sip voice tenant realtime config incomplete (missing apiKey / provider in realtime_config JSON)",
+				zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid),
+				zap.String("voice_mode", env.VoiceMode),
+				zap.String("realtime_provider", env.RealtimeProvider),
+				zap.Bool("realtime_config_present", len(env.RealtimeConfigRaw) > 0),
+			)
+		} else {
+			lg.Info("sip voice tenant pipeline config incomplete or unsupported ASR/TTS provider",
+				zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid),
+				zap.String("voice_mode", env.VoiceMode),
+				zap.String("asr_provider", env.ASRProvider),
+				zap.String("tts_provider", env.TTSProvider),
+				zap.String("llm_provider", env.LLMProvider),
+			)
+		}
 		return attachTenantConfigErrorPlayback(cs, lg)
 	}
 
@@ -240,39 +315,6 @@ func sipHangupPhrasesFromEnv() []string {
 		return []string{"再见", "拜拜"}
 	}
 	return out
-}
-
-// sipASRTriggerPartialEnabled controls whether non-final ASR hypotheses can trigger LLM.
-// Default false to avoid premature responses ("抢话") that sound like stutter/choppy dialog.
-func sipASRTriggerPartialEnabled() bool {
-	v := strings.ToLower(utils.GetEnv("SIP_ASR_TRIGGER_PARTIAL"))
-	switch v {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-// sipASRPartialTimeoutMs is a fallback when providers keep emitting partial
-// hypotheses but delay/omit final marks on noisy phone lines.
-// <=0 disables timeout trigger.
-func sipASRPartialTimeoutMs() int {
-	s := utils.GetEnv("SIP_ASR_PARTIAL_TIMEOUT_MS")
-	if s == "" {
-		return 1200
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 1200
-	}
-	if n <= 0 {
-		return 0
-	}
-	if n < 300 {
-		return 300
-	}
-	return n
 }
 
 // welcomeWaitFirstRTPMs is how long we wait for the first inbound RTP datagram before playing the welcome clip.
@@ -322,6 +364,14 @@ func waitFirstRTPBeforeWelcome(ctx context.Context, cs *sipSession.CallSession, 
 }
 
 func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env VoiceEnv, lg *zap.Logger) error {
+	// Realtime multimodal mode (Qwen-Omni / GPT-4o realtime / …) bypasses
+	// the entire 3-layer pipeline below. The realtime attach path is a
+	// peer of attachVoiceInner — it provisions a single full-duplex WS
+	// agent and reuses the same ms.SendToOutput / cs.WriteAIPCM / barge-in
+	// / transfer plumbing the legacy path uses.
+	if strings.EqualFold(env.VoiceMode, "realtime") {
+		return attachRealtimeVoiceInner(ctx, cs, env, lg)
+	}
 	ms := cs.MediaSession()
 	if ms == nil {
 		return fmt.Errorf("sip conversation: nil media session")
@@ -341,7 +391,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		asrInRate = 16000
 	}
 	pcmBridgeSR := sipVoicePCMBridgeRate(cs)
-	ttsCloudSR := sipVoiceTTSCloudSampleRate(env, pcmBridgeSR)
 
 	pipe, err := sipasr.New(sipasr.Options{
 		ASR:        asrSvc,
@@ -352,6 +401,16 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	if err != nil {
 		return fmt.Errorf("sip conversation: asr pipeline: %w", err)
 	}
+
+	// Provider-agnostic TTS: same factory used by voicedialog gateway.
+	if env.TTSConfigRaw == nil {
+		return fmt.Errorf("sip conversation: tenant TTS config missing")
+	}
+	ttsHandle, err := synthesizer.NewStreamingFromCredential(env.TTSConfigRaw)
+	if err != nil {
+		return fmt.Errorf("sip conversation: tts provider: %w", err)
+	}
+	ttsCloudSR := sipVoiceTTSCloudSampleRate(env, ttsHandle.SampleRate, pcmBridgeSR)
 
 	llmModel := env.LLMModel
 	if llmModel == "" {
@@ -400,14 +459,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		)
 	}
 
-	voiceType := env.TTSVoiceType
-	if voiceType == 0 {
-		voiceType = 101007 // 知性女声（智娜）
-	}
-	ttsCfg := synthesizer.NewQcloudTTSConfig(env.TTSAppID, env.TTSSecretID, env.TTSSecretKey, voiceType, "pcm", ttsCloudSR)
-	ttsCfg.Speed = env.TTSSpeed
-	qcTTS := synthesizer.NewQCloudService(ttsCfg)
-	ttsStream := &qcloudTTSStream{svc: qcTTS}
+	ttsStream := ttsHandle.Stream
 	scriptMode := isSIPScriptMode(cs.CallID)
 	if scriptMode {
 		lg.Info("sip voice: script mode enabled (suppress built-in welcome and auto TTS reply)",
@@ -418,16 +470,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	inFlight := false
 	asrState := NewASRStateManager()
 	hotwordCorrector := NewSIPHotwordCorrector(lg)
-	partialTimeoutMs := sipASRPartialTimeoutMs()
-	var partialMu sync.Mutex
-	var partialTimer *time.Timer
-	var pendingPartial string
-	// When partial-timeout already ran LLM+TTS for text T, ASR often sends final with the same T;
-	// skipping the second trigger avoids duplicate user turns in LLM history and extra latency.
-	var partialTimeoutDoneMu sync.Mutex
-	var partialTimeoutDoneText string
-	var partialTimeoutDoneAt time.Time
-	const partialTimeoutFinalDedupeWindow = 12 * time.Second
 	ttsPipe, err := siptts.New(siptts.Config{
 		Service:       ttsStream,
 		SampleRate:    ttsCloudSR,
@@ -597,12 +639,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				lg.Warn("sip voice llm/tts", zap.Error(err))
 				return
 			}
-			if !scriptMode && trigger == "partial-timeout" {
-				partialTimeoutDoneMu.Lock()
-				partialTimeoutDoneText = userText
-				partialTimeoutDoneAt = time.Now()
-				partialTimeoutDoneMu.Unlock()
-			}
 			reply = normalizeTTSText(reply)
 			if scriptMode {
 				// In script mode, output is controlled by script steps (say/llm_reply). Do not auto-play here.
@@ -656,22 +692,23 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		if ms == nil || ms.GetContext().Err() != nil {
 			return
 		}
-		// 转人工后 ASR 文本一律丢弃：不更新 asrState、不重置 partial timer，
-		// 避免转接期间累积的句子在通话结束前突然把一段话喂给 LLM。
+		// 转人工后 ASR 文本一律丢弃，避免转接期间的累积文本在通话结束前突然喂给 LLM。
 		if IsTransferInProgress(cs.CallID) {
-			partialMu.Lock()
-			pendingPartial = ""
-			if partialTimer != nil {
-				partialTimer.Stop()
-			}
-			partialMu.Unlock()
+			return
+		}
+		// Partial ASR hypotheses are intentionally discarded — only the
+		// `final` mark triggers an LLM turn. QCloud's sentence-end
+		// detector is fast enough (typically 400-800 ms after the user
+		// finishes a phrase) that the previous partial-timeout fallback
+		// only added duplicate turns and zero perceivable latency win.
+		if !isFinal {
 			return
 		}
 		trimmed := strings.TrimSpace(text)
 		if trimmed == "" {
 			return
 		}
-		incremental := asrState.UpdateASRText(trimmed, isFinal)
+		incremental := asrState.UpdateASRText(trimmed, true)
 		if incremental == "" {
 			return
 		}
@@ -693,66 +730,12 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 			lg.Debug("sip voice asr skip filler-only", zap.String("text", incremental))
 			return
 		}
-		if isFinal {
-			partialMu.Lock()
-			pendingPartial = ""
-			if partialTimer != nil {
-				partialTimer.Stop()
-			}
-			partialMu.Unlock()
-			partialTimeoutDoneMu.Lock()
-			prevT := partialTimeoutDoneText
-			prevAt := partialTimeoutDoneAt
-			partialTimeoutDoneMu.Unlock()
-			if prevT != "" && corrected == prevT && time.Since(prevAt) < partialTimeoutFinalDedupeWindow {
-				lg.Info("sip voice asr skip duplicate final (same text as recent partial-timeout turn)",
-					zap.String("call_id", cs.CallID),
-					zap.Int("text_runes", len([]rune(corrected))),
-				)
-				return
-			}
-			triggerTurn(corrected, true, "final")
-			return
-		}
-		if sipASRTriggerPartialEnabled() {
-			triggerTurn(corrected, false, "partial")
-			return
-		}
-		if partialTimeoutMs <= 0 {
-			return
-		}
-		partialMu.Lock()
-		pendingPartial = corrected
-		if partialTimer == nil {
-			partialTimer = time.AfterFunc(time.Duration(partialTimeoutMs)*time.Millisecond, func() {
-				partialMu.Lock()
-				text := strings.TrimSpace(pendingPartial)
-				pendingPartial = ""
-				partialMu.Unlock()
-				if text == "" {
-					return
-				}
-				triggerTurn(text, false, "partial-timeout")
-			})
-		} else {
-			partialTimer.Reset(time.Duration(partialTimeoutMs) * time.Millisecond)
-		}
-		partialMu.Unlock()
+		triggerTurn(corrected, true, "final")
 	})
 
 	pipe.SetErrorCallback(func(err error, fatal bool) {
 		lg.Warn("sip voice asr", zap.Error(err), zap.Bool("fatal", fatal))
 	})
-
-	go func() {
-		<-ms.GetContext().Done()
-		partialMu.Lock()
-		pendingPartial = ""
-		if partialTimer != nil {
-			partialTimer.Stop()
-		}
-		partialMu.Unlock()
-	}()
 
 	proc := media.NewPacketProcessor("sip-voice-asr-feed", media.PriorityHigh,
 		func(c context.Context, _ *media.MediaSession, packet media.MediaPacket) error {
@@ -1183,26 +1166,16 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 	if !loaded {
 		return fmt.Errorf("sip conversation: missing tenant voice config")
 	}
-	tsp := strings.ToLower(strings.TrimSpace(env.TTSProvider))
-	if tsp == "" {
-		tsp = "qcloud"
+	if env.TTSConfigRaw == nil {
+		return fmt.Errorf("sip conversation: missing tenant TTS config")
 	}
-	if tsp != "qcloud" {
-		return fmt.Errorf("sip conversation: Say step supports qcloud TTS only (tenant ttsConfig.provider)")
-	}
-	if env.TTSAppID == "" || env.TTSSecretID == "" || env.TTSSecretKey == "" {
-		return fmt.Errorf("sip conversation: missing tenant TTS credentials")
+	ttsHandle, err := synthesizer.NewStreamingFromCredential(env.TTSConfigRaw)
+	if err != nil {
+		return fmt.Errorf("sip conversation: tts provider: %w", err)
 	}
 	pcmBridgeSR := sipVoicePCMBridgeRate(cs)
-	ttsCloudSR := sipVoiceTTSCloudSampleRate(env, pcmBridgeSR)
-	voiceType := env.TTSVoiceType
-	if voiceType == 0 {
-		voiceType = 101007 // 知性女声（智娜）
-	}
-	ttsCfg := synthesizer.NewQcloudTTSConfig(env.TTSAppID, env.TTSSecretID, env.TTSSecretKey, voiceType, "pcm", ttsCloudSR)
-	ttsCfg.Speed = env.TTSSpeed
-	qcTTS := synthesizer.NewQCloudService(ttsCfg)
-	ttsStream := &qcloudTTSStream{svc: qcTTS}
+	ttsCloudSR := sipVoiceTTSCloudSampleRate(env, ttsHandle.SampleRate, pcmBridgeSR)
+	ttsStream := ttsHandle.Stream
 
 	ttsPipe, err := siptts.New(siptts.Config{
 		Service:       ttsStream,
@@ -1252,24 +1225,6 @@ func SpeakTextOnce(ctx context.Context, cs *sipSession.CallSession, text string,
 	// here drains the only residual (sub-frame tail of `text`). Without
 	// it the very last <20ms of the script's audio would be discarded.
 	return ttsPipe.Finalize()
-}
-
-// qcloudTTSStream adapts synthesizer.QCloudService to siptts.Service (streaming PCM chunks).
-type qcloudTTSStream struct {
-	svc *synthesizer.QCloudService
-}
-
-func (q *qcloudTTSStream) SynthesizeStream(ctx context.Context, text string, callback func(pcm []byte) error) error {
-	if q == nil || q.svc == nil {
-		return fmt.Errorf("sip conversation: nil tts")
-	}
-	// 走 WS 路径，首字节比 HTTPS 低 50~150ms。barge-in 通过 ctx 取消触发 SDK CloseConn。
-	return q.svc.SynthesizeStream(ctx, text, func(pcm []byte) error {
-		if len(pcm) == 0 {
-			return nil
-		}
-		return callback(pcm)
-	})
 }
 
 // isFillerOnlyUtterance filters hesitation sounds that real-time ASR often emits on noisy or low-volume audio.

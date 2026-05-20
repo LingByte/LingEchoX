@@ -87,9 +87,34 @@ func AttachInbound(_ context.Context, cs *sipSession.CallSession, meta InboundMe
 // AttachInboundVoiceDialog registers the voicedialog gateway on this inbound leg: SIP does RTP/PCM,
 // ASR/TTS on the gateway; dialogue uses HTTP WebSocket (loopback and/or external clients).
 // Call from SIP ACK handling (pkg/sip/server).
+//
+// Realtime-mode tenants bypass the gateway entirely and go through the
+// embedded SIP voice path (`conversation.AttachVoicePipeline`), which
+// dispatches to `attachRealtimeVoiceInner`. The voicedialog gateway WS
+// protocol assumes the client drives turns via tts.speak — realtime
+// providers (Qwen-Omni, GPT-4o realtime) generate replies internally,
+// so there is no per-segment surface for the gateway to forward. Until
+// the gateway protocol is extended to passthrough omni events, the
+// embedded path is the right home for realtime calls.
 func AttachInboundVoiceDialog(ctx context.Context, cs *sipSession.CallSession, from, to, remote, customVoiceWSURL string) error {
 	if cs == nil {
 		return nil
+	}
+	// Tenant voice-mode dispatch: when the tenant is on realtime mode,
+	// skip the gateway and run the embedded pipeline. This is the same
+	// `AttachVoicePipeline` outbound calls already use, which has its
+	// own `voiceMode == "realtime"` branch and runs Qwen-Omni etc.
+	if voiceEnv, loaded, err := conversation.ResolveTenantVoiceEnv(ctx, cs); err == nil && loaded {
+		realtime := strings.EqualFold(voiceEnv.VoiceMode, "realtime") ||
+			(voiceEnv.VoiceMode == "" && conversation.TenantRealtimeReady(voiceEnv))
+		if realtime {
+			logger.Info("voicedialog: tenant on realtime mode → delegating to embedded SIP voice (gateway protocol bypassed)",
+				zap.String(KeyCallID, cs.CallID),
+				zap.String("realtime_provider", voiceEnv.RealtimeProvider),
+			)
+			lg := logger.Lg
+			return conversation.AttachVoicePipeline(ctx, cs, lg)
+		}
 	}
 	meta := InboundMeta{
 		CallID:           cs.CallID,
@@ -152,6 +177,27 @@ func writeJSONDeadline(c *websocket.Conn, v any) error {
 	return c.WriteJSON(v)
 }
 
+// writeJSON serialises writes to the session's current WebSocket conn.
+// This is the ONLY path that may write to sess.conn from goroutines
+// other than the read loop (TTS player, media barge-in, endCall). The
+// raw `writeJSONDeadline(sess.conn, …)` form is unsafe — see writeMu
+// doc in types.go and the gorilla/websocket concurrent-write panic.
+func (sess *dialogSession) writeJSON(v any) error {
+	if sess == nil {
+		return errors.New("nil session")
+	}
+	sess.writeMu.Lock()
+	defer sess.writeMu.Unlock()
+	sess.mu.Lock()
+	c := sess.conn
+	sess.mu.Unlock()
+	if c == nil {
+		return errors.New("nil conn")
+	}
+	_ = c.SetWriteDeadline(time.Now().Add(60 * time.Second))
+	return c.WriteJSON(v)
+}
+
 // EndCall tears down the bridge for callID (no SIP BYE unless caller invokes HangupInbound).
 func EndCall(callID string) {
 	if defaultHub == nil {
@@ -174,18 +220,23 @@ func (h *Hub) endCall(callID, reason string) {
 	}
 	sess.gatewayShutdown()
 	sess.mu.Lock()
-	if sess.conn != nil {
+	hasConn := sess.conn != nil
+	sess.mu.Unlock()
+	if hasConn {
 		logger.Info("voice dialog → ws call.ended",
 			zap.String(KeyCallID, callID),
 			zap.String(KeyReason, reason),
 		)
-		_ = writeJSONDeadline(sess.conn, event(EvCallEnded, callID, map[string]any{
+		_ = sess.writeJSON(event(EvCallEnded, callID, map[string]any{
 			KeyReason: reason,
 		}))
-		_ = sess.conn.Close()
-		sess.conn = nil
+		sess.mu.Lock()
+		if sess.conn != nil {
+			_ = sess.conn.Close()
+			sess.conn = nil
+		}
+		sess.mu.Unlock()
 	}
-	sess.mu.Unlock()
 	logger.Info("voicedialog session ended",
 		zap.String(KeyCallID, callID),
 		zap.String(KeyReason, reason),
@@ -332,7 +383,7 @@ func (h *Hub) runCallSocket(callID string, conn *websocket.Conn) {
 		KeyDownstreamCommands: downCmds,
 		KeyTS:                 tsRFC3339Nano(),
 	}
-	if err := writeJSONDeadline(conn, hello); err != nil {
+	if err := sess.writeJSON(hello); err != nil {
 		return
 	}
 	logger.Info("voice dialog → ws hello sent",
@@ -390,7 +441,7 @@ func (h *Hub) runCallSocket(callID string, conn *websocket.Conn) {
 			reason, _ := cmd[KeyReason].(string)
 			sess.handleInterruptFromWS(reason)
 		case CmdPing:
-			_ = writeJSONDeadline(conn, event(EvPong, callID, nil))
+			_ = sess.writeJSON(event(EvPong, callID, nil))
 		}
 	}
 }
@@ -511,11 +562,5 @@ func (sess *dialogSession) emitGateway(ev map[string]any) {
 		}
 	}
 
-	sess.mu.Lock()
-	c := sess.conn
-	sess.mu.Unlock()
-	if c == nil {
-		return
-	}
-	_ = writeJSONDeadline(c, ev)
+	_ = sess.writeJSON(ev)
 }

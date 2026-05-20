@@ -92,6 +92,29 @@ func waitFirstRTP(ctx context.Context, cs *sipSession.CallSession, waitMs int) {
 	}
 }
 
+// cancelWelcomePlayback preempts the welcome WAV (if still in flight)
+// AND drops any welcome PCM already queued in the SIP RTP transport.
+// Safe to call multiple times / when no welcome is active — both
+// operations are no-ops in that case. Used by the TTS player to ensure
+// welcome and the AI reply never overlap on the output stream.
+func (sess *dialogSession) cancelWelcomePlayback() {
+	if sess == nil {
+		return
+	}
+	sess.welcomeMu.Lock()
+	cancel := sess.welcomeCancel
+	sess.welcomeCancel = nil
+	sess.welcomeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if sess.cs != nil {
+		if ms := sess.cs.MediaSession(); ms != nil {
+			ms.DrainOutputs()
+		}
+	}
+}
+
 func (sess *dialogSession) runDialogWelcome() {
 	if sess == nil || sess.cs == nil {
 		return
@@ -132,7 +155,25 @@ func (sess *dialogSession) runDialogWelcome() {
 		return
 	}
 
-	ctx := ms.GetContext()
+	// Welcome playback runs on a ctx derived from the call ctx so the TTS
+	// player can preempt it the instant the AI is about to speak. Without
+	// this preemption, welcome SendToOutput continues alongside TTS
+	// SendToOutput on the same transport queue — the SIP peer plays an
+	// interleaved mash-up that sounds like "two voices talking at once"
+	// for ~1-3 seconds. See `cancelWelcomePlayback`.
+	ctx, welcomeCancel := context.WithCancel(ms.GetContext())
+	defer welcomeCancel()
+	sess.welcomeMu.Lock()
+	sess.welcomeCancel = welcomeCancel
+	sess.welcomeMu.Unlock()
+	defer func() {
+		sess.welcomeMu.Lock()
+		if sess.welcomeCancel != nil {
+			sess.welcomeCancel = nil
+		}
+		sess.welcomeMu.Unlock()
+	}()
+
 	sess.emitGateway(event(EvDialogWelcome, callID, map[string]any{
 		KeyPhase:      PhaseWelcomeStarted,
 		KeySourceKind: kind,

@@ -10,7 +10,7 @@ type DialogTurn struct {
 	ASRProvider string
 	TTSProvider string
 	LLMModel    string
-	// Trigger is how ASR fired this turn: final | partial | partial-timeout (script / partial ASR).
+	// Trigger is how ASR fired this turn (currently always "final"; legacy values may appear in historical rows).
 	Trigger string
 	// ScriptStepID / RouteIntent are optional (script routing, future hooks).
 	ScriptStepID string

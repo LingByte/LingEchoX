@@ -10,9 +10,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// TenantVoiceJSONLoader loads raw JSON blobs for one tenant (asr / tts / llm columns).
-// Wired from internal/sipserver (DB). Return ok=false when tenant row is missing.
-type TenantVoiceJSONLoader func(ctx context.Context, tenantID uint) (asr, tts, llm []byte, ok bool)
+// TenantVoiceJSONLoader loads raw JSON blobs for one tenant.
+//
+// `voiceMode` is the tenant's `voice_mode` column ("pipeline" or
+// "realtime"; empty defaults to pipeline). `realtime` is the
+// `realtime_config` JSON, only consulted when voiceMode == "realtime".
+//
+// Wired from internal/sipserver (DB). Return ok=false when tenant row is
+// missing — the call leg then falls back to env-driven config / playback.
+type TenantVoiceJSONLoader func(ctx context.Context, tenantID uint) (
+	asr, tts, llm, realtime []byte, voiceMode string, ok bool)
 
 var tenantVoiceJSONLoader TenantVoiceJSONLoader
 
@@ -78,8 +85,11 @@ func parseObj(raw []byte) (map[string]any, error) {
 	return m, nil
 }
 
-// VoiceEnvFromTenantJSON builds VoiceEnv from three tenant JSON blobs (no process env).
-func VoiceEnvFromTenantJSON(asrRaw, ttsRaw, llmRaw []byte) (VoiceEnv, error) {
+// VoiceEnvFromTenantJSON builds VoiceEnv from tenant JSON blobs (no
+// process env). `realtimeRaw` and `voiceMode` are honored only when
+// voiceMode == "realtime"; otherwise they're recorded but the SIP attach
+// path runs the legacy 3-layer pipeline.
+func VoiceEnvFromTenantJSON(asrRaw, ttsRaw, llmRaw, realtimeRaw []byte, voiceMode string) (VoiceEnv, error) {
 	var out VoiceEnv
 	am, err := parseObj(asrRaw)
 	if err != nil {
@@ -92,6 +102,42 @@ func VoiceEnvFromTenantJSON(asrRaw, ttsRaw, llmRaw []byte) (VoiceEnv, error) {
 	lm, err := parseObj(llmRaw)
 	if err != nil {
 		return out, err
+	}
+	rm, err := parseObj(realtimeRaw)
+	if err != nil {
+		return out, err
+	}
+	out.VoiceMode = strings.ToLower(strings.TrimSpace(voiceMode))
+	if len(rm) > 0 {
+		raw := make(map[string]any, len(rm))
+		for k, v := range rm {
+			raw[k] = v
+		}
+		out.RealtimeProvider = strings.ToLower(strings.TrimSpace(strFromMap(rm, "provider")))
+		if _, ok := raw["provider"]; !ok && out.RealtimeProvider != "" {
+			raw["provider"] = out.RealtimeProvider
+		}
+		out.RealtimeConfigRaw = raw
+	}
+	// VoiceMode inference. Three cases:
+	//
+	//  1. Explicit "realtime" / "pipeline" from DB column → trust it.
+	//  2. Empty AND realtime tab populated with credentials → infer
+	//     "realtime". This is the migration-resilient path: when the
+	//     `voice_mode` column hasn't been added yet (fresh deploy w/o
+	//     AutoMigrate restart, legacy row, manual DB import…) but the
+	//     operator already filled the realtime credentials, we must NOT
+	//     bounce the call to config_error.wav.
+	//  3. Empty AND realtime tab empty → "pipeline" (legacy default).
+	//
+	// Step 2 covers the user-reported regression: "选了多模态还是判到 ASR"
+	// when the column-default trip lands on empty string.
+	if out.VoiceMode == "" {
+		if TenantRealtimeReady(out) {
+			out.VoiceMode = "realtime"
+		} else {
+			out.VoiceMode = "pipeline"
+		}
 	}
 
 	out.ASRProvider = strings.ToLower(strings.TrimSpace(strFromMap(am, "provider")))
@@ -111,6 +157,20 @@ func VoiceEnvFromTenantJSON(asrRaw, ttsRaw, llmRaw []byte) (VoiceEnv, error) {
 		out.TTSSpeed = int64FromMap(tm, "speed")
 	}
 	out.TTSSampleRate = intFromMap(tm, "sampleRate", "sample_rate")
+	// Pass-through copy of the parsed TTS JSON. Downstream call sites feed
+	// this directly to synthesizer.NewStreamingFromCredential so any
+	// provider in TENANT_TTS_PROVIDER_RULES works without per-provider Go
+	// plumbing here.
+	if len(tm) > 0 {
+		raw := make(map[string]any, len(tm))
+		for k, v := range tm {
+			raw[k] = v
+		}
+		if _, ok := raw["provider"]; !ok && out.TTSProvider != "" {
+			raw["provider"] = out.TTSProvider
+		}
+		out.TTSConfigRaw = raw
+	}
 
 	out.LLMProvider = strings.ToLower(strings.TrimSpace(strFromMap(lm, "provider")))
 	out.LLMAPIKey = strFromMap(lm, "apiKey", "api_key")
@@ -144,17 +204,26 @@ func ResolveTenantVoiceEnv(ctx context.Context, cs *sipSession.CallSession) (Voi
 	if tid == 0 {
 		return VoiceEnv{}, false, nil
 	}
-	asr, tts, llm, ok := tenantVoiceJSONLoader(ctx, tid)
+	asr, tts, llm, realtime, voiceMode, ok := tenantVoiceJSONLoader(ctx, tid)
 	if !ok {
 		return VoiceEnv{}, false, nil
 	}
-	env, err := VoiceEnvFromTenantJSON(asr, tts, llm)
+	env, err := VoiceEnvFromTenantJSON(asr, tts, llm, realtime, voiceMode)
 	return env, true, err
 }
 
-// TenantVoiceReady reports whether env has the minimum fields for the **wired** SIP pipeline
-// (QCloud ASR + QCloud TTS + configured LLM). Other ASR/TTS providers in JSON are not executed here yet.
+// TenantVoiceReady reports whether env has the minimum fields for the
+// configured voice attach path:
+//
+//   - VoiceMode == "realtime": only RealtimeConfigRaw is consulted; the
+//     ASR/TTS/LLM tabs are intentionally bypassed because the realtime
+//     model collapses all three.
+//   - VoiceMode == "pipeline" (default): the legacy ASR + TTS + LLM
+//     readiness check.
 func TenantVoiceReady(env VoiceEnv) bool {
+	if strings.EqualFold(env.VoiceMode, "realtime") {
+		return TenantRealtimeReady(env)
+	}
 	asp := strings.ToLower(strings.TrimSpace(env.ASRProvider))
 	if asp == "" {
 		asp = "qcloud"
@@ -169,13 +238,213 @@ func TenantVoiceReady(env VoiceEnv) bool {
 	if tsp == "" {
 		tsp = "qcloud"
 	}
-	if tsp != "qcloud" {
-		return false
-	}
-	if env.TTSAppID == "" || env.TTSSecretID == "" || env.TTSSecretKey == "" {
+	// Per-provider readiness: any provider whose minimum credential fields
+	// are present in TTSConfigRaw qualifies. We intentionally avoid calling
+	// synthesizer.NewSynthesisServiceFromCredential here (it would open
+	// network handles); cheap field presence is enough as a gate, the
+	// factory will surface a typed error later if config is malformed.
+	if !ttsCredentialsReady(tsp, env) {
 		return false
 	}
 	return voiceEnvLLMReady(env)
+}
+
+// ttsCredentialsReady is a low-cost feasibility check for the configured
+// TTS provider. The exhaustive validation lives inside
+// synthesizer.NewSynthesisServiceFromCredential; this just rules out
+// obviously-empty configs so the call leg can fall back to the
+// `config_error.wav` playback instead of attempting and failing mid-call.
+func ttsCredentialsReady(provider string, env VoiceEnv) bool {
+	switch provider {
+	case "qcloud", "tencent":
+		return env.TTSAppID != "" && env.TTSSecretID != "" && env.TTSSecretKey != ""
+	case "aliyun", "dashscope", "qwen",
+		"qiniu", "openai", "elevenlabs", "fishspeech", "fishaudio",
+		"google", "minimax", "volcengine", "volcengine_stream", "volcengine_llm", "volcengine_clone":
+		// API-key-driven providers: require at least an apiKey field on the
+		// raw JSON (covers both camelCase / snake_case keys).
+		raw := env.TTSConfigRaw
+		if raw == nil {
+			return false
+		}
+		for _, k := range []string{"apiKey", "api_key"} {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					return true
+				}
+			}
+		}
+		return false
+	case "azure":
+		raw := env.TTSConfigRaw
+		if raw == nil {
+			return false
+		}
+		hasKey := false
+		hasRegion := false
+		for _, k := range []string{"subscriptionKey", "subscription_key", "apiKey", "api_key"} {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					hasKey = true
+				}
+			}
+		}
+		if v, ok := raw["region"]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				hasRegion = true
+			}
+		}
+		return hasKey && hasRegion
+	case "baidu":
+		raw := env.TTSConfigRaw
+		if raw == nil {
+			return false
+		}
+		// Baidu needs either `token` or `apiKey`+`secretKey` pair.
+		if v, ok := raw["token"]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return true
+			}
+		}
+		hasKey := false
+		hasSecret := false
+		for _, k := range []string{"apiKey", "api_key"} {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					hasKey = true
+				}
+			}
+		}
+		for _, k := range []string{"secretKey", "secret_key"} {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					hasSecret = true
+				}
+			}
+		}
+		return hasKey && hasSecret
+	case "xunfei":
+		raw := env.TTSConfigRaw
+		if raw == nil {
+			return false
+		}
+		needed := []string{"appId", "apiKey", "apiSecret"}
+		for _, k := range needed {
+			v, ok := raw[k]
+			if !ok {
+				// try snake_case alt
+				v, ok = raw[snakeCaseAlt(k)]
+				if !ok {
+					return false
+				}
+			}
+			s, ok := v.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return false
+			}
+		}
+		return true
+	case "aws":
+		raw := env.TTSConfigRaw
+		if raw == nil {
+			return false
+		}
+		hasID := false
+		hasSecret := false
+		for _, k := range []string{"accessKeyId", "access_key_id"} {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					hasID = true
+				}
+			}
+		}
+		for _, k := range []string{"secretAccessKey", "secret_access_key"} {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					hasSecret = true
+				}
+			}
+		}
+		return hasID && hasSecret
+	default:
+		// Unknown providers: defer to the credential factory at call time.
+		// Returning true here lets the factory produce a precise error and
+		// the call leg fall back to config_error.wav playback.
+		return env.TTSConfigRaw != nil
+	}
+}
+
+func snakeCaseAlt(camel string) string {
+	var b strings.Builder
+	for i, r := range camel {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			b.WriteByte('_')
+			b.WriteRune(r + 32)
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			b.WriteRune(r + 32)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// pipelineCredsUsable mirrors the body of the legacy TenantVoiceReady
+// pipeline branch but stops short of the LLM check. We split it out so
+// the SIP attach gate can ask "would pipeline have worked?" without
+// also triggering the realtime branch, used by the auto-fallback in
+// AttachVoicePipeline (legacy rows with column default "pipeline" plus
+// an only-realtime credential set should still attach via realtime).
+func pipelineCredsUsable(env VoiceEnv) bool {
+	asp := strings.ToLower(strings.TrimSpace(env.ASRProvider))
+	if asp == "" {
+		asp = "qcloud"
+	}
+	if asp != "qcloud" {
+		return false
+	}
+	if env.ASRAppID == "" || env.ASRSecretID == "" || env.ASRSecretKey == "" {
+		return false
+	}
+	tsp := strings.ToLower(strings.TrimSpace(env.TTSProvider))
+	if tsp == "" {
+		tsp = "qcloud"
+	}
+	if !ttsCredentialsReady(tsp, env) {
+		return false
+	}
+	return voiceEnvLLMReady(env)
+}
+
+// TenantRealtimeReady is the realtime-mode counterpart of TenantVoiceReady.
+// We only need a credential blob and a known provider here — the WS
+// factory in pkg/realtime is responsible for vendor-specific field
+// validation. Requiring at minimum apiKey is enough to rule out the
+// "tenant left the form blank" case so the call leg falls back to
+// config_error.wav rather than ringing into a broken session.
+func TenantRealtimeReady(env VoiceEnv) bool {
+	raw := env.RealtimeConfigRaw
+	if len(raw) == 0 {
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(env.RealtimeProvider))
+	if provider == "" {
+		// provider may live only in the raw map.
+		provider = strings.ToLower(strings.TrimSpace(strFromMap(raw, "provider")))
+	}
+	if provider == "" {
+		return false
+	}
+	for _, k := range []string{"apiKey", "api_key"} {
+		if v, ok := raw[k]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func voiceEnvLLMReady(e VoiceEnv) bool {
