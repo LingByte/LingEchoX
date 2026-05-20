@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosResponse } from 'axios'
 import { useAuthStore } from '../stores/authStore'
 import { getApiBaseURL } from '../config/apiConfig'
+import { genReqId, X_REQ_ID_HEADER } from '@/utils/reqId'
 
 // 创建axios实例
 const axiosInstance: AxiosInstance = axios.create({
@@ -28,6 +29,12 @@ axiosInstance.interceptors.request.use(
     if (config.data instanceof FormData) {
       delete config.headers['Content-Type']
     }
+
+    // 与后端 RequestIDMiddleware 对齐，便于日志串联（未显式传入时自动生成）
+    const headers = config.headers as Record<string, string | undefined>
+    if (!headers[X_REQ_ID_HEADER] && !headers['X-Req-ID']) {
+      headers[X_REQ_ID_HEADER] = genReqId()
+    }
     
     // 添加请求时间戳
     if (config.params) {
@@ -38,10 +45,10 @@ axiosInstance.interceptors.request.use(
     
     // 添加调试信息
     // @ts-ignore
-      console.log('Making request to:', config.baseURL + config.url, {
+    console.log('Making request to:', config.baseURL + config.url, {
       method: config.method,
-      headers: config.headers,
-      params: config.params
+      'x-reqid': headers[X_REQ_ID_HEADER] ?? headers['X-Req-ID'],
+      params: config.params,
     })
     
     return config
@@ -55,7 +62,13 @@ axiosInstance.interceptors.request.use(
 // 响应拦截器 - 只处理通用错误，不处理业务逻辑
 axiosInstance.interceptors.response.use(
   (response: AxiosResponse) => {
-    // 直接返回完整响应，让业务层处理
+    const rid =
+      response.headers[X_REQ_ID_HEADER] ??
+      response.headers['x-reqid'] ??
+      response.headers['X-Req-ID']
+    if (rid && import.meta.env.DEV) {
+      console.debug('[x-reqid]', rid, response.config.method, response.config.url)
+    }
     return response
   },
   (error) => {

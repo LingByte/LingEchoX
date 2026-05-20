@@ -106,7 +106,7 @@ func AbortWithStatusJSON(c *gin.Context, httpStatus int, err error) {
 	//    that pass an unmapped error with a 4xx status are presumed
 	//    misusing the helper; we hide the message and stamp
 	//    INTERNAL_ERROR so the client gets a stable signal.
-	logger.Error("internal server error",
+	logger.FromGin(c).Error("internal server error",
 		zap.String("path", c.Request.URL.Path),
 		zap.String("method", c.Request.Method),
 		zap.Error(err),

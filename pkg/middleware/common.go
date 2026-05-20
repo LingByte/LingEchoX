@@ -29,8 +29,8 @@ func CorsMiddleware() gin.HandlerFunc {
 
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true") // Allow cookies
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, X-API-KEY, X-API-SECRET, X-Requested-With, X-Ak, X-Ts, X-Sign")
-		c.Writer.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Type")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, X-API-KEY, X-API-SECRET, X-Requested-With, X-Ak, X-Ts, X-Sign, X-Reqid, X-Req-ID, X-Request-ID")
+		c.Writer.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Type, X-Reqid, X-Req-ID")
 
 		// Handle preflight requests
 		if c.Request.Method == "OPTIONS" {

@@ -24,10 +24,9 @@ func TestLoggerMiddleware_Basic(t *testing.T) {
 	logger := zap.New(core)
 
 	r := gin.New()
+	r.Use(RequestIDMiddleware())
 	r.Use(LoggerMiddleware(logger))
 
-	// Mock business handler: write 201 status code
-	// Use POST instead of GET since LoggerMiddleware filters GET requests
 	r.POST("/hello", func(c *gin.Context) {
 		// Simulate some processing time
 		time.Sleep(5 * time.Millisecond)
@@ -54,7 +53,7 @@ func TestLoggerMiddleware_Basic(t *testing.T) {
 		t.FailNow()
 	}
 	entry := entries[0]
-	assert.Equal(t, "Request", entry.Message)
+	assert.Equal(t, "http request", entry.Message)
 
 	// Convert fields to map for easier assertion
 	fields := map[string]zapcore.Field{}
@@ -88,6 +87,9 @@ func TestLoggerMiddleware_Basic(t *testing.T) {
 		assert.Greater(t, f.Integer, int64(0))
 		assert.Equal(t, zapcore.DurationType, f.Type)
 	}
+	if f, ok := fields["x-reqid"]; assert.True(t, ok, "access log should include x-reqid") {
+		assert.NotEmpty(t, f.String)
+	}
 }
 
 func TestLoggerMiddleware_NoQuery_NoUA_DefaultIP(t *testing.T) {
@@ -97,6 +99,7 @@ func TestLoggerMiddleware_NoQuery_NoUA_DefaultIP(t *testing.T) {
 	logger := zap.New(core)
 
 	r := gin.New()
+	r.Use(RequestIDMiddleware())
 	r.Use(LoggerMiddleware(logger))
 	r.POST("/ping", func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -134,4 +137,25 @@ func TestLoggerMiddleware_NoQuery_NoUA_DefaultIP(t *testing.T) {
 	if f, ok := fields["latency"]; assert.True(t, ok) {
 		assert.Greater(t, f.Integer, int64(0))
 	}
+}
+
+func TestLoggerMiddleware_SkipsGET(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, recorded := observer.New(zapcore.InfoLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(RequestIDMiddleware())
+	r.Use(LoggerMiddleware(logger))
+	r.GET("/list", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/list", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Empty(t, recorded.All(), "GET should not emit access log")
+	assert.NotEmpty(t, w.Header().Get("X-Reqid"), "GET still gets X-Reqid header")
 }

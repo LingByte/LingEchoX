@@ -319,7 +319,7 @@ func appendContextFields(ctx context.Context, fields ...zap.Field) []zap.Field {
 		fields = append(fields, zap.String(string(TraceIDKey), fmt.Sprintf("%v", traceID)))
 	}
 	if requestID := ctx.Value(RequestIDKey); requestID != nil {
-		fields = append(fields, zap.String(string(RequestIDKey), fmt.Sprintf("%v", requestID)))
+		fields = append(fields, zap.String("x-reqid", fmt.Sprintf("%v", requestID)))
 	}
 	if userID := ctx.Value(UserIDKey); userID != nil {
 		fields = append(fields, zap.String(string(UserIDKey), fmt.Sprintf("%v", userID)))

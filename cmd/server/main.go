@@ -135,8 +135,11 @@ func main() {
 	// Cors Handle Middleware
 	r.Use(middleware.CorsMiddleware())
 
-	// Logger Handle Middleware
-	r.Use(middleware.LoggerMiddleware(zap.L()))
+	// Request id (X-Reqid) for all HTTP requests — must run before access log + handlers.
+	r.Use(middleware.RequestIDMiddleware())
+
+	// HTTP access log (includes x-reqid)
+	r.Use(middleware.LoggerMiddleware(logger.Lg))
 
 	// 11. Register routes
 	app.RegisterRoutes(r)

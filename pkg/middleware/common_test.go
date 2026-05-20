@@ -60,6 +60,9 @@ func TestCorsMiddleware_SetsHeadersAndPassesThrough(t *testing.T) {
 		!strings.Contains(h.Get("Access-Control-Allow-Headers"), "Content-Type") {
 		t.Errorf("Access-Control-Allow-Headers missing expected headers, got %q", h.Get("Access-Control-Allow-Headers"))
 	}
+	if !strings.Contains(h.Get("Access-Control-Allow-Headers"), "X-Reqid") {
+		t.Errorf("Access-Control-Allow-Headers should allow X-Reqid, got %q", h.Get("Access-Control-Allow-Headers"))
+	}
 }
 
 func TestCorsMiddleware_OptionsPreflightAbortsWith204(t *testing.T) {
