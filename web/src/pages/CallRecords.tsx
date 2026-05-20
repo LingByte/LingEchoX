@@ -264,7 +264,7 @@ const CallRecords = () => {
                         {detailField('BYE 发起方', d.byeInitiator || '—')}
                         {detailField('录音原始字节', d.recordingRawBytes != null && d.recordingRawBytes > 0 ? d.recordingRawBytes : '—')}
                         {detailField('录音 WAV 字节', d.recordingWavBytes != null && d.recordingWavBytes > 0 ? d.recordingWavBytes : '—')}
-                        {detailField('转接', [d.hadSipTransfer && 'SIP', d.hadWebSeat && 'WebSeat'].filter(Boolean).join(' · ') || '—')}
+                        {detailField('转接', d.transferTo?.trim() || (d.hadSipTransfer || d.hadWebSeat ? '未知坐席' : '—'))}
                         <div className="col-span-2">{detailField('失败原因', d.failureReason || '—')}</div>
                       </div>
 

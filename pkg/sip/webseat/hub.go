@@ -866,6 +866,22 @@ func (h *Hub) waitRemoteTrackAndBridge(
 		_ = teardownWebSeat(callID, true)
 		return
 	}
+	// 把 WebSeat 桥接的双向 PCM 同步喂进 inbound 的新版立体声录音器：
+	// 否则 OnBye 时 voice/recorder 产出的 WAV 在转接后整段静音（recorder
+	// 不消化 SN3 raw / WireTransferBridgeRecording 喂的字节）。
+	//
+	// 桥接 mid SR 由两侧码方协商：WebSeat 浏览器侧固定 G.711/8k，inbound
+	// 侧若也是 G.711 走 8k，Opus 走 16k；recorder 在 EnableRecorder 时按
+	// inbound.PCMSampleRate() 配置，与 TwoLegPCMBridge.MidSampleRate() 一致，
+	// 无需重采样。
+	br.SetDirectionalPCMTap(func(dir bridge.BridgeDirection, pcm []byte) {
+		switch dir {
+		case bridge.DirectionCallerToAgent:
+			inbound.WriteCallerPCM(pcm)
+		case bridge.DirectionAgentToCaller:
+			inbound.WriteAIPCM(pcm)
+		}
+	})
 
 	h.mu.Lock()
 	ab, ok = h.active[callID]

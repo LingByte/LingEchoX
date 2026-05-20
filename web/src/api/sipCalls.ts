@@ -46,6 +46,7 @@ export interface SIPCallRow {
   lastTurnAt?: string
   hadSipTransfer?: boolean
   hadWebSeat?: boolean
+  transferTo?: string
   turns?: SIPCallDialogTurn[]
   createdAt?: string
   updatedAt?: string

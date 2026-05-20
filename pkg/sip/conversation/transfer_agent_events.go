@@ -283,13 +283,20 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 }
 
 // ResetTransferRoutingState clears per-call transfer routing scratch state after a successful handoff.
+//
+// 注意：这里**不**清理 transferLastACDRowByInbound，因为 OnBye 阶段
+// （pkg/sip/persist.CallStore.OnBye → TakeInboundTransferACDTargetID）
+// 还要用它把 acd_pool_targets.id 落到 sip_calls.transfer_acd_target_id。
+// 之前 OnWebSeatBridgeEstablished 一调本函数就把映射删了，结果 OnBye
+// 拿到 0 → DB 不写 → 列表"转接"列就只能显示"未知坐席"。
+// TakeInboundTransferACDTargetID 内部用 LoadAndDelete，BYE 之后会自动
+// 清掉，不会泄漏。
 func ResetTransferRoutingState(inboundCallID string) {
 	inboundCallID = strings.TrimSpace(inboundCallID)
 	if inboundCallID == "" {
 		return
 	}
 	transferExcludeReset(inboundCallID)
-	transferLastACDRowByInbound.Delete(inboundCallID)
 	cancelWebSeatJoinWatch(inboundCallID)
 	stopNoAgentRetryLoop(inboundCallID)
 }

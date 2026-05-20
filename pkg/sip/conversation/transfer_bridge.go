@@ -6,11 +6,29 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/media"
+	"github.com/LinByte/VoiceServer/pkg/media/encoder"
 	"github.com/LinByte/VoiceServer/pkg/sip/bridge"
 	siprtp "github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"go.uber.org/zap"
 )
+
+// rawRelayDecoderFor returns a payload→PCM16 decoder for narrowband G.711
+// inbound legs. Raw relay only kicks in when both bridge legs share the
+// same G.711 family (CanRawDatagramRelay), so feeding the inbound payload
+// through one of these is enough to populate the stereo recorder. Other
+// codecs are not expected on the raw relay path; nil disables recorder
+// taps without breaking the bridge itself.
+func rawRelayDecoderFor(c media.CodecConfig) func([]byte) ([]byte, error) {
+	switch strings.ToLower(strings.TrimSpace(c.Codec)) {
+	case "pcmu":
+		return encoder.DecodePCMU
+	case "pcma":
+		return encoder.DecodePCMA
+	default:
+		return nil
+	}
+}
 
 // CallStore removes sessions from the SIP server map without invoking Stop (RTP already handled).
 type CallStore interface {
@@ -319,12 +337,30 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 		} else {
 			mode = "raw_rtp_forward"
 			if relay, ok := br.(*bridge.TwoLegPayloadRelay); ok {
+				// 双通道喂数据：
+				//  1) 旧版 SN3 blob —— 兼容历史 SN3→WAV 解码回退路径。
+				//  2) 新版立体声 recorder —— 把 G.711 RTP payload 解码成 PCM16
+				//     喂进 WriteCallerPCM / WriteAIPCM，否则 OnBye 时 WAV 里
+				//     桥接后整段都是静音（recorder 不消化 SN3 raw bytes）。
+				//     raw relay 只在双方都是 narrowband G.711 时启用，所以
+				//     用 inbound 侧码方解码即可，采样率与 recorder 配置一致。
+				dec := rawRelayDecoderFor(ccIn)
 				relay.SetInboundRecording(
 					func(seq uint16, ts uint32, p []byte) {
 						inbound.AppendRecordingSample(sipSession.RecordingDirUser, seq, ts, p)
+						if dec != nil {
+							if pcm, derr := dec(p); derr == nil {
+								inbound.WriteCallerPCM(pcm)
+							}
+						}
 					},
 					func(seq uint16, ts uint32, p []byte) {
 						inbound.AppendRecordingSample(sipSession.RecordingDirAI, seq, ts, p)
+						if dec != nil {
+							if pcm, derr := dec(p); derr == nil {
+								inbound.WriteAIPCM(pcm)
+							}
+						}
 					},
 				)
 			}
@@ -350,6 +386,23 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 			return
 		}
 		mode = "pcm_transcode"
+		// 把转接桥接后的双向 PCM 同步喂进新版立体声录音器：
+		// 否则 OnBye 时优先采用 voice/recorder 产出的 WAV，桥接后的人工对话
+		// 只会在 SN3 raw 字节里，最终 WAV 在转接之后就静音了。
+		// PCM transcode mid 采样率与 inbound.PCMSampleRate() 一致：
+		//  - 双方 G.711  → 8kHz；
+		//  - 否则（典型 Opus↔PCMU）→ 16kHz。
+		// recorder 在 EnableRecorder 时同样按 cs.pcmSampleRate 配置，无需重采样。
+		if pcmBr, ok := br.(*bridge.TwoLegPCMBridge); ok {
+			pcmBr.SetDirectionalPCMTap(func(dir bridge.BridgeDirection, pcm []byte) {
+				switch dir {
+				case bridge.DirectionCallerToAgent:
+					inbound.WriteCallerPCM(pcm)
+				case bridge.DirectionAgentToCaller:
+					inbound.WriteAIPCM(pcm)
+				}
+			})
+		}
 	}
 
 	bs := &transferBridgeState{

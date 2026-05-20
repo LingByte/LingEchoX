@@ -4,6 +4,7 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,23 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
+
+// acdPoolTargetDisplayName 给通话记录里的"转接"列生成展示名称：
+// 优先用管理员配置的 Name（人名/工号）→ 退而求其次用 TargetValue
+// （SIP 用户名 / 拨号串）→ 最后兜底"坐席#<id>"。明确不使用通用的
+// "WebSeat" / "SIP" 字样，因为运营要看到具体接听人是谁。
+func acdPoolTargetDisplayName(r models.ACDPoolTarget) string {
+	if v := strings.TrimSpace(r.Name); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(r.TargetValue); v != "" {
+		return v
+	}
+	if r.ID > 0 {
+		return fmt.Sprintf("坐席#%d", r.ID)
+	}
+	return ""
+}
 
 func (h *Handlers) listSIPUsers(c *gin.Context) {
 	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -113,15 +131,7 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 			_ = h.db.Model(&models.ACDPoolTarget{}).Where("id IN ?", ids).Find(&rows).Error
 			m := map[uint]string{}
 			for _, r := range rows {
-				label := strings.TrimSpace(r.Name)
-				if label == "" {
-					if r.RouteType == models.ACDPoolRouteTypeWeb {
-						label = "WebSeat"
-					} else {
-						label = strings.TrimSpace(r.TargetValue)
-					}
-				}
-				m[r.ID] = label
+				m[r.ID] = acdPoolTargetDisplayName(r)
 			}
 			for i := range list {
 				if list[i].TransferACDTargetID > 0 {
@@ -161,15 +171,7 @@ func (h *Handlers) getSIPCall(c *gin.Context) {
 	if row.TransferACDTargetID > 0 {
 		var tgt models.ACDPoolTarget
 		if err := h.db.Model(&models.ACDPoolTarget{}).Where("id = ?", row.TransferACDTargetID).First(&tgt).Error; err == nil {
-			label := strings.TrimSpace(tgt.Name)
-			if label == "" {
-				if tgt.RouteType == models.ACDPoolRouteTypeWeb {
-					label = "WebSeat"
-				} else {
-					label = strings.TrimSpace(tgt.TargetValue)
-				}
-			}
-			row.TransferTo = label
+			row.TransferTo = acdPoolTargetDisplayName(tgt)
 		}
 	}
 	response.Success(c, "success", row)

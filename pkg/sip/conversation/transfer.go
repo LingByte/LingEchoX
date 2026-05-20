@@ -386,6 +386,11 @@ func playTransferRingingLoop(ctx context.Context, inbound *sipSession.CallSessio
 				Payload:       frame,
 				IsSynthesized: true,
 			})
+			// 让转接振铃音乐进入立体声录音的 AI 通道，否则最终 WAV 里
+			// 等待坐席的这段时间会是静音 —— 用户回放时无法判断到底是
+			// AI 卡死还是确实在等坐席。recorder 在 inbound.PCMSampleRate()
+			// 上工作，pcmSR 选取也以此为准，采样率一致无需重采样。
+			inbound.WriteAIPCM(frame)
 		}
 		offset = end
 		if offset >= len(pcm) {

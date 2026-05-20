@@ -124,6 +124,22 @@ func ulaw2linear(ulawByte byte) int {
 	return temp - biasValue
 }
 
+// DecodePCMA decodes 8 kHz mono A-law (PCMA, RFC 3551 §4.5.14) RTP payload
+// bytes into PCM16 LE mono. Output length is exactly 2× the input. Used by
+// the SIP transfer bridge raw-RTP relay path to feed the stereo recorder
+// when both legs negotiated PCMA — recorder needs PCM16 frames, not raw
+// A-law samples.
+func DecodePCMA(alawData []byte) ([]byte, error) {
+	return pcma2pcm(alawData)
+}
+
+// DecodePCMU decodes 8 kHz mono μ-law (PCMU, RFC 3551 §4.5.14) RTP payload
+// bytes into PCM16 LE mono. Output length is exactly 2× the input. See
+// DecodePCMA for usage notes.
+func DecodePCMU(ulawData []byte) ([]byte, error) {
+	return pcmu2pcm(ulawData)
+}
+
 // convertALawToPCM converts A-law encoded data to PCM
 func pcma2pcm(alawData []byte) ([]byte, error) {
 	pcmData := make([]byte, len(alawData)<<1)
