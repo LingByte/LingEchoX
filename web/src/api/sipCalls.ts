@@ -1,5 +1,4 @@
 import { get, type ApiResponse } from '@/utils/request'
-import axiosInstance from '@/utils/axios'
 import { getApiBaseURL } from '@/config/apiConfig'
 import type { Paginated } from '@/api/types'
 
@@ -64,31 +63,13 @@ export async function listSIPCalls(page = 1, size = 20, opts?: { callId?: string
   return get(`/sip-center/calls?${q.toString()}`)
 }
 
+/** Absolute CDN URL or legacy /uploads path relative to API base. */
 export function resolveSipRecordingUrl(url?: string | null): string {
   if (!url) return ''
   const u = url.trim()
   if (/^https?:\/\//i.test(u)) return u
   const base = getApiBaseURL().replace(/\/$/, '')
   return u.startsWith('/') ? `${base}${u}` : `${base}/${u}`
-}
-
-/**
- * Fetch the call recording WAV bytes through the authenticated streaming
- * endpoint and wrap them in a blob: URL suitable for <audio src>.
- *
- * Why a blob URL instead of pointing <audio> at the API URL directly:
- * the browser will not attach our `Authorization: Bearer …` header to
- * <audio>/<a download> requests, so we have to fetch with axios (which
- * does attach it) and then hand the bytes to the player as an
- * in-memory object URL. The caller is responsible for calling
- * URL.revokeObjectURL() once the player is unmounted.
- */
-export async function fetchSIPCallRecordingObjectURL(id: number): Promise<string> {
-  const res = await axiosInstance.get(`/sip-center/calls/${id}/recording`, {
-    responseType: 'blob',
-  })
-  const blob: Blob = res.data
-  return URL.createObjectURL(blob)
 }
 
 export function sipAiEndStatusI18nKey(status?: string | null): string {

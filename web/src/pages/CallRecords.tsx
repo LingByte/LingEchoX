@@ -3,9 +3,9 @@ import { AlertCircle, MicOff } from 'lucide-react'
 import { Button, Card, Drawer } from '@arco-design/web-react'
 import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import {
-  fetchSIPCallRecordingObjectURL,
   getSIPCall,
   listSIPCalls,
+  resolveSipRecordingUrl,
   sipAiEndStatusI18nKey,
   type SIPCallDialogTurn,
   type SIPCallRow,
@@ -25,11 +25,6 @@ const CallRecords = () => {
   const [callDetailDrawerData, setCallDetailDrawerData] = useState<SIPCallRow | null>(null)
   const [callDetailDrawerLoading, setCallDetailDrawerLoading] = useState(false)
   const [callDetailDrawerFailed, setCallDetailDrawerFailed] = useState(false)
-  // Blob URL produced by the authenticated /recording endpoint.
-  // Lifecycle: created in openCallDetailDrawer, revoked in closeCallDetailDrawer
-  // (and on unmount) so we don't leak ObjectURLs across many opens.
-  const [recordingObjectUrl, setRecordingObjectUrl] = useState<string>('')
-  const [recordingLoadFailed, setRecordingLoadFailed] = useState(false)
   const pageSize = 20
 
   const loadCalls = useCallback(async () => {
@@ -80,49 +75,17 @@ const CallRecords = () => {
     setCallDetailDrawerData(null)
     setCallDetailDrawerLoading(false)
     setCallDetailDrawerFailed(false)
-    setRecordingLoadFailed(false)
-    setRecordingObjectUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev)
-      return ''
-    })
   }
-
-  // Defensive: revoke any pending blob URL on unmount.
-  useEffect(() => {
-    return () => {
-      setRecordingObjectUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev)
-        return ''
-      })
-    }
-  }, [])
 
   const openCallDetailDrawer = async (id: number) => {
     setCallDetailDrawerId(id)
     setCallDetailDrawerData(null)
     setCallDetailDrawerLoading(true)
     setCallDetailDrawerFailed(false)
-    setRecordingLoadFailed(false)
-    // Drop any blob URL from a previously opened call before fetching new one.
-    setRecordingObjectUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev)
-      return ''
-    })
     try {
       const res = await getSIPCall(id)
       if (res.code === 200 && res.data) {
         setCallDetailDrawerData(res.data)
-        if (res.data.recordingUrl?.trim()) {
-          try {
-            const objectUrl = await fetchSIPCallRecordingObjectURL(id)
-            setRecordingObjectUrl(objectUrl)
-          } catch {
-            // Recording fetch failures are non-fatal: the rest of the
-            // detail drawer still renders. We just surface a per-section
-            // error in the recording panel.
-            setRecordingLoadFailed(true)
-          }
-        }
       } else {
         setCallDetailDrawerFailed(true)
       }
@@ -280,10 +243,7 @@ const CallRecords = () => {
                 const d = callDetailDrawerData ?? calls.find((c) => c.id === callDetailDrawerId) ?? null
                 if (!d) return <div className="flex flex-1 items-center justify-center p-6">加载中...</div>
                 const turns = callDetailDrawerData?.turns
-                const recUrlResolved =
-                  callDetailDrawerData?.recordingUrl?.trim() && !callDetailDrawerFailed && !callDetailDrawerLoading
-                    ? recordingObjectUrl
-                    : ''
+                const recUrlResolved = resolveSipRecordingUrl(callDetailDrawerData?.recordingUrl)
                 return (
                   <div className="space-y-5">
                     <div className="min-h-0 overflow-y-auto space-y-5">
@@ -320,21 +280,11 @@ const CallRecords = () => {
                               重试
                             </Button>
                           </div>
-                        ) : !callDetailDrawerData?.recordingUrl?.trim() ? (
+                        ) : !recUrlResolved ? (
                           <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-border bg-background/60 px-4 py-8 text-center">
                             <MicOff className="h-7 w-7 shrink-0 text-muted-foreground" />
                             <p className="text-sm text-muted-foreground">暂无录音</p>
                           </div>
-                        ) : recordingLoadFailed ? (
-                          <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-destructive/40 bg-destructive/5 px-4 py-8 text-center">
-                            <AlertCircle className="h-8 w-8 shrink-0 text-destructive/80" />
-                            <p className="text-sm text-foreground">录音加载失败</p>
-                            <Button type="outline" size="small" htmlType="button" onClick={() => callDetailDrawerId != null && void openCallDetailDrawer(callDetailDrawerId)}>
-                              重试
-                            </Button>
-                          </div>
-                        ) : !recUrlResolved ? (
-                          <div className="py-8 text-sm text-muted-foreground text-center">录音加载中...</div>
                         ) : (
                           <>
                             <CallAudioPlayer

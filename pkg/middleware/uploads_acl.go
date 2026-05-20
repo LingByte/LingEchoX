@@ -12,9 +12,8 @@ package middleware
 // Behaviour:
 //   - Requests under `/uploads/sip/recordings/` require Authorization:
 //     Bearer JWT (tenant or platform admin) by default. AK/SK is NOT
-//     accepted because external integrations should fetch via the
-//     authenticated SIP-call API, which yields a signed URL when
-//     STORAGE_PUBLIC_BASE_URL is configured.
+//     accepted. The console plays recordingUrl (CDN or signed URL)
+//     from the call row; this ACL only covers legacy local paths.
 //   - Override: UPLOADS_RECORDINGS_PUBLIC=true keeps the old behaviour
 //     for legacy local-storage deployments where browser <audio> tags
 //     hit /uploads directly. NOT recommended outside dev/private nets.
@@ -23,12 +22,9 @@ package middleware
 //     touch directory listing — gin.Static doesn't list dirs anyway.
 //
 // Note on browser playback: <audio src="/uploads/sip/recordings/x.wav">
-// will NOT send Authorization headers, so frontend must either
-//   (a) deploy STORAGE_PUBLIC_BASE_URL pointing at an authed proxy
-//       (nginx auth_request, signed URLs, COS/OSS), or
-//   (b) set UPLOADS_RECORDINGS_PUBLIC=true and accept the leak.
-// A future improvement is a /api/sip-center/calls/:id/recording
-// streaming endpoint that handles auth + Range requests server-side.
+// will NOT send Authorization headers. Prefer persisting a public or
+// signed object URL in recording_url (STORAGE_KIND=qiniu/s3/…), or set
+// UPLOADS_RECORDINGS_PUBLIC=true for dev-only local playback.
 
 import (
 	"net/http"

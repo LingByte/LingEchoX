@@ -36,11 +36,6 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 	{
 		callsRead.GET("/calls", h.listSIPCalls)
 		callsRead.GET("/calls/:id", h.getSIPCall)
-		// Authenticated streaming endpoint for the call's WAV recording.
-		// Replaces the legacy approach of pointing <audio> at /uploads/...
-		// directly; gates by tenant + RBAC, supports Range on local disk.
-		callsRead.GET("/calls/:id/recording", h.streamSIPCallRecording)
-		callsRead.HEAD("/calls/:id/recording", h.streamSIPCallRecording)
 	}
 
 	acdRead := g.Group("")
