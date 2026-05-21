@@ -5,6 +5,7 @@ package middleware
 
 import (
 	"github.com/LinByte/VoiceServer/internal/constants"
+	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -29,7 +30,7 @@ func CorsMiddleware() gin.HandlerFunc {
 
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true") // Allow cookies
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, X-API-KEY, X-API-SECRET, X-Requested-With, X-Ak, X-Ts, X-Sign, X-Reqid, X-Req-ID, X-Request-ID")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, X-API-KEY, X-API-SECRET, X-Requested-With, X-Ak, X-Ts, X-Sign, X-Reqid, X-Req-ID, X-Request-ID, "+webseat.HeaderWebseatToken)
 		c.Writer.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Type, X-Reqid, X-Req-ID")
 
 		// Handle preflight requests

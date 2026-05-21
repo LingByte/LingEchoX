@@ -63,6 +63,27 @@ func TestCorsMiddleware_SetsHeadersAndPassesThrough(t *testing.T) {
 	if !strings.Contains(h.Get("Access-Control-Allow-Headers"), "X-Reqid") {
 		t.Errorf("Access-Control-Allow-Headers should allow X-Reqid, got %q", h.Get("Access-Control-Allow-Headers"))
 	}
+	if !strings.Contains(h.Get("Access-Control-Allow-Headers"), "X-Webseat-Token") {
+		t.Errorf("Access-Control-Allow-Headers should allow X-Webseat-Token, got %q", h.Get("Access-Control-Allow-Headers"))
+	}
+}
+
+func TestCorsMiddleware_OptionsAllowsWebseatTokenHeader(t *testing.T) {
+	r := newEngine()
+	r.Use(CorsMiddleware())
+	req := httptest.NewRequest(http.MethodOptions, "/lingecho/webseat/v1/join", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "content-type, x-webseat-token")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Result().StatusCode)
+	}
+	allow := w.Result().Header.Get("Access-Control-Allow-Headers")
+	if !strings.Contains(strings.ToLower(allow), "x-webseat-token") {
+		t.Fatalf("Access-Control-Allow-Headers=%q", allow)
+	}
 }
 
 func TestCorsMiddleware_OptionsPreflightAbortsWith204(t *testing.T) {
