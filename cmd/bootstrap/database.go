@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/LinByte/VoiceServer/internal/models"
@@ -39,25 +40,16 @@ func SetupDatabase(logWriter io.Writer, opts *Options) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	// 2) Optional: execute initialization SQL
-	if opts.InitSQLPath != "" {
-		if err := RunInitSQL(db, opts.InitSQLPath); err != nil {
-			logger.Error("run init sql failed", zap.String("path", opts.InitSQLPath), zap.Error(err))
-			return nil, err
-		}
-	}
+	initPath := ResolveInitSQLPath(opts.InitSQLPath)
 
-	// 3) Migrate entities
+	// 2) -init: GORM AutoMigrate + cmd/bootstrap/migrations/*.sql (indexes only, no tenant dump)
 	if opts.AutoMigrate {
-		// 首先执行迁移 SQL 脚本
-		migrationsDir := "cmd/bootstrap/migrations"
-		if err := runMigrationScripts(db, migrationsDir); err != nil {
-			logger.Warn("run migration scripts failed", zap.String("dir", migrationsDir), zap.Error(err))
-		}
-
 		if err := RunMigrations(db); err != nil {
 			logger.Error("migration failed", zap.Error(err))
 			return nil, err
+		}
+		if err := runPostMigrateSQL(db, "cmd/bootstrap/migrations"); err != nil {
+			logger.Warn("post-migrate sql failed", zap.Error(err))
 		}
 		logger.Info("migration success",
 			zap.String("database", config.GlobalConfig.Database.Driver),
@@ -65,11 +57,31 @@ func SetupDatabase(logWriter io.Writer, opts *Options) (*gorm.DB, error) {
 		)
 	}
 
-	// 4) Non-production: default configuration
-	if opts.SeedNonProd {
-		service := SeedService{
-			db: db,
+	// 3) Permission catalog (required before init-sql role bindings; also runs with -seed)
+	if opts.SeedNonProd || initPath != "" {
+		if err := models.SyncPermissionCatalog(db); err != nil {
+			logger.Error("sync permission catalog failed", zap.Error(err))
+			return nil, err
 		}
+	}
+
+	// 4) -init-sql ONLY: optional tenant/trunk dump (scripts/sql/init.sql). Separate from migrations/.
+	if initPath != "" {
+		logger.Info("running init sql", zap.String("path", initPath))
+		if err := RunInitSQLFromPath(db, initPath); err != nil {
+			logger.Error("run init sql failed", zap.String("path", initPath), zap.Error(err))
+			return nil, err
+		}
+		if err := models.BackfillSystemTenantAdminPermissions(db, "init-sql"); err != nil {
+			logger.Error("bind tenant admin permissions failed", zap.Error(err))
+			return nil, err
+		}
+		logger.Info("tenant admin permissions backfilled from permission catalog")
+	}
+
+	// 5) Non-production: site config + default platform admin (+ re-backfill if seed runs after init-sql)
+	if opts.SeedNonProd {
+		service := SeedService{db: db}
 		if err := service.SeedAll(); err != nil {
 			logger.Error("seed failed", zap.Error(err))
 			return nil, err
@@ -131,8 +143,9 @@ func RunInitSQL(db *gorm.DB, sqlFilePath string) error {
 	return scanner.Err()
 }
 
-// runMigrationScripts executes all .sql files in the migrations directory
-func runMigrationScripts(db *gorm.DB, migrationsDir string) error {
+// runPostMigrateSQL runs cmd/bootstrap/migrations/*.sql after GORM AutoMigrate (-init flag).
+// Not the same as -init-sql (operator tenant seed under scripts/sql/).
+func runPostMigrateSQL(db *gorm.DB, migrationsDir string) error {
 	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -151,7 +164,7 @@ func runMigrationScripts(db *gorm.DB, migrationsDir string) error {
 			continue
 		}
 
-		filePath := migrationsDir + "/" + entry.Name()
+		filePath := filepath.Join(migrationsDir, entry.Name())
 		logger.Info("executing migration script", zap.String("file", filePath))
 		if err := RunInitSQL(db, filePath); err != nil {
 			logger.Error("migration script failed", zap.String("file", filePath), zap.Error(err))

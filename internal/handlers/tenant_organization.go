@@ -2,14 +2,13 @@ package handlers
 
 import (
 	"errors"
-	"net/http"
 	"strings"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
-	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -42,13 +41,12 @@ func (h *Handlers) registerTenantOrgRoutes(g *gin.RouterGroup) {
 }
 
 func (h *Handlers) listOrgPermissions(c *gin.Context) {
-	if middleware.AuthTenantID(c) == 0 {
-		response.Fail(c, "unauthorized", nil)
+	if _, ok := ginutil.RequireAuthTenant(c); !ok {
 		return
 	}
 	rows, err := models.ListAllPermissions(h.db)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	pub := make([]gin.H, 0, len(rows))
@@ -68,14 +66,13 @@ func (h *Handlers) listOrgPermissions(c *gin.Context) {
 }
 
 func (h *Handlers) listOrgGroups(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
 	rows, err := models.ListTenantGroupsForTenant(h.db, tid)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	pub := make([]gin.H, 0, len(rows))
@@ -91,14 +88,12 @@ type orgGroupWriteReq struct {
 }
 
 func (h *Handlers) createOrgGroup(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
 	var req orgGroupWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -116,26 +111,23 @@ func (h *Handlers) createOrgGroup(c *gin.Context) {
 		return models.CreateTenantGroupRecord(tx, g)
 	})
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": g.ID, "name": g.Name, "isDefault": g.IsDefault})
 }
 
 func (h *Handlers) updateOrgGroup(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	var req orgGroupWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	var row models.TenantGroup
@@ -166,21 +158,19 @@ func (h *Handlers) updateOrgGroup(c *gin.Context) {
 		return tx.Model(&models.TenantGroup{}).Where("id = ?", row.ID).Updates(u).Error
 	})
 	if txErr != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, txErr)
+		ginutil.WriteInternalError(c, txErr)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": row.ID, "name": name, "isDefault": req.IsDefault})
 }
 
 func (h *Handlers) deleteOrgGroup(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	if err := models.SoftDeleteTenantGroup(h.db, tid, id, middleware.AuditOperator(c)); err != nil {
@@ -188,21 +178,20 @@ func (h *Handlers) deleteOrgGroup(c *gin.Context) {
 			response.Fail(c, "not found", nil)
 			return
 		}
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": id})
 }
 
 func (h *Handlers) listOrgRoles(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
 	rows, err := models.ListTenantRolesByTenant(h.db, tid)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	pub := make([]gin.H, 0, len(rows))
@@ -218,14 +207,12 @@ func (h *Handlers) listOrgRoles(c *gin.Context) {
 }
 
 func (h *Handlers) getOrgRole(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	r, err := models.GetTenantRoleScoped(h.db, tid, id)
@@ -235,7 +222,7 @@ func (h *Handlers) getOrgRole(c *gin.Context) {
 	}
 	permIDs, err := models.ListPermissionIDsForRole(h.db, r.ID)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{
@@ -253,14 +240,12 @@ type orgRoleCreateReq struct {
 }
 
 func (h *Handlers) createOrgRole(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
 	var req orgRoleCreateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	r := &models.TenantRole{
@@ -271,7 +256,7 @@ func (h *Handlers) createOrgRole(c *gin.Context) {
 	}
 	r.SetCreateInfo(middleware.AuditOperator(c))
 	if err := models.CreateTenantRole(h.db, r); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": r.ID, "name": r.Name, "description": r.Description, "isSystem": false})
@@ -283,19 +268,16 @@ type orgRoleUpdateReq struct {
 }
 
 func (h *Handlers) updateOrgRole(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	var req orgRoleUpdateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	r, err := models.GetTenantRoleScoped(h.db, tid, id)
@@ -318,21 +300,19 @@ func (h *Handlers) updateOrgRole(c *gin.Context) {
 		u["update_by"] = meta.UpdateBy
 	}
 	if err := h.db.Model(&models.TenantRole{}).Where("id = ?", r.ID).Updates(u).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": r.ID})
 }
 
 func (h *Handlers) deleteOrgRole(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	r, err := models.GetTenantRoleScoped(h.db, tid, id)
@@ -345,7 +325,7 @@ func (h *Handlers) deleteOrgRole(c *gin.Context) {
 		return
 	}
 	if err := models.SoftDeleteTenantRole(h.db, tid, r.ID, middleware.AuditOperator(c)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": r.ID})
@@ -356,14 +336,12 @@ type orgRolePermissionsReq struct {
 }
 
 func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	r, err := models.GetTenantRoleScoped(h.db, tid, id)
@@ -371,13 +349,12 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	if r.IsSystem && r.Name == models.TenantAdminRoleName {
+	if r.IsSystem && r.Name == constants.TenantAdminRoleName {
 		response.Fail(c, "系统「管理员」角色固定拥有全部权限，不可在此修改", nil)
 		return
 	}
 	var req orgRolePermissionsReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	if err := models.ReplaceTenantRolePermissions(h.db, id, req.PermissionIDs, middleware.AuditOperator(c)); err != nil {
@@ -385,7 +362,7 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 			response.Fail(c, "无效的权限 id", nil)
 			return
 		}
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"roleId": id})
@@ -396,14 +373,12 @@ type orgUserRolesReq struct {
 }
 
 func (h *Handlers) putOrgTenantUserRoles(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	uid, uidErr := utils.ParseID(c.Param("userId"))
-	if uidErr != nil {
-		response.Fail(c, "invalid userId", nil)
+	uid, ok := ginutil.ParamID(c, "userId")
+	if !ok {
 		return
 	}
 	u, err := models.GetActiveTenantUserByID(h.db, uid)
@@ -412,8 +387,7 @@ func (h *Handlers) putOrgTenantUserRoles(c *gin.Context) {
 		return
 	}
 	var req orgUserRolesReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	if err := models.ReplaceTenantUserRoles(h.db, tid, u.ID, req.RoleIDs, middleware.AuditOperator(c)); err != nil {
@@ -421,13 +395,13 @@ func (h *Handlers) putOrgTenantUserRoles(c *gin.Context) {
 			response.Fail(c, "无效的角色 id", nil)
 			return
 		}
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	middleware.InvalidatePermissionCache(u.ID)
 	next, err := models.GetActiveTenantUserByID(h.db, u.ID)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", models.TenantUserPublic(h.db, next))
@@ -438,14 +412,12 @@ type orgUserGroupsReq struct {
 }
 
 func (h *Handlers) putOrgTenantUserGroups(c *gin.Context) {
-	tid := middleware.AuthTenantID(c)
-	if tid == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tid, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	uid, uidErr := utils.ParseID(c.Param("userId"))
-	if uidErr != nil {
-		response.Fail(c, "invalid userId", nil)
+	uid, ok := ginutil.ParamID(c, "userId")
+	if !ok {
 		return
 	}
 	u, err := models.GetActiveTenantUserByID(h.db, uid)
@@ -454,8 +426,7 @@ func (h *Handlers) putOrgTenantUserGroups(c *gin.Context) {
 		return
 	}
 	var req orgUserGroupsReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	if err := models.ReplaceTenantUserGroups(h.db, tid, u.ID, req.GroupIDs, middleware.AuditOperator(c)); err != nil {
@@ -463,12 +434,12 @@ func (h *Handlers) putOrgTenantUserGroups(c *gin.Context) {
 			response.Fail(c, "无效的部门 id", nil)
 			return
 		}
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	next, err := models.GetActiveTenantUserByID(h.db, u.ID)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", models.TenantUserPublic(h.db, next))

@@ -4,14 +4,9 @@ package models
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/gorm"
-)
-
-const (
-	PlatformAdminStatusActive   = "active"
-	PlatformAdminStatusDisabled = "disabled"
 )
 
 // PlatformAdmin is a global operator (not under any tenant).
@@ -25,7 +20,7 @@ type PlatformAdmin struct {
 }
 
 func (PlatformAdmin) TableName() string {
-	return constants.PLATFORM_ADMIN_TABLE_NAME
+	return constants.PlatformAdminTableName
 }
 
 func GetActivePlatformAdminByEmail(db *gorm.DB, email string) (PlatformAdmin, error) {
@@ -36,7 +31,7 @@ func GetActivePlatformAdminByEmail(db *gorm.DB, email string) (PlatformAdmin, er
 }
 
 func ActivePlatformAdmins(db *gorm.DB) *gorm.DB {
-	return db.Model(&PlatformAdmin{}).Where("status = ?", PlatformAdminStatusActive)
+	return db.Model(&PlatformAdmin{}).Where("status = ?", constants.PlatformAdminStatusActive)
 }
 
 func CountPlatformAdmins(db *gorm.DB) (int64, error) {

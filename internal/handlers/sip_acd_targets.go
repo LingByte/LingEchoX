@@ -4,16 +4,17 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/sip/persist"
-	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,20 +35,6 @@ type acdPoolTargetWriteReq struct {
 	ShiftSchedule string `json:"shiftSchedule"`
 }
 
-// validateTrunkNumberOwnedByTenant: 0 表示「不绑定具体号码」，跳过校验；
-// >0 必须存在且 tenant_id = tid。
-func (h *Handlers) validateTrunkNumberOwnedByTenant(c *gin.Context, trunkNumberID, tid uint) bool {
-	if trunkNumberID == 0 {
-		return true
-	}
-	num, err := models.GetTrunkNumberByIDForTenant(h.db, trunkNumberID, tid)
-	if err != nil || num.ID == 0 {
-		response.Fail(c, "trunkNumberId 不属于当前租户", nil)
-		return false
-	}
-	return true
-}
-
 // acdPoolTargetListItem adds live SIP registration hint for admin list (not stored in acd_pool_targets).
 type acdPoolTargetListItem struct {
 	models.ACDPoolTarget
@@ -56,9 +43,7 @@ type acdPoolTargetListItem struct {
 
 func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 	var trunkNumID uint
 	if s := strings.TrimSpace(c.Query("trunkNumberId")); s != "" {
 		if v, perr := strconv.ParseUint(s, 10, 32); perr == nil {
@@ -66,8 +51,7 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 		}
 	}
 	list, total, err := models.ListACDPoolTargetsPage(h.db, tid, page, size, c.Query("routeType"), trunkNumID)
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
 	out := make([]acdPoolTargetListItem, 0, len(list))
@@ -76,12 +60,12 @@ func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 		if models.ACDSipInternalLiveLineEligible(row) {
 			n, _ := persist.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
 			item.LiveLineOnline = n > 0
-		} else if row.RouteType == models.ACDPoolRouteTypeWeb {
+		} else if row.RouteType == constants.ACDPoolRouteTypeWeb {
 			item.LiveLineOnline = models.WebSeatLastSeenFresh(row.WebSeatLastSeenAt)
 		}
 		out = append(out, item)
 	}
-	response.Success(c, "success", gin.H{"list": out, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, out, total, page, size)
 }
 
 // getACDDispatchMode returns current dispatch mode for one trunkNumberId (tenant-owned).
@@ -97,8 +81,11 @@ func (h *Handlers) getACDDispatchMode(c *gin.Context) {
 		response.Fail(c, "invalid trunkNumberId", nil)
 		return
 	}
-	if !h.validateTrunkNumberOwnedByTenant(c, trunkNumID, tid) {
-		return
+	if trunkNumID > 0 {
+		if num, err := models.GetTrunkNumberByIDForTenant(h.db, trunkNumID, tid); err != nil || num.ID == 0 {
+			response.Fail(c, "trunkNumberId 不属于当前租户", nil)
+			return
+		}
 	}
 	num, err := models.GetTrunkNumberByIDForTenant(h.db, trunkNumID, tid)
 	if err != nil || num.ID == 0 {
@@ -121,7 +108,8 @@ func (h *Handlers) updateACDDispatchMode(c *gin.Context) {
 		response.Fail(c, "invalid body: need trunkNumberId", nil)
 		return
 	}
-	if !h.validateTrunkNumberOwnedByTenant(c, req.TrunkNumberID, tid) {
+	if num, err := models.GetTrunkNumberByIDForTenant(h.db, req.TrunkNumberID, tid); err != nil || num.ID == 0 {
+		response.Fail(c, "trunkNumberId 不属于当前租户", nil)
 		return
 	}
 	mode := models.NormalizeACDDispatchMode(req.ACDDispatchMode)
@@ -136,9 +124,8 @@ func (h *Handlers) updateACDDispatchMode(c *gin.Context) {
 
 func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, id)
@@ -150,7 +137,7 @@ func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 	if models.ACDSipInternalLiveLineEligible(row) {
 		n, _ := persist.CountOnlineSIPUsersByUsername(h.db, row.TargetValue)
 		item.LiveLineOnline = n > 0
-	} else if row.RouteType == models.ACDPoolRouteTypeWeb {
+	} else if row.RouteType == constants.ACDPoolRouteTypeWeb {
 		item.LiveLineOnline = models.WebSeatLastSeenFresh(row.WebSeatLastSeenAt)
 	}
 	response.Success(c, "success", item)
@@ -159,8 +146,7 @@ func (h *Handlers) getACDPoolTarget(c *gin.Context) {
 func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
 	var req acdPoolTargetWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	rt, ok := models.ParseACDRouteType(req.RouteType)
@@ -172,22 +158,23 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		response.Fail(c, "请选择中继号码后再绑定坐席", nil)
 		return
 	}
-	if !h.validateTrunkNumberOwnedByTenant(c, req.TrunkNumberID, tid) {
+	if num, err := models.GetTrunkNumberByIDForTenant(h.db, req.TrunkNumberID, tid); err != nil || num.ID == 0 {
+		response.Fail(c, "trunkNumberId 不属于当前租户", nil)
 		return
 	}
 	ws := models.NormalizeACDWorkState(req.WorkState)
-	if ws != models.ACDWorkStateAvailable && ws != models.ACDWorkStateOffline && ws != models.ACDWorkStateBreak {
+	if ws != constants.ACDWorkStateAvailable && ws != constants.ACDWorkStateOffline && ws != constants.ACDWorkStateBreak {
 		response.Fail(c, "workState 仅允许 available/offline/break", nil)
 		return
 	}
 	now := time.Now()
 	sipSrc := ""
-	if rt == models.ACDPoolRouteTypeSIP {
+	if rt == constants.ACDPoolRouteTypeSIP {
 		// SIP ACD rows are now unified as outbound trunk-style targets.
-		sipSrc = models.ACDSipSourceTrunk
+		sipSrc = constants.ACDSipSourceTrunk
 	}
 	var webSeen *time.Time
-	if rt == models.ACDPoolRouteTypeWeb && ws == models.ACDWorkStateAvailable {
+	if rt == constants.ACDPoolRouteTypeWeb && ws == constants.ACDWorkStateAvailable {
 		webSeen = &now
 	}
 	row := models.NewACDPoolTargetForCreate(
@@ -205,7 +192,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 	}
 	// Web seat rows should not be duplicated for one operator.
 	// Reuse one row and clean up older duplicates.
-	if rt == models.ACDPoolRouteTypeWeb && op != "" {
+	if rt == constants.ACDPoolRouteTypeWeb && op != "" {
 		ctx := c.Request.Context()
 		existing, err := models.ListActiveWebACDPoolTargetsByCreateBy(ctx, h.db, op, tid)
 		if err != nil {
@@ -226,7 +213,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 				response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 				return
 			}
-			if ws == models.ACDWorkStateOffline {
+			if ws == constants.ACDWorkStateOffline {
 				_ = models.ClearACDPoolTargetWebSeatLastSeen(h.db, keep.ID)
 			}
 			if len(existing) > 1 {
@@ -250,14 +237,12 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 
 func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	var req acdPoolTargetWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	rt, ok := models.ParseACDRouteType(req.RouteType)
@@ -269,7 +254,8 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		response.Fail(c, "请选择中继号码后再绑定坐席", nil)
 		return
 	}
-	if !h.validateTrunkNumberOwnedByTenant(c, req.TrunkNumberID, tid) {
+	if num, err := models.GetTrunkNumberByIDForTenant(h.db, req.TrunkNumberID, tid); err != nil || num.ID == 0 {
+		response.Fail(c, "trunkNumberId 不属于当前租户", nil)
 		return
 	}
 	row, err := models.GetActiveACDPoolTargetByID(h.db, id)
@@ -278,15 +264,15 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		return
 	}
 	ws := models.NormalizeACDWorkState(req.WorkState)
-	if ws != models.ACDWorkStateAvailable && ws != models.ACDWorkStateOffline && ws != models.ACDWorkStateBreak {
+	if ws != constants.ACDWorkStateAvailable && ws != constants.ACDWorkStateOffline && ws != constants.ACDWorkStateBreak {
 		response.Fail(c, "workState 仅允许 available/offline/break", nil)
 		return
 	}
 	now := time.Now()
 	sipSrc := ""
-	if rt == models.ACDPoolRouteTypeSIP {
+	if rt == constants.ACDPoolRouteTypeSIP {
 		// SIP ACD rows are now unified as outbound trunk-style targets.
-		sipSrc = models.ACDSipSourceTrunk
+		sipSrc = constants.ACDSipSourceTrunk
 	}
 	op := middleware.AuditOperator(c)
 	updates := models.BuildACDPoolTargetUpdateMap(
@@ -301,7 +287,7 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	if rt == models.ACDPoolRouteTypeWeb && ws == models.ACDWorkStateOffline {
+	if rt == constants.ACDPoolRouteTypeWeb && ws == constants.ACDWorkStateOffline {
 		_ = models.ClearACDPoolTargetWebSeatLastSeen(h.db, id)
 	}
 	row, _ = models.ReloadACDPoolTargetByID(h.db, id)
@@ -310,9 +296,8 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 
 func (h *Handlers) deleteACDPoolTarget(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	n, err := models.SoftDeleteACDPoolTargetByIDForTenant(h.db, id, tid, middleware.AuditOperator(c))
@@ -349,7 +334,7 @@ func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
 		response.Fail(c, "not found", nil)
 		return
 	}
-	if row.RouteType != models.ACDPoolRouteTypeWeb {
+	if row.RouteType != constants.ACDPoolRouteTypeWeb {
 		response.Fail(c, "not a web target", nil)
 		return
 	}

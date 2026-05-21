@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/cmd/bootstrap"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
-	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
@@ -33,7 +33,7 @@ func signTenantAccessToken(db *gorm.DB, user models.TenantUser, tenant models.Te
 		return "", errors.New("jwt key manager not initialized")
 	}
 	role := constants.JWTRoleTenantMember
-	if ok, _ := models.TenantUserHasRoleName(db, user.ID, models.TenantAdminRoleName); ok {
+	if ok, _ := models.TenantUserHasRoleName(db, user.ID, constants.TenantAdminRoleName); ok {
 		role = constants.JWTRoleTenantAdmin
 	}
 	p := access.AccessPayload{
@@ -98,7 +98,7 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		"tenant":          models.TenantPublic(tenant),
 		"user":            models.TenantUserPublic(h.db, user),
 		"permissionCodes": pc,
-		"roleCreated":     models.TenantAdminRoleName,
+		"roleCreated":     constants.TenantAdminRoleName,
 		"roleId":          role.ID,
 	})
 }

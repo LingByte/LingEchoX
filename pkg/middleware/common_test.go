@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"

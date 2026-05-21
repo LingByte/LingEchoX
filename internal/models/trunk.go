@@ -1,117 +1,80 @@
 package models
 
+// Copyright (c) 2026 LingByte
+// SPDX-License-Identifier: MIT
+
 import (
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-// Copyright (c) 2026 LingByte
-// SPDX-License-Identifier: MIT
-
-// ProviderCodePrefix* 是后端为 Trunk / TrunkNumber 自动分配的供应商编码前缀。
-// 编码规则：<prefix>_<UUIDv4 去掉短横线>，全局唯一，前端只读，禁止由前端写入。
-const (
-	ProviderCodePrefixTrunk       = "prv"
-	ProviderCodePrefixTrunkNumber = "prn"
-)
-
 type Trunk struct {
-	ID          uint           `json:"id" gorm:"primarykey"`
-	TenantID    uint           `json:"tenantId,string" gorm:"index;not null;default:0"` // SaaS isolation
-	CreatedAt   time.Time      `json:"createdAt" label:"创建时间"`
-	UpdatedAt   time.Time      `json:"updatedAt" label:"更新时间"`
-	DeletedAt   gorm.DeletedAt `json:"deletedAt" gorm:"index"`
-	Name        string         `json:"name" gorm:"size:200" label:"线路名称"`
-	Description string         `json:"description,omitempty" label:"备注"`
-	Prefix      string         `json:"prefix"`
-	// LocalAddr 是这条中继对接的运营商网关地址 host:port（SIP INVITE 的下一跳）。
-	// 取代了过去的环境变量 SIP_TRANSFER_HOST + SIP_TRANSFER_PORT。
-	LocalAddr    string        `json:"local_addr" label:"网关地址"`
-	Numbers      []TrunkNumber `json:"numbers" gorm:"foreignKey:TrunkID" label:"号码"`
-	NumberNames  []string      `json:"numberNames" gorm:"-" label:"号码名称"`
-	ProviderCode string        `json:"providerCode" gorm:"column:provider_code;size:64;uniqueIndex:idx_trunk_provider_code" label:"供应商编码"`
-	Provider     string        `json:"-" label:"供应商"`
+	ID           uint           `json:"id" gorm:"primarykey"`
+	TenantID     uint           `json:"tenantId,string" gorm:"index;not null;default:0"` // SaaS isolation
+	CreatedAt    time.Time      `json:"createdAt" label:"创建时间"`
+	UpdatedAt    time.Time      `json:"updatedAt" label:"更新时间"`
+	DeletedAt    gorm.DeletedAt `json:"deletedAt" gorm:"index"`
+	Name         string         `json:"name" gorm:"size:200" label:"线路名称"`
+	Description  string         `json:"description,omitempty" label:"备注"`
+	Prefix       string         `json:"prefix"`
+	LocalAddr    string         `json:"local_addr" label:"网关地址"`
+	Numbers      []TrunkNumber  `json:"numbers" gorm:"foreignKey:TrunkID" label:"号码"`
+	NumberNames  []string       `json:"numberNames" gorm:"-" label:"号码名称"`
+	ProviderCode string         `json:"providerCode" gorm:"column:provider_code;size:64;uniqueIndex:idx_trunk_provider_code" label:"供应商编码"`
+	Provider     string         `json:"-" label:"供应商"`
 }
 
 type TrunkNumber struct {
-	ID        uint           `json:"id" gorm:"primarykey" label:"编号"`
-	CreatedAt time.Time      `json:"createdAt" label:"创建时间"`
-	UpdatedAt time.Time      `json:"updatedAt" label:"更新时间"`
-	DeletedAt gorm.DeletedAt `json:"deletedAt" gorm:"index"`
-	TrunkID   uint           `json:"trunkId" label:"所属线路"`
-	Trunk     Trunk          `json:"-" label:"所属线路"`
-	// TenantID 表示「这条号码当前已分配给哪个租户」。
-	// 0 表示平台号池待分配；>0 表示该租户独占。租户用户只能看到 tenant_id = 自己的号码。
-	// 与 Trunk.TenantID 解耦：Trunk 通常是平台级（tenant_id=0）的运营商资源，号码却是按个分配。
-	TenantID uint   `json:"tenantId,string" gorm:"column:tenant_id;index;not null;default:0" label:"分配租户"`
-	Number   string `json:"number" gorm:"size:200" label:"号码"`
-	// CallerDisplayName 写入外呼/转呼 INVITE From 的引号显示名（quoted display-name），如「七牛云客服专线」。
-	// 取代环境变量 SIP_CALLER_DISPLAY_NAME；主叫号码 user 部分用 Number（取代 SIP_CALLER_ID）。
-	CallerDisplayName string     `json:"callerDisplayName" gorm:"column:caller_display_name;size:200" label:"主叫显示名"`
-	Prefix            string     `json:"prefix" gorm:"size:200" label:"前缀"`
-	Description       string     `json:"description,omitempty" label:"备注"`
-	Direction         string     `json:"direction" label:"呼叫用途"`
-	Status            string     `json:"status" gorm:"size:64;index" label:"状态"`
-	Concurrent        uint       `json:"concurrent" label:"呼出并发数"`
-	CallInConcurrent  uint       `json:"callInConcurrent" gorm:"column:call_in_concurrent;default:0" label:"呼入并发数"`
-	IsTransferRelay   bool       `json:"isTransferRelay" gorm:"column:is_transfer_relay;default:0;comment:是否为转人工中继号码" label:"转人工中继号码"`
-	EffectiveTime     *time.Time `json:"effectiveTime" gorm:"column:effective_time;comment:生效时间" label:"生效时间"`
-	ExpirationTime    *time.Time `json:"expirationTime" gorm:"column:expiration_time;comment:失效时间" label:"失效时间"`
-	ProviderCode      string     `json:"providerCode" gorm:"column:provider_code;size:64;uniqueIndex:idx_trunk_number_provider_code" label:"供应商编码"`
-	Provider          string     `json:"-" label:"供应商"`
-	// VoiceDialogWSURL 入局呼叫匹配此号码时，语音对话 WebSocket 客户端拨号地址（ws/wss）；空则走平台默认 loopback。
-	VoiceDialogWSURL string `json:"voiceDialogWsUrl,omitempty" gorm:"column:voice_dialog_ws_url;size:512" label:"呼入语音对话WS"`
-	// WelcomeAudioURL 入局呼叫匹配此号码时，欢迎语音频文件 URL（http/https）；
-	// 取代环境变量 SIP_WELCOME_WAV_PATH。可由用户直接填外链，也可通过
-	// /api/v1/trunk-numbers/welcome-audio 上传 WAV 后由平台返回的 URL 写入。
-	// 空则按 SIP_WELCOME_WAV_PATH env / scripts/welcome.wav 兜底；兜底不存在则跳过欢迎语阶段。
-	// 写入时后端会做可达性 + WAV magic（RIFF/WAVE）双重校验，避免落库非音频或外链失效 URL。
-	WelcomeAudioURL string `json:"welcomeAudioUrl,omitempty" gorm:"column:welcome_audio_url;size:1024" label:"欢迎语音频URL"`
-	// TransferRingingURL 转人工/转接阶段播放给主叫的回铃 WAV URL（http/https）。
-	// 取代环境变量 SIP_TRANSFER_RINGING_WAV_PATH。两条独立链路共用此字段：
-	//   1) pkg/sip/conversation.playTransferRingingLoop（SIP 透传转接的 ringback）
-	//   2) pkg/sip/voicedialog.beginTransferLoadingPlayback（voicedialog 模式 transfer loading loop）
-	// 空则回退 SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav；都不存在则
-	// 转接阶段静音直到对端 180/200。写入时后端做可达性 + WAV magic 双重校验。
-	TransferRingingURL string `json:"transferRingingUrl,omitempty" gorm:"column:transfer_ringing_url;size:1024" label:"转接回铃音频URL"`
-	// ACDDispatchMode controls how inbound calls matching this trunk number select an ACDPoolTarget:
-	// - "weight" (default): pick highest weight (tie-break lower id)
-	// - "round_robin": pick next eligible target in id order (still requires weight>0; weight acts as enable/disable)
-	ACDDispatchMode string `json:"acdDispatchMode,omitempty" gorm:"column:acd_dispatch_mode;size:24;index;default:weight" label:"ACD 分配模式"`
-	// OutboundTrunkNumberID 当本号码作为「呼入 DID」需要对外发起呼叫（盲转/AI 外呼回流）时，
-	// 改用哪条 TrunkNumber 作为出局网关 + 主叫。0 表示「使用本号码自己」（若 direction 允许外呼）。
-	// 必须是同租户、direction ∈ {outbound, both, all} 的号码。
-	OutboundTrunkNumberID uint `json:"outboundTrunkNumberId" gorm:"column:outbound_trunk_number_id;not null;default:0;index" label:"外呼号码"`
-}
-
-// newProviderCode 生成 <prefix>_<32位无短横线UUID>，约 36 字节，留充足余量。
-func newProviderCode(prefix string) string {
-	return prefix + "_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	ID                    uint           `json:"id" gorm:"primarykey" label:"编号"`
+	CreatedAt             time.Time      `json:"createdAt" label:"创建时间"`
+	UpdatedAt             time.Time      `json:"updatedAt" label:"更新时间"`
+	DeletedAt             gorm.DeletedAt `json:"deletedAt" gorm:"index"`
+	TrunkID               uint           `json:"trunkId" label:"所属线路"`
+	Trunk                 Trunk          `json:"-" label:"所属线路"`
+	TenantID              uint           `json:"tenantId,string" gorm:"column:tenant_id;index;not null;default:0" label:"分配租户"`
+	Number                string         `json:"number" gorm:"size:200" label:"号码"`
+	CallerDisplayName     string         `json:"callerDisplayName" gorm:"column:caller_display_name;size:200" label:"主叫显示名"`
+	Prefix                string         `json:"prefix" gorm:"size:200" label:"前缀"`
+	Description           string         `json:"description,omitempty" label:"备注"`
+	Direction             string         `json:"direction" label:"呼叫用途"`
+	Status                string         `json:"status" gorm:"size:64;index" label:"状态"`
+	Concurrent            uint           `json:"concurrent" label:"呼出并发数"`
+	CallInConcurrent      uint           `json:"callInConcurrent" gorm:"column:call_in_concurrent;default:0" label:"呼入并发数"`
+	IsTransferRelay       bool           `json:"isTransferRelay" gorm:"column:is_transfer_relay;default:0;comment:是否为转人工中继号码" label:"转人工中继号码"`
+	EffectiveTime         *time.Time     `json:"effectiveTime" gorm:"column:effective_time;comment:生效时间" label:"生效时间"`
+	ExpirationTime        *time.Time     `json:"expirationTime" gorm:"column:expiration_time;comment:失效时间" label:"失效时间"`
+	ProviderCode          string         `json:"providerCode" gorm:"column:provider_code;size:64;uniqueIndex:idx_trunk_number_provider_code" label:"供应商编码"`
+	Provider              string         `json:"-" label:"供应商"`
+	VoiceDialogWSURL      string         `json:"voiceDialogWsUrl,omitempty" gorm:"column:voice_dialog_ws_url;size:512" label:"呼入语音对话WS"`
+	WelcomeAudioURL       string         `json:"welcomeAudioUrl,omitempty" gorm:"column:welcome_audio_url;size:1024" label:"欢迎语音频URL"`
+	TransferRingingURL    string         `json:"transferRingingUrl,omitempty" gorm:"column:transfer_ringing_url;size:1024" label:"转接回铃音频URL"`
+	ACDDispatchMode       string         `json:"acdDispatchMode,omitempty" gorm:"column:acd_dispatch_mode;size:24;index;default:weight" label:"ACD 分配模式"`
+	OutboundTrunkNumberID uint           `json:"outboundTrunkNumberId" gorm:"column:outbound_trunk_number_id;not null;default:0;index" label:"外呼号码"`
 }
 
 // BeforeCreate 后端自动分配供应商编码，前端无法覆盖（即便传入也会被丢弃）。
 func (t *Trunk) BeforeCreate(_ *gorm.DB) error {
-	t.ProviderCode = newProviderCode(ProviderCodePrefixTrunk)
+	t.ProviderCode = constants.ProviderCodePrefixTrunk + "_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	return nil
 }
 
 func (n *TrunkNumber) BeforeCreate(_ *gorm.DB) error {
-	n.ProviderCode = newProviderCode(ProviderCodePrefixTrunkNumber)
+	n.ProviderCode = constants.ProviderCodePrefixTrunkNumber + "_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	return nil
 }
 
 func (Trunk) TableName() string {
-	return constants.SIP_TRUNK_TABLE_NAME
+	return constants.SIPTrunkTableName
 }
 
 func (TrunkNumber) TableName() string {
-	return constants.SIP_TRUNK_NUMBER_TABLE_NAME
+	return constants.SIPTrunkNumberTableName
 }
 
 // ListTrunksPage lists non-deleted trunks with optional name filter.

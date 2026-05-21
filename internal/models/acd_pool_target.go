@@ -10,55 +10,23 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/gorm"
 )
 
-// ACD dispatch mode values stored on sip_trunk_numbers.acd_dispatch_mode.
-const (
-	ACDDispatchModeWeight     = "weight"
-	ACDDispatchModeRoundRobin = "round_robin"
-)
-
+// NormalizeACDDispatchMode normalizes sip_trunk_numbers.acd_dispatch_mode.
 func NormalizeACDDispatchMode(raw string) string {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	switch s {
-	case ACDDispatchModeRoundRobin, "rr":
-		return ACDDispatchModeRoundRobin
-	case "", ACDDispatchModeWeight:
-		return ACDDispatchModeWeight
+	case constants.ACDDispatchModeRoundRobin, "rr":
+		return constants.ACDDispatchModeRoundRobin
+	case "", constants.ACDDispatchModeWeight:
+		return constants.ACDDispatchModeWeight
 	default:
-		return ACDDispatchModeWeight
+		return constants.ACDDispatchModeWeight
 	}
 }
-
-// ACD pool route types (single table for SIP accounts and Web/WebRTC seats).
-const (
-	ACDPoolRouteTypeSIP = "sip"
-	ACDPoolRouteTypeWeb = "web"
-)
-
-// SipSource applies when RouteType is SIP (empty for web rows).
-const (
-	ACDSipSourceInternal = "internal" // TargetValue = registered sip_users.username
-	ACDSipSourceTrunk    = "trunk"    // TargetValue = external dial string (PSTN / carrier)
-)
-
-// WebSeatStaleAfter is the max age of WebSeatLastSeenAt for "链路在线" and sipacd.PickTransferDialTarget web eligibility.
-const WebSeatStaleAfter = 90 * time.Second
-
-// WorkState is real-time seat eligibility for this row (agent UI, admin, or SIP/Web gateway updates it).
-// cmd/sip blind transfer (DTMF) picks only rows with WorkState == ACDWorkStateAvailable (plus weight>0).
-// Use ringing/busy/acw/break to take a row out of the next-offer set without deleting it.
-const (
-	ACDWorkStateOffline   = "offline"   // not signed in / not bound
-	ACDWorkStateAvailable = "available" // idle, eligible for next offer
-	ACDWorkStateRinging   = "ringing"   // offer in progress; do not assign another call
-	ACDWorkStateBusy      = "busy"      // media connected / on call
-	ACDWorkStateACW       = "acw"       // after-call work (wrap-up)
-	ACDWorkStateBreak     = "break"     // rest / pause
-)
 
 // ACDPoolTarget is one row in the transfer routing table (acd_pool_targets) when cmd/sip uses a database.
 // Selection: highest Weight first, then lowest id; only Weight>0 and WorkState==available.
@@ -73,7 +41,7 @@ type ACDPoolTarget struct {
 	// 没有则回退到 trunk_number_id = 0 的全局兜底行。
 	TrunkNumberID         uint       `json:"trunkNumberId" gorm:"column:trunk_number_id;not null;default:0;index"` // per-number routing
 	Name                  string     `json:"name" gorm:"size:128"`                                                 // optional admin label
-	RouteType             string     `json:"routeType" gorm:"size:16;not null;index"`                              // RouteType is ACDPoolRouteTypeSIP or ACDPoolRouteTypeWeb.
+	RouteType             string     `json:"routeType" gorm:"size:16;not null;index"`                              // RouteType is constants.ACDPoolRouteTypeSIP or constants.ACDPoolRouteTypeWeb.
 	TargetValue           string     `json:"targetValue" gorm:"size:256"`                                          // TargetValue: sip internal → sip_users.username; sip trunk → dial digits / URI; web → usually empty.
 	SipSource             string     `json:"sipSource" gorm:"size:16;not null;default:'';index"`                   // SipSource: internal | trunk when RouteType is SIP; empty when web.
 	SipTrunkHost          string     `json:"sipTrunkHost" gorm:"size:128"`                                         // Sip trunk only: next SIP hop for INVITE (Request-URI host:port + optional signaling override).
@@ -94,11 +62,11 @@ func WebSeatLastSeenFresh(t *time.Time) bool {
 	if t == nil {
 		return false
 	}
-	return time.Since(*t) <= WebSeatStaleAfter
+	return time.Since(*t) <= constants.WebSeatStaleAfter
 }
 
 func (ACDPoolTarget) TableName() string {
-	return constants.ACD_POOL_TARGET_TABLE_NAME
+	return constants.ACDPoolTargetTableName
 }
 
 // --- Normalization (admin API + transfer pick) ---
@@ -107,7 +75,7 @@ func (ACDPoolTarget) TableName() string {
 func ParseACDRouteType(s string) (string, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case ACDPoolRouteTypeSIP, ACDPoolRouteTypeWeb:
+	case constants.ACDPoolRouteTypeSIP, constants.ACDPoolRouteTypeWeb:
 		return s, true
 	default:
 		return "", false
@@ -117,21 +85,21 @@ func ParseACDRouteType(s string) (string, bool) {
 // NormalizeACDSipSource returns internal or trunk.
 func NormalizeACDSipSource(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	if s == ACDSipSourceTrunk || s == "external" {
-		return ACDSipSourceTrunk
+	if s == constants.ACDSipSourceTrunk || s == "external" {
+		return constants.ACDSipSourceTrunk
 	}
-	return ACDSipSourceInternal
+	return constants.ACDSipSourceInternal
 }
 
 // NormalizeACDWorkState returns a known work_state or offline.
 func NormalizeACDWorkState(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case ACDWorkStateOffline, ACDWorkStateAvailable, ACDWorkStateRinging,
-		ACDWorkStateBusy, ACDWorkStateACW, ACDWorkStateBreak:
+	case constants.ACDWorkStateOffline, constants.ACDWorkStateAvailable, constants.ACDWorkStateRinging,
+		constants.ACDWorkStateBusy, constants.ACDWorkStateACW, constants.ACDWorkStateBreak:
 		return s
 	default:
-		return ACDWorkStateOffline
+		return constants.ACDWorkStateOffline
 	}
 }
 
@@ -145,11 +113,11 @@ func NormalizeACDTrunkPort(p int) int {
 
 // ACDSipInternalLiveLineEligible is true when list UI may show SIP registration hint.
 func ACDSipInternalLiveLineEligible(row ACDPoolTarget) bool {
-	if row.RouteType != ACDPoolRouteTypeSIP || strings.TrimSpace(row.TargetValue) == "" {
+	if row.RouteType != constants.ACDPoolRouteTypeSIP || strings.TrimSpace(row.TargetValue) == "" {
 		return false
 	}
 	src := strings.ToLower(strings.TrimSpace(row.SipSource))
-	if src == ACDSipSourceTrunk || src == "external" {
+	if src == constants.ACDSipSourceTrunk || src == "external" {
 		return false
 	}
 	return true
@@ -157,7 +125,7 @@ func ACDSipInternalLiveLineEligible(row ACDPoolTarget) bool {
 
 // ACDTrunkStorageFields returns DB trunk columns; empty when not sip+trunk.
 func ACDTrunkStorageFields(routeType, sipSource, trunkHost string, trunkPort int, trunkSig string) (host string, port int, sig string) {
-	if routeType != ACDPoolRouteTypeSIP || sipSource != ACDSipSourceTrunk {
+	if routeType != constants.ACDPoolRouteTypeSIP || sipSource != constants.ACDSipSourceTrunk {
 		return "", 0, ""
 	}
 	return strings.TrimSpace(trunkHost), NormalizeACDTrunkPort(trunkPort), strings.TrimSpace(trunkSig)
@@ -165,7 +133,7 @@ func ACDTrunkStorageFields(routeType, sipSource, trunkHost string, trunkPort int
 
 // ACDCallerStorageFields returns outbound CLI fields for SIP rows only.
 func ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName string) (id, disp string) {
-	if routeType != ACDPoolRouteTypeSIP {
+	if routeType != constants.ACDPoolRouteTypeSIP {
 		return "", ""
 	}
 	return strings.TrimSpace(sipCallerID), strings.TrimSpace(sipCallerDisplayName)
@@ -173,7 +141,7 @@ func ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName string)
 
 // ValidateACDTrunkCreateUpdate requires dial target + gateway for trunk SIP rows.
 func ValidateACDTrunkCreateUpdate(routeType, sipSource, targetValue, trunkHost string) bool {
-	if routeType != ACDPoolRouteTypeSIP || sipSource != ACDSipSourceTrunk {
+	if routeType != constants.ACDPoolRouteTypeSIP || sipSource != constants.ACDSipSourceTrunk {
 		return true
 	}
 	return strings.TrimSpace(targetValue) != "" && strings.TrimSpace(trunkHost) != ""
@@ -319,7 +287,7 @@ func BuildACDPoolTargetUpdateMap(
 	if existing.WorkState != workState {
 		u["work_state_at"] = now
 	}
-	if routeType == ACDPoolRouteTypeWeb && workState == ACDWorkStateAvailable {
+	if routeType == constants.ACDPoolRouteTypeWeb && workState == constants.ACDWorkStateAvailable {
 		u["web_seat_last_seen_at"] = now
 	}
 	meta := BaseModel{}
@@ -406,10 +374,10 @@ func listEligibleACDPoolTargetsForTransferScoped(ctx context.Context, db *gorm.D
 	}
 	q = q.Where("trunk_number_id = ?", trunkNumberScope).
 		Where("weight > ? AND work_state = ? AND route_type IN ?",
-			0, ACDWorkStateAvailable,
-			[]string{ACDPoolRouteTypeSIP, ACDPoolRouteTypeWeb}).
+			0, constants.ACDWorkStateAvailable,
+			[]string{constants.ACDPoolRouteTypeSIP, constants.ACDPoolRouteTypeWeb}).
 		Where("(route_type != ? OR (web_seat_last_seen_at IS NOT NULL AND web_seat_last_seen_at > ?))",
-			ACDPoolRouteTypeWeb, freshWebSince).
+			constants.ACDPoolRouteTypeWeb, freshWebSince).
 		Order("weight DESC").Order("id ASC").
 		Limit(limit)
 	if len(excludeIDs) > 0 {
@@ -430,7 +398,7 @@ func ListEligibleACDPoolTargetsForTransfer(ctx context.Context, db *gorm.DB, exc
 	if db == nil {
 		return nil, gorm.ErrInvalidDB
 	}
-	freshWebSince := time.Now().Add(-WebSeatStaleAfter)
+	freshWebSince := time.Now().Add(-constants.WebSeatStaleAfter)
 	if inboundTrunkNumberID > 0 {
 		specific, err := listEligibleACDPoolTargetsForTransferScoped(ctx, db, excludeIDs, limit, tenantID, inboundTrunkNumberID, freshWebSince)
 		if err != nil {
@@ -465,7 +433,7 @@ var acdRRLastPicked sync.Map // key=tenantID:trunkNumberScope:topWeight -> uint(
 //     This gives "idle priority + weight + round-robin" in one normalized flow.
 func PickEligibleACDPoolTargetForTransferWithMode(ctx context.Context, db *gorm.DB, excludeIDs []uint, tenantID uint, inboundTrunkNumberID uint, mode string) (ACDPoolTarget, error) {
 	mode = NormalizeACDDispatchMode(mode)
-	if mode != ACDDispatchModeRoundRobin {
+	if mode != constants.ACDDispatchModeRoundRobin {
 		return PickEligibleACDPoolTargetForTransfer(ctx, db, excludeIDs, tenantID, inboundTrunkNumberID)
 	}
 	rows, err := ListEligibleACDPoolTargetsForTransfer(ctx, db, excludeIDs, 64, tenantID, inboundTrunkNumberID)
@@ -533,7 +501,7 @@ func MarkACDPoolTargetsOfflineOutsideSchedule(ctx context.Context, db *gorm.DB, 
 	err := ActiveACDPoolTargets(db.WithContext(ctx)).
 		Where("shift_schedule_json IS NOT NULL AND shift_schedule_json <> ?", "").
 		Where("work_state IN ?", []string{
-			ACDWorkStateAvailable, ACDWorkStateRinging, ACDWorkStateBreak, ACDWorkStateACW,
+			constants.ACDWorkStateAvailable, constants.ACDWorkStateRinging, constants.ACDWorkStateBreak, constants.ACDWorkStateACW,
 		}).
 		Find(&rows).Error
 	if err != nil {
@@ -544,7 +512,7 @@ func MarkACDPoolTargetsOfflineOutsideSchedule(ctx context.Context, db *gorm.DB, 
 		if ACDFitsShiftSchedule(row.ShiftScheduleJSON, now, loc) {
 			continue
 		}
-		if err := UpdateACDPoolTargetWorkState(ctx, db, row.ID, ACDWorkStateOffline, "acd-shift"); err != nil {
+		if err := UpdateACDPoolTargetWorkState(ctx, db, row.ID, constants.ACDWorkStateOffline, "acd-shift"); err != nil {
 			continue
 		}
 		n++
@@ -560,7 +528,7 @@ func ListActiveWebACDPoolTargetsByCreateBy(ctx context.Context, db *gorm.DB, cre
 	}
 	var rows []ACDPoolTarget
 	q := ActiveACDPoolTargets(db.WithContext(ctx)).
-		Where("route_type = ? AND create_by = ?", ACDPoolRouteTypeWeb, createBy).
+		Where("route_type = ? AND create_by = ?", constants.ACDPoolRouteTypeWeb, createBy).
 		Where("tenant_id = ?", tenantID)
 	err := q.Order("updated_at DESC").Order("id DESC").Find(&rows).Error
 	return rows, err
@@ -586,13 +554,13 @@ func SoftDeleteACDPoolTargetsByIDs(ctx context.Context, db *gorm.DB, ids []uint,
 
 // MarkStaleWebACDPoolTargetsOffline sets stale web seats to offline for abnormal-disconnect fallback.
 func MarkStaleWebACDPoolTargetsOffline(ctx context.Context, db *gorm.DB, now time.Time) (int64, error) {
-	freshSince := now.Add(-WebSeatStaleAfter)
+	freshSince := now.Add(-constants.WebSeatStaleAfter)
 	res := ActiveACDPoolTargets(db.WithContext(ctx)).
-		Where("route_type = ?", ACDPoolRouteTypeWeb).
-		Where("work_state <> ?", ACDWorkStateOffline).
+		Where("route_type = ?", constants.ACDPoolRouteTypeWeb).
+		Where("work_state <> ?", constants.ACDWorkStateOffline).
 		Where("web_seat_last_seen_at IS NULL OR web_seat_last_seen_at <= ?", freshSince).
 		Updates(map[string]any{
-			"work_state":    ACDWorkStateOffline,
+			"work_state":    constants.ACDWorkStateOffline,
 			"work_state_at": now,
 			"updated_at":    now,
 		})

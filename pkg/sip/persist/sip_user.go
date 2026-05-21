@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/gorm"

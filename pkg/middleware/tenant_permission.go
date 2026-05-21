@@ -6,8 +6,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
-	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"

@@ -109,7 +109,6 @@ logs
 *$py.class
 *.so
 .Python
-xiaozhi-server/
 dist/
-SoulNexusDoc/
 trace/
+init.sql

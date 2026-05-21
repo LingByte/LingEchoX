@@ -1,15 +1,15 @@
 package handlers
 
 import (
-	"context"
 	"fmt"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -43,22 +43,18 @@ type sipCampaignContactReq struct {
 
 func (h *Handlers) listSIPCampaigns(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 	list, total, err := models.ListSIPCampaignsPage(h.db, tid, page, size, c.Query("status"), c.Query("name"))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, list, total, page, size)
 }
 
 func (h *Handlers) createSIPCampaign(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
 	var req sipCampaignCreateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -73,7 +69,7 @@ func (h *Handlers) createSIPCampaign(c *gin.Context) {
 	row := models.SIPCampaign{
 		TenantID:          tid,
 		Name:              name,
-		Status:            models.SIPCampaignStatusDraft,
+		Status:            constants.SIPCampaignStatusDraft,
 		Scenario:          strings.TrimSpace(req.Scenario),
 		MediaProfile:      strings.TrimSpace(req.MediaProfile),
 		ScriptID:          strings.TrimSpace(req.ScriptID),
@@ -104,10 +100,10 @@ func (h *Handlers) createSIPCampaign(c *gin.Context) {
 		row.SetCreateInfo(op)
 	}
 	if err := h.db.Create(&row).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
-	h.appendCampaignEvent(row.ID, 0, 0, "", "", "campaign", "info", fmt.Sprintf(
+	models.LogSIPCampaignEvent(h.db, row.ID, 0, 0, "", "", "campaign", "info", fmt.Sprintf(
 		"campaign created id=%d name=%q scenario=%s media=%s script_id=%s task_concurrency=%d global_concurrency=%d max_attempts=%d",
 		row.ID, row.Name, row.Scenario, row.MediaProfile, row.ScriptID,
 		row.TaskConcurrency, row.GlobalConcurrency, row.MaxAttempts,
@@ -117,9 +113,8 @@ func (h *Handlers) createSIPCampaign(c *gin.Context) {
 
 func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	campaign, err := models.GetActiveSIPCampaignForTenant(h.db, id, tid)
@@ -128,8 +123,7 @@ func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 		return
 	}
 	var req []sipCampaignContactReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	now := time.Now()
@@ -156,10 +150,10 @@ func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 		return
 	}
 	if err := h.db.Create(&rows).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
-	h.appendCampaignEvent(id, 0, 0, "", "", "contact", "info", fmt.Sprintf(
+	models.LogSIPCampaignEvent(h.db, id, 0, 0, "", "", "contact", "info", fmt.Sprintf(
 		"contacts imported count=%d campaign_id=%d max_attempts_per_contact=%d (numbers normalized for dial/register resolution)",
 		len(rows), id, campaign.MaxAttempts,
 	))
@@ -168,21 +162,18 @@ func (h *Handlers) addSIPCampaignContacts(c *gin.Context) {
 
 func (h *Handlers) listSIPCampaignContacts(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	if _, err := models.GetActiveSIPCampaignForTenant(h.db, id, tid); err != nil {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 	list, total, err := models.ListSIPCampaignContactsPage(h.db, id, page, size)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
@@ -190,9 +181,8 @@ func (h *Handlers) listSIPCampaignContacts(c *gin.Context) {
 
 func (h *Handlers) resetSIPCampaignSuppressedContacts(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	if _, err := models.GetActiveSIPCampaignForTenant(h.db, id, tid); err != nil {
@@ -202,60 +192,17 @@ func (h *Handlers) resetSIPCampaignSuppressedContacts(c *gin.Context) {
 	now := time.Now()
 	n, err := models.ResetSuppressedSIPCampaignContacts(h.db, id, now)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
-	h.appendCampaignEvent(id, 0, 0, "", "", "contact", "warn", fmt.Sprintf("reset suppressed contacts: %d", n))
+	models.LogSIPCampaignEvent(h.db, id, 0, 0, "", "", "contact", "warn", fmt.Sprintf("reset suppressed contacts: %d", n))
 	response.Success(c, "success", gin.H{"updated": n})
-}
-
-func (h *Handlers) setSIPCampaignStatus(c *gin.Context, status string) {
-	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
-		return
-	}
-	n, err := models.UpdateActiveSIPCampaignStatusForTenant(h.db, id, tid, status, middleware.AuditOperator(c))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	if n == 0 {
-		response.Fail(c, "campaign not found", nil)
-		return
-	}
-	if h.campaignSvc != nil && (status == models.SIPCampaignStatusPaused || status == models.SIPCampaignStatusDone) {
-		if _, err := h.campaignSvc.CancelCampaignQueuedTasks(context.Background(), id); err != nil {
-			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-			return
-		}
-	}
-	h.appendCampaignEvent(id, 0, 0, "", "", "campaign", "info", fmt.Sprintf(
-		"campaign status changed to %s campaign_id=%d (running=enqueues dial worker; paused/done stops new dials)",
-		status, id,
-	))
-	response.Success(c, "success", nil)
-}
-
-func (h *Handlers) startSIPCampaign(c *gin.Context) {
-	h.setSIPCampaignStatus(c, models.SIPCampaignStatusRunning)
-}
-func (h *Handlers) pauseSIPCampaign(c *gin.Context) {
-	h.setSIPCampaignStatus(c, models.SIPCampaignStatusPaused)
-}
-func (h *Handlers) resumeSIPCampaign(c *gin.Context) {
-	h.setSIPCampaignStatus(c, models.SIPCampaignStatusRunning)
-}
-func (h *Handlers) stopSIPCampaign(c *gin.Context) {
-	h.setSIPCampaignStatus(c, models.SIPCampaignStatusDone)
 }
 
 func (h *Handlers) deleteSIPCampaign(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	row, err := models.GetActiveSIPCampaignForTenant(h.db, id, tid)
@@ -263,30 +210,30 @@ func (h *Handlers) deleteSIPCampaign(c *gin.Context) {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
-	if row.Status == models.SIPCampaignStatusRunning {
+	if row.Status == constants.SIPCampaignStatusRunning {
 		response.Fail(c, "running campaign cannot be deleted", nil)
 		return
 	}
 	n, err := models.SoftDeleteSIPCampaignForTenant(h.db, id, tid, middleware.AuditOperator(c))
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	if n == 0 {
 		response.Fail(c, "campaign not found", nil)
 		return
 	}
-	h.appendCampaignEvent(id, 0, 0, "", "", "campaign", "info", "campaign deleted")
+	models.LogSIPCampaignEvent(h.db, id, 0, 0, "", "", "campaign", "info", "campaign deleted")
 	response.Success(c, "success", gin.H{"id": id})
 }
 
 func (h *Handlers) getSIPCampaignMetrics(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
 	invited, _ := models.CountAllSIPCallAttemptsForTenant(h.db, tid)
-	answered, _ := models.CountSIPCampaignContactsWithStatusForTenant(h.db, tid, models.SIPCampaignContactAnswered)
-	failed, _ := models.CountSIPCampaignContactsWithStatusesForTenant(h.db, tid, []string{models.SIPCampaignContactFailed, models.SIPCampaignContactExhausted})
-	retrying, _ := models.CountSIPCampaignContactsWithStatusForTenant(h.db, tid, models.SIPCampaignContactRetrying)
-	suppressed, _ := models.CountSIPCampaignContactsWithStatusForTenant(h.db, tid, models.SIPCampaignContactSuppressed)
+	answered, _ := models.CountSIPCampaignContactsWithStatusForTenant(h.db, tid, constants.SIPCampaignContactAnswered)
+	failed, _ := models.CountSIPCampaignContactsWithStatusesForTenant(h.db, tid, []string{constants.SIPCampaignContactFailed, constants.SIPCampaignContactExhausted})
+	retrying, _ := models.CountSIPCampaignContactsWithStatusForTenant(h.db, tid, constants.SIPCampaignContactRetrying)
+	suppressed, _ := models.CountSIPCampaignContactsWithStatusForTenant(h.db, tid, constants.SIPCampaignContactSuppressed)
 	response.Success(c, "success", gin.H{
 		"invited_total":    invited,
 		"answered_total":   answered,
@@ -308,9 +255,8 @@ func (h *Handlers) getSIPCampaignWorkerMetrics(c *gin.Context) {
 
 func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
@@ -439,22 +385,5 @@ func (h *Handlers) getSIPCampaignLogs(c *gin.Context) {
 		"list":  logs,
 		"total": len(logs),
 	})
-}
-
-func (h *Handlers) appendCampaignEvent(campaignID, contactID, attemptID uint, callID, correlationID, typ, level, message string) {
-	if h == nil || h.db == nil || campaignID == 0 {
-		return
-	}
-	evt := &models.SIPCampaignEvent{
-		CampaignID:    campaignID,
-		ContactID:     contactID,
-		AttemptID:     attemptID,
-		CallID:        strings.TrimSpace(callID),
-		CorrelationID: strings.TrimSpace(correlationID),
-		Type:          utils.NonEmptyOr(strings.TrimSpace(typ), "campaign"),
-		Level:         utils.NonEmptyOr(strings.TrimSpace(level), "info"),
-		Message:       utils.NonEmptyOr(strings.TrimSpace(message), "event"),
-	}
-	_ = models.InsertSIPCampaignEvent(context.Background(), h.db, evt)
 }
 

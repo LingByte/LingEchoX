@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
@@ -116,9 +117,9 @@ func (s *CampaignService) enqueueDispatchTask(campaign models.SIPCampaign, conta
 	if !s.tryAcquireCampaignSlot(campaign.ID, campaignLimit) {
 		now := time.Now()
 		_ = s.db.WithContext(context.Background()).Model(&models.SIPCampaignContact{}).
-			Where("id = ? AND status = ?", contact.ID, models.SIPCampaignContactDialing).
+			Where("id = ? AND status = ?", contact.ID, constants.SIPCampaignContactDialing).
 			Updates(map[string]any{
-				"status":         models.SIPCampaignContactReady,
+				"status":         constants.SIPCampaignContactReady,
 				"failure_reason": "",
 				"next_run_at":    &now,
 			}).Error
@@ -184,7 +185,7 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 		s.metrics.Suppressed.Add(1)
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).
 			Where("id = ?", contact.ID).
-			Updates(map[string]any{"status": models.SIPCampaignContactSuppressed, "failure_reason": "dedupe_24h"}).Error
+			Updates(map[string]any{"status": constants.SIPCampaignContactSuppressed, "failure_reason": "dedupe_24h"}).Error
 		s.appendEvent(ctx, models.SIPCampaignEvent{
 			CampaignID: campaign.ID,
 			ContactID:  contact.ID,
@@ -210,7 +211,7 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).
 			Where("id = ?", contact.ID).
 			Updates(map[string]any{
-				"status":         models.SIPCampaignContactReady,
+				"status":         constants.SIPCampaignContactReady,
 				"failure_reason": "attempt_create_failed",
 			}).Error
 		s.appendEvent(ctx, models.SIPCampaignEvent{
@@ -258,7 +259,7 @@ func (s *CampaignService) processContact(ctx context.Context, dialer Dialer, cam
 	target, err := buildDialTarget(s.db, campaign, contact)
 	if err != nil {
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).Where("id = ?", contact.ID).
-			Updates(map[string]any{"status": models.SIPCampaignContactFailed, "failure_reason": err.Error()}).Error
+			Updates(map[string]any{"status": constants.SIPCampaignContactFailed, "failure_reason": err.Error()}).Error
 		s.updateAttemptRow(ctx, campaign.ID, contact.ID, attemptNo, map[string]any{
 			"state":          "failed",
 			"failure_reason": "build_target_failed:" + err.Error(),

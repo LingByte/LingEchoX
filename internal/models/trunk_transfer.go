@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"gorm.io/gorm"
 )
 
@@ -243,5 +244,5 @@ func parseTrunkLocalAddr(raw string) (host string, port int, ok bool) {
 		}
 	}
 	// 没有端口则按 50400 默认。
-	return strings.TrimSpace(s), 50400, true
+	return strings.TrimSpace(s), constants.TrunkDefaultSIPPort, true
 }

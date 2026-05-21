@@ -1,7 +1,7 @@
 package models
 
 import (
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"gorm.io/gorm"
 )
 
@@ -18,7 +18,7 @@ type TenantGroup struct {
 }
 
 func (TenantGroup) TableName() string {
-	return constants.TENANT_GROUP_TABLE_NAME
+	return constants.TenantGroupTableName
 }
 
 // TenantUserGroup links users to groups (many-to-many).
@@ -30,14 +30,14 @@ type TenantUserGroup struct {
 }
 
 func (TenantUserGroup) TableName() string {
-	return constants.TENANT_USER_GROUP_TABLE_NAME
+	return constants.TenantUserGroupTableName
 }
 
 // FirstTenantGroupForUser returns the first department (alphabetical) linked to the tenant user, if any.
 func FirstTenantGroupForUser(db *gorm.DB, tenantUserID uint) (TenantGroup, error) {
 	var g TenantGroup
-	tg := constants.TENANT_GROUP_TABLE_NAME
-	tugTbl := constants.TENANT_USER_GROUP_TABLE_NAME
+	tg := constants.TenantGroupTableName
+	tugTbl := constants.TenantUserGroupTableName
 	err := db.Model(&TenantGroup{}).
 		Joins("INNER JOIN "+tugTbl+" AS tug ON tug.group_id = "+tg+".id AND tug.deleted_at IS NULL").
 		Where("tug.tenant_user_id = ? AND "+tg+".deleted_at IS NULL", tenantUserID).
@@ -57,8 +57,8 @@ func ListTenantGroupsForTenant(db *gorm.DB, tenantID uint) ([]TenantGroup, error
 
 // ListTenantGroupsForUser lists departments linked to a user (active memberships).
 func ListTenantGroupsForUser(db *gorm.DB, tenantUserID uint) ([]TenantGroup, error) {
-	tg := constants.TENANT_GROUP_TABLE_NAME
-	tugTbl := constants.TENANT_USER_GROUP_TABLE_NAME
+	tg := constants.TenantGroupTableName
+	tugTbl := constants.TenantUserGroupTableName
 	var rows []TenantGroup
 	err := db.Model(&TenantGroup{}).
 		Joins("INNER JOIN "+tugTbl+" AS tug ON tug.group_id = "+tg+".id AND tug.deleted_at IS NULL").

@@ -1,17 +1,17 @@
 package models
 
+// Copyright (c) 2026 LingByte
+// SPDX-License-Identifier: MIT
+
 import (
 	"errors"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"gorm.io/gorm"
 )
 
 // ErrInvalidOrgReference indicates an id list did not resolve to valid catalog rows.
 var ErrInvalidOrgReference = errors.New("invalid organization reference")
-
-// Copyright (c) 2026 LingByte
-// SPDX-License-Identifier: MIT
 
 // Permission is a global capability code (shared RBAC catalog across tenants).
 type Permission struct {
@@ -27,7 +27,7 @@ type Permission struct {
 }
 
 func (Permission) TableName() string {
-	return constants.PERMISSION_TABLE_NAME
+	return constants.PermissionTableName
 }
 
 // TenantRolePermission assigns permissions to a tenant role.
@@ -39,7 +39,7 @@ type TenantRolePermission struct {
 }
 
 func (TenantRolePermission) TableName() string {
-	return constants.TENANT_ROLE_PERMISSION_TABLE_NAME
+	return constants.TenantRolePermissionTableName
 }
 
 // ListAllPermissions returns the global permission catalog (active rows).
@@ -156,7 +156,7 @@ func BackfillSystemTenantAdminPermissions(db *gorm.DB, operator string) error {
 	}
 	var adminRoleIDs []uint
 	if err := db.Model(&TenantRole{}).
-		Where("is_system = ? AND name = ?", true, TenantAdminRoleName).
+		Where("is_system = ? AND name = ?", true, constants.TenantAdminRoleName).
 		Pluck("id", &adminRoleIDs).Error; err != nil {
 		return err
 	}
@@ -211,20 +211,4 @@ func SyncPermissionCatalog(db *gorm.DB) error {
 		}
 	}
 	return nil
-}
-
-func dedupeUint(ids []uint) []uint {
-	seen := map[uint]struct{}{}
-	out := make([]uint, 0, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	return out
 }

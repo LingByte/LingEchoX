@@ -8,15 +8,14 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/cmd/bootstrap"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
-	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
-
 
 type tenantLoginReq struct {
 	Email    string `json:"email" binding:"required,email"`
@@ -40,7 +39,48 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 	email := utils.TrimLower(req.Email)
 	user, err := models.GetActiveTenantUserByEmailGlobal(h.db, email)
 	if err == nil {
-		h.finishTenantLogin(c, req.Password, req.TotpCode, user)
+		tenant, terr := models.GetActiveTenantByID(h.db, user.TenantID)
+		if terr != nil {
+			response.Fail(c, "组织不存在或已被停用", nil)
+			return
+		}
+		if tenant.Status != "" && tenant.Status != "active" {
+			response.Fail(c, "组织已暂停服务", nil)
+			return
+		}
+		if user.Status != constants.TenantUserStatusActive {
+			response.Fail(c, "账号不可用", nil)
+			return
+		}
+		if !access.CheckPassword(user.PasswordHash, req.Password) {
+			response.Fail(c, "邮箱或密码错误", nil)
+			return
+		}
+		if user.TOTPEnabled && strings.TrimSpace(user.TOTPSecret) != "" {
+			if !access.ValidateTOTP(req.TotpCode, user.TOTPSecret) {
+				if strings.TrimSpace(req.TotpCode) == "" {
+					response.Fail(c, "需要两步验证码", gin.H{"needsTotp": true})
+				} else {
+					response.Fail(c, "两步验证码错误", gin.H{"needsTotp": true})
+				}
+				return
+			}
+		}
+		_ = models.RecordTenantUserLogin(h.db, user.ID, c.ClientIP())
+		token, terr := signTenantAccessToken(h.db, user, tenant)
+		if terr != nil {
+			response.Fail(c, "签发登录凭证失败", nil)
+			return
+		}
+		codes, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, user.ID)
+		response.Success(c, "success", gin.H{
+			"principal":       "tenant",
+			"token":           token,
+			"expiresIn":       int(constants.TenantAccessTokenTTL.Seconds()),
+			"tenant":          models.TenantPublic(tenant),
+			"user":            models.TenantUserPublic(h.db, user),
+			"permissionCodes": codes,
+		})
 		return
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -75,53 +115,3 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 		"platformAdmin": models.PlatformAdminPublic(adm),
 	})
 }
-
-func (h *Handlers) finishTenantLogin(c *gin.Context, password, totpCode string, user models.TenantUser) {
-	tenant, err := models.GetActiveTenantByID(h.db, user.TenantID)
-	if err != nil {
-		response.Fail(c, "组织不存在或已被停用", nil)
-		return
-	}
-	if tenant.Status != "" && tenant.Status != "active" {
-		response.Fail(c, "组织已暂停服务", nil)
-		return
-	}
-	if user.Status != models.TenantUserStatusActive {
-		response.Fail(c, "账号不可用", nil)
-		return
-	}
-	if !access.CheckPassword(user.PasswordHash, password) {
-		response.Fail(c, "邮箱或密码错误", nil)
-		return
-	}
-
-	if user.TOTPEnabled && strings.TrimSpace(user.TOTPSecret) != "" {
-		if !access.ValidateTOTP(totpCode, user.TOTPSecret) {
-			if strings.TrimSpace(totpCode) == "" {
-				response.Fail(c, "需要两步验证码", gin.H{"needsTotp": true})
-			} else {
-				response.Fail(c, "两步验证码错误", gin.H{"needsTotp": true})
-			}
-			return
-		}
-	}
-
-	_ = models.RecordTenantUserLogin(h.db, user.ID, c.ClientIP())
-
-	token, err := signTenantAccessToken(h.db, user, tenant)
-	if err != nil {
-		response.Fail(c, "签发登录凭证失败", nil)
-		return
-	}
-
-	codes, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, user.ID)
-	response.Success(c, "success", gin.H{
-		"principal":       "tenant",
-		"token":           token,
-		"expiresIn":       int(constants.TenantAccessTokenTTL.Seconds()),
-		"tenant":          models.TenantPublic(tenant),
-		"user":            models.TenantUserPublic(h.db, user),
-		"permissionCodes": codes,
-	})
-}
-

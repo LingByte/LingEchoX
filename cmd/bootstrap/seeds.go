@@ -4,9 +4,9 @@ package bootstrap
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/config"
-	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
@@ -37,6 +37,8 @@ func (s *SeedService) SeedAll() error {
 	return nil
 }
 
+// seedPermissions syncs the global permission catalog and binds every system「管理员」role
+// to all catalog rows (idempotent). Safe to call after init-sql tenant/role inserts.
 func (s *SeedService) seedPermissions() error {
 	if s == nil || s.db == nil {
 		return nil
@@ -44,8 +46,6 @@ func (s *SeedService) seedPermissions() error {
 	if err := models.SyncPermissionCatalog(s.db); err != nil {
 		return err
 	}
-	// Heal pre-existing tenants whose system「管理员」role was bound before new
-	// permission codes (e.g. menu.* sidebar codes) were added to the catalog.
 	return models.BackfillSystemTenantAdminPermissions(s.db, "seed")
 }
 
@@ -129,7 +129,7 @@ func (s *SeedService) seedPlatformAdmin() error {
 		Email:        defaultPlatformAdminEmail,
 		PasswordHash: hash,
 		DisplayName:  defaultPlatformAdminDisplayName,
-		Status:       models.PlatformAdminStatusActive,
+		Status:       constants.PlatformAdminStatusActive,
 	}
 	row.SetCreateInfo("seed")
 	if err := s.db.Create(row).Error; err != nil {

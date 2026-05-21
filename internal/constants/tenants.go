@@ -12,8 +12,21 @@ const (
 // TenantAccessTokenTTL is the default tenant/platform login access token lifetime.
 const TenantAccessTokenTTL = 24 * time.Hour
 
-// TenantStatusActive / TenantStatusSuspended are tenant lifecycle values.
+// Tenant lifecycle.
 const (
 	TenantStatusActive    = "active"
 	TenantStatusSuspended = "suspended"
 )
+
+// Tenant user account lifecycle and provisioning source.
+const (
+	TenantUserStatusActive   = "active"
+	TenantUserStatusDisabled = "disabled"
+	TenantUserStatusPending  = "pending"
+
+	TenantUserSourceRegister = "register"
+	TenantUserSourceManual   = "manual"
+)
+
+// TenantAdminRoleName is the system full-access role created on tenant registration.
+const TenantAdminRoleName = "管理员"

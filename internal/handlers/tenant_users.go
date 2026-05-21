@@ -11,8 +11,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/stores"
@@ -44,36 +46,30 @@ type tenantUserStatusReq struct {
 }
 
 func (h *Handlers) listTenantUsers(c *gin.Context) {
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 
 	list, total, err := models.ListTenantUsersPage(h.db, tenantID, page, size, c.Query("status"), c.Query("search"))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
 	pub := make([]gin.H, 0, len(list))
 	for _, row := range list {
 		pub = append(pub, models.TenantUserPublic(h.db, row))
 	}
-	response.Success(c, "success", gin.H{"list": pub, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, pub, total, page, size)
 }
 
 func (h *Handlers) getTenantUser(c *gin.Context) {
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	row, err := models.GetActiveTenantUserByID(h.db, id)
@@ -89,14 +85,12 @@ func (h *Handlers) getTenantUser(c *gin.Context) {
 }
 
 func (h *Handlers) createTenantUser(c *gin.Context) {
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
 	var req tenantUserCreateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 
@@ -134,17 +128,17 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 	}
 	hash, err := access.HashPassword(pw)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 
 	status := strings.TrimSpace(req.Status)
 	if status == "" {
-		status = models.TenantUserStatusActive
+		status = constants.TenantUserStatusActive
 	}
 	source := strings.TrimSpace(req.Source)
 	if source == "" {
-		source = models.TenantUserSourceManual
+		source = constants.TenantUserSourceManual
 	}
 
 	user := &models.TenantUser{
@@ -162,27 +156,24 @@ func (h *Handlers) createTenantUser(c *gin.Context) {
 	}
 
 	if err := models.CreateTenantUser(h.db, user); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", models.TenantUserPublic(h.db, *user))
 }
 
 func (h *Handlers) updateTenantUser(c *gin.Context) {
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req tenantUserUpdateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 
@@ -239,7 +230,7 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 
 	n, err := models.UpdateTenantUser(h.db, uint(id), updates, middleware.AuditOperator(c))
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	if n == 0 {
@@ -250,14 +241,12 @@ func (h *Handlers) updateTenantUser(c *gin.Context) {
 }
 
 func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -268,20 +257,19 @@ func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
 	}
 
 	var req tenantUserStatusReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 
 	status := strings.TrimSpace(req.Status)
-	if status != models.TenantUserStatusActive && status != models.TenantUserStatusDisabled && status != models.TenantUserStatusPending {
+	if status != constants.TenantUserStatusActive && status != constants.TenantUserStatusDisabled && status != constants.TenantUserStatusPending {
 		response.Fail(c, "invalid status", nil)
 		return
 	}
 
 	n, err := models.UpdateTenantUserStatus(h.db, id, status, middleware.AuditOperator(c))
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	if n == 0 {
@@ -292,14 +280,12 @@ func (h *Handlers) updateTenantUserStatus(c *gin.Context) {
 }
 
 func (h *Handlers) deleteTenantUser(c *gin.Context) {
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -311,7 +297,7 @@ func (h *Handlers) deleteTenantUser(c *gin.Context) {
 
 	rows, err := models.SoftDeleteTenantUserByID(h.db, id, middleware.AuditOperator(c))
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	if rows == 0 {
@@ -322,14 +308,12 @@ func (h *Handlers) deleteTenantUser(c *gin.Context) {
 }
 
 func (h *Handlers) restoreTenantUser(c *gin.Context) {
-	tenantID := middleware.AuthTenantID(c)
-	if tenantID == 0 {
-		response.Fail(c, "unauthorized", nil)
+	tenantID, ok := ginutil.RequireAuthTenant(c)
+	if !ok {
 		return
 	}
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -341,7 +325,7 @@ func (h *Handlers) restoreTenantUser(c *gin.Context) {
 
 	rows, err := models.RestoreTenantUser(h.db, id, middleware.AuditOperator(c))
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	if rows == 0 {
@@ -358,9 +342,9 @@ func (h *Handlers) getTenantUserStats(c *gin.Context) {
 		return
 	}
 	total, _ := models.CountTenantUsers(h.db, tenantID)
-	active, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusActive)
-	disabled, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusDisabled)
-	pending, _ := models.CountTenantUsersByStatus(h.db, tenantID, models.TenantUserStatusPending)
+	active, _ := models.CountTenantUsersByStatus(h.db, tenantID, constants.TenantUserStatusActive)
+	disabled, _ := models.CountTenantUsersByStatus(h.db, tenantID, constants.TenantUserStatusDisabled)
+	pending, _ := models.CountTenantUsersByStatus(h.db, tenantID, constants.TenantUserStatusPending)
 	response.Success(c, "success", gin.H{
 		"total":    total,
 		"active":   active,
@@ -384,21 +368,6 @@ type updateMyPasswordReq struct {
 	NewPassword string `json:"newPassword" binding:"required,min=8,max=128"`
 }
 
-func (h *Handlers) currentTenantUser(c *gin.Context) (models.TenantUser, bool) {
-	uid := middleware.AuthUserID(c)
-	tid := middleware.AuthTenantID(c)
-	if uid == 0 || tid == 0 {
-		response.Fail(c, "unauthorized", nil)
-		return models.TenantUser{}, false
-	}
-	u, err := models.GetActiveTenantUserByID(h.db, uid)
-	if err != nil || u.TenantID != tid {
-		response.Fail(c, "unauthorized", nil)
-		return models.TenantUser{}, false
-	}
-	return u, true
-}
-
 func (h *Handlers) getMe(c *gin.Context) {
 	if aid := middleware.AuthPlatformAdminID(c); aid > 0 {
 		var row models.PlatformAdmin
@@ -413,8 +382,9 @@ func (h *Handlers) getMe(c *gin.Context) {
 		return
 	}
 
-	u, ok := h.currentTenantUser(c)
-	if !ok {
+	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
+	if err != nil {
+		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	var tenant models.Tenant
@@ -462,13 +432,13 @@ func (h *Handlers) updateMe(c *gin.Context) {
 		return
 	}
 
-	u, ok := h.currentTenantUser(c)
-	if !ok {
+	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
+	if err != nil {
+		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	var req updateMeReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	updates := map[string]any{}
@@ -498,12 +468,12 @@ func (h *Handlers) updateMe(c *gin.Context) {
 		return
 	}
 	if _, err := models.UpdateTenantUser(h.db, u.ID, updates, middleware.AuditOperator(c)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	next, err := models.GetActiveTenantUserByID(h.db, u.ID)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", models.TenantUserPublic(h.db, next))
@@ -543,13 +513,13 @@ func (h *Handlers) updateMyPassword(c *gin.Context) {
 		return
 	}
 
-	u, ok := h.currentTenantUser(c)
-	if !ok {
+	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
+	if err != nil {
+		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	var req updateMyPasswordReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	if !access.CheckPassword(u.PasswordHash, req.OldPassword) {
@@ -562,11 +532,11 @@ func (h *Handlers) updateMyPassword(c *gin.Context) {
 	}
 	hash, err := access.HashPassword(req.NewPassword)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{"password_hash": hash}, middleware.AuditOperator(c)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": u.ID})
@@ -587,8 +557,9 @@ func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 		response.Fail(c, "平台管理员不支持上传头像", nil)
 		return
 	}
-	u, ok := h.currentTenantUser(c)
-	if !ok {
+	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
+	if err != nil {
+		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	fh, err := c.FormFile("file")
@@ -605,7 +576,7 @@ func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 
 	body, err := io.ReadAll(io.LimitReader(src, maxAvatarBytes+1))
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	if len(body) > maxAvatarBytes {
@@ -622,34 +593,20 @@ func (h *Handlers) uploadMeAvatar(c *gin.Context) {
 	key := path.Join("avatars", "t"+strconv.FormatUint(uint64(u.TenantID), 10), "u"+strconv.FormatUint(uint64(u.ID), 10)+ext)
 	st := stores.Default()
 	if err := st.Write(key, bytes.NewReader(body)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	// 头像可下载 URL 解析顺序：
 	//   1) 后端自带绝对 URL（含 STORAGE_PUBLIC_BASE_URL 兜底）；
 	//   2) 落到 /uploads/<key> 由网关回源。
-	url := strings.TrimPrefix(strings.TrimSpace(stores.PublicObjectURL(st, key)), "/")
-	if lower := strings.ToLower(url); !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
-		proto := c.Request.Header.Get("X-Forwarded-Proto")
-		if proto == "" {
-			proto = "http"
-			if c.Request.TLS != nil {
-				proto = "https"
-			}
-		}
-		if host := strings.TrimSpace(c.Request.Host); host != "" {
-			url = proto + "://" + host + "/uploads/" + strings.TrimPrefix(key, "/")
-		} else {
-			url = "/uploads/" + strings.TrimPrefix(key, "/")
-		}
-	}
+	url := ginutil.UploadURL(c, key)
 	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{"avatar_url": url}, middleware.AuditOperator(c)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	next, err := models.GetActiveTenantUserByID(h.db, u.ID)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"avatarUrl": url, "user": models.TenantUserPublic(h.db, next)})
@@ -670,8 +627,9 @@ func (h *Handlers) setupTotp(c *gin.Context) {
 		response.Fail(c, "平台管理员不支持两步验证", nil)
 		return
 	}
-	u, ok := h.currentTenantUser(c)
-	if !ok {
+	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
+	if err != nil {
+		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	if u.TOTPEnabled {
@@ -688,7 +646,7 @@ func (h *Handlers) setupTotp(c *gin.Context) {
 	}
 	setup, err := access.GenerateTOTPSetup(issuer, account, 0)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{
@@ -703,8 +661,9 @@ func (h *Handlers) enableTotp(c *gin.Context) {
 		response.Fail(c, "平台管理员不支持两步验证", nil)
 		return
 	}
-	u, ok := h.currentTenantUser(c)
-	if !ok {
+	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
+	if err != nil {
+		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	if u.TOTPEnabled {
@@ -712,8 +671,7 @@ func (h *Handlers) enableTotp(c *gin.Context) {
 		return
 	}
 	var req enableTotpReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	if !access.ValidateTOTP(req.Code, req.Secret) {
@@ -725,12 +683,12 @@ func (h *Handlers) enableTotp(c *gin.Context) {
 		"totp_secret":  secret,
 		"totp_enabled": true,
 	}, middleware.AuditOperator(c)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	next, err := models.GetActiveTenantUserByID(h.db, u.ID)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", models.TenantUserPublic(h.db, next))
@@ -741,8 +699,9 @@ func (h *Handlers) disableTotp(c *gin.Context) {
 		response.Fail(c, "平台管理员不支持两步验证", nil)
 		return
 	}
-	u, ok := h.currentTenantUser(c)
-	if !ok {
+	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
+	if err != nil {
+		response.Fail(c, "unauthorized", nil)
 		return
 	}
 	if !u.TOTPEnabled || strings.TrimSpace(u.TOTPSecret) == "" {
@@ -750,8 +709,7 @@ func (h *Handlers) disableTotp(c *gin.Context) {
 		return
 	}
 	var req disableTotpReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	if !access.CheckPassword(u.PasswordHash, req.Password) {
@@ -766,12 +724,12 @@ func (h *Handlers) disableTotp(c *gin.Context) {
 		"totp_secret":  "",
 		"totp_enabled": false,
 	}, middleware.AuditOperator(c)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	next, err := models.GetActiveTenantUserByID(h.db, u.ID)
 	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", models.TenantUserPublic(h.db, next))

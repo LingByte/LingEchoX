@@ -5,23 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
-)
-
-const (
-	SIPCampaignStatusDraft       = "draft"
-	SIPCampaignStatusRunning     = "running"
-	SIPCampaignStatusPaused      = "paused"
-	SIPCampaignStatusDone        = "done"
-	SIPCampaignContactReady      = "ready"
-	SIPCampaignContactDialing    = "dialing"
-	SIPCampaignContactAnswered   = "answered"
-	SIPCampaignContactFailed     = "failed"
-	SIPCampaignContactRetrying   = "retrying"
-	SIPCampaignContactExhausted  = "exhausted"
-	SIPCampaignContactSuppressed = "suppressed"
 )
 
 // SIPCampaign stores one outbound campaign configuration.
@@ -202,10 +189,10 @@ func GetSIPCampaignByID(ctx context.Context, db *gorm.DB, id uint) (SIPCampaign,
 // SIPCampaignStatusUpdates builds the map for status transitions (started_at / ended_at).
 func SIPCampaignStatusUpdates(status string, now time.Time) map[string]any {
 	u := map[string]any{"status": status}
-	if status == SIPCampaignStatusRunning {
+	if status == constants.SIPCampaignStatusRunning {
 		u["started_at"] = &now
 	}
-	if status == SIPCampaignStatusDone {
+	if status == constants.SIPCampaignStatusDone {
 		u["ended_at"] = &now
 	}
 	return u
@@ -296,13 +283,13 @@ func ListSIPCampaignContactsPage(db *gorm.DB, campaignID uint, page, size int) (
 // ResetSuppressedSIPCampaignContacts moves suppressed rows back to ready for a campaign.
 func ResetSuppressedSIPCampaignContacts(db *gorm.DB, campaignID uint, now time.Time) (int64, error) {
 	updates := map[string]any{
-		"status":         SIPCampaignContactReady,
+		"status":         constants.SIPCampaignContactReady,
 		"failure_reason": "",
 		"next_run_at":    &now,
 		"last_dial_at":   nil,
 	}
 	res := db.Model(&SIPCampaignContact{}).
-		Where("campaign_id = ? AND status = ?", campaignID, SIPCampaignContactSuppressed).
+		Where("campaign_id = ? AND status = ?", campaignID, constants.SIPCampaignContactSuppressed).
 		Updates(updates)
 	return res.RowsAffected, res.Error
 }
@@ -334,7 +321,7 @@ func BuildSIPCampaignContactsBatch(campaignID uint, maxAttempts int, items []SIP
 			CallerName:  strings.TrimSpace(it.CallerName),
 			RequestURI:  strings.TrimSpace(it.RequestURI),
 			Priority:    it.Priority,
-			Status:      SIPCampaignContactReady,
+			Status:      constants.SIPCampaignContactReady,
 			MaxAttempts: ma,
 			NextRunAt:   &now,
 			Variables:   it.VariablesJSON,
@@ -428,6 +415,24 @@ func GetSIPCampaignContactPhone(db *gorm.DB, contactID uint) (string, error) {
 	return c.Phone, nil
 }
 
+// LogSIPCampaignEvent appends one operator / API log line (best-effort).
+func LogSIPCampaignEvent(db *gorm.DB, campaignID, contactID, attemptID uint, callID, correlationID, typ, level, message string) {
+	if db == nil || campaignID == 0 {
+		return
+	}
+	evt := &SIPCampaignEvent{
+		CampaignID:    campaignID,
+		ContactID:     contactID,
+		AttemptID:     attemptID,
+		CallID:        strings.TrimSpace(callID),
+		CorrelationID: strings.TrimSpace(correlationID),
+		Type:          utils.NonEmptyOr(strings.TrimSpace(typ), "campaign"),
+		Level:         utils.NonEmptyOr(strings.TrimSpace(level), "info"),
+		Message:       utils.NonEmptyOr(strings.TrimSpace(message), "event"),
+	}
+	_ = InsertSIPCampaignEvent(context.Background(), db, evt)
+}
+
 // InsertSIPCampaignEvent persists one operator / worker log line.
 func InsertSIPCampaignEvent(ctx context.Context, db *gorm.DB, e *SIPCampaignEvent) error {
 	if db == nil || e == nil {
@@ -442,7 +447,7 @@ func InsertSIPCampaignEvent(ctx context.Context, db *gorm.DB, e *SIPCampaignEven
 // ListRunningSIPCampaigns returns campaigns with status=running (worker; includes soft-deleted filter off).
 func ListRunningSIPCampaigns(ctx context.Context, db *gorm.DB) ([]SIPCampaign, error) {
 	var list []SIPCampaign
-	err := db.WithContext(ctx).Where("status = ?", SIPCampaignStatusRunning).Find(&list).Error
+	err := db.WithContext(ctx).Where("status = ?", constants.SIPCampaignStatusRunning).Find(&list).Error
 	return list, err
 }
 
@@ -454,7 +459,7 @@ func ListCampaignContactsReadyToDial(ctx context.Context, db *gorm.DB, campaignI
 	var list []SIPCampaignContact
 	err := db.WithContext(ctx).
 		Where("campaign_id = ? AND status IN ? AND (next_run_at IS NULL OR next_run_at <= ?)", campaignID,
-			[]string{SIPCampaignContactReady, SIPCampaignContactRetrying}, now).
+			[]string{constants.SIPCampaignContactReady, constants.SIPCampaignContactRetrying}, now).
 		Order("priority desc, id asc").
 		Limit(limit).
 		Find(&list).Error
@@ -464,7 +469,7 @@ func ListCampaignContactsReadyToDial(ctx context.Context, db *gorm.DB, campaignI
 // TryClaimSIPCampaignContactDialing CAS-updates ready/retrying → dialing.
 func TryClaimSIPCampaignContactDialing(ctx context.Context, db *gorm.DB, contactID uint) bool {
 	tx := db.WithContext(ctx).Model(&SIPCampaignContact{}).
-		Where("id = ? AND status IN ?", contactID, []string{SIPCampaignContactReady, SIPCampaignContactRetrying}).
-		Updates(map[string]any{"status": SIPCampaignContactDialing})
+		Where("id = ? AND status IN ?", contactID, []string{constants.SIPCampaignContactReady, constants.SIPCampaignContactRetrying}).
+		Updates(map[string]any{"status": constants.SIPCampaignContactDialing})
 	return tx.Error == nil && tx.RowsAffected == 1
 }

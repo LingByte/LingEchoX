@@ -5,22 +5,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/gorm"
 )
 
 // Copyright (c) 2026 LingByte
 // SPDX-License-Identifier: MIT
-
-const (
-	TenantUserStatusActive   = "active"
-	TenantUserStatusDisabled = "disabled"
-	TenantUserStatusPending  = "pending"
-
-	TenantUserSourceRegister = "register"
-	TenantUserSourceManual   = "manual"
-)
 
 // TenantUser is a login identity scoped to exactly one tenant (SaaS member).
 type TenantUser struct {
@@ -79,7 +70,7 @@ func TenantUserPublic(db *gorm.DB, u TenantUser) map[string]any {
 }
 
 func (TenantUser) TableName() string {
-	return constants.TENANT_USER_TABLE_NAME
+	return constants.TenantUserTableName
 }
 
 // ActiveTenantUsers is the non-deleted tenant user scope.
@@ -115,6 +106,21 @@ func ListTenantUsersPage(db *gorm.DB, tenantID uint, page, size int, status, sea
 		return nil, 0, err
 	}
 	return list, total, nil
+}
+
+// GetAuthenticatedTenantUser returns the active user when JWT user id matches tenant id.
+func GetAuthenticatedTenantUser(db *gorm.DB, userID, tenantID uint) (TenantUser, error) {
+	if userID == 0 || tenantID == 0 {
+		return TenantUser{}, gorm.ErrRecordNotFound
+	}
+	u, err := GetActiveTenantUserByID(db, userID)
+	if err != nil {
+		return TenantUser{}, err
+	}
+	if u.TenantID != tenantID {
+		return TenantUser{}, gorm.ErrRecordNotFound
+	}
+	return u, nil
 }
 
 // GetActiveTenantUserByID returns one active tenant user by primary key.

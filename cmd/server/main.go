@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/LinByte/VoiceServer/cmd/bootstrap"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/handlers"
 	"github.com/LinByte/VoiceServer/internal/listeners"
 	"github.com/LinByte/VoiceServer/internal/sipserver"
 	"github.com/LinByte/VoiceServer/internal/tasks"
 	"github.com/LinByte/VoiceServer/pkg/config"
-	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -52,7 +52,7 @@ func main() {
 	init := flag.Bool("init", false, "run database schema migration at startup (default: true)")
 	seed := flag.Bool("seed", false, "seed database")
 	mode := flag.String("mode", "", "running environment (development, test, production)")
-	initSQL := flag.String("init-sql", "", "path to database init .sql script (optional)")
+	initSQL := flag.String("init-sql", "", "optional tenant seed .sql (e.g. scripts/sql/init.sql); only runs when this flag is set")
 	sipHost := flag.String("sip-host", "0.0.0.0", "embedded SIP UDP listen host")
 	sipPort := flag.Int("sip-port", 6050, "embedded SIP UDP listen port")
 	sipLocalIP := flag.String("sip-local-ip", "127.0.0.1", "Advertised IP for SDP c= AND for SIP Via/Contact when -sip-host is 0.0.0.0 (must be reachable by LAN phones for outbound/campaign; avoid 127.0.0.1)")

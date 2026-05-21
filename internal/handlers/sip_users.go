@@ -5,15 +5,14 @@ package handlers
 
 import (
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/sip/persist"
-	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,40 +34,33 @@ func acdPoolTargetDisplayName(r models.ACDPoolTarget) string {
 }
 
 func (h *Handlers) listSIPUsers(c *gin.Context) {
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 	list, total, err := persist.ListSIPUsersPage(h.db, page, size)
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, list, total, page, size)
 }
 
 func (h *Handlers) getSIPUser(c *gin.Context) {
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	row, err := persist.GetActiveSIPUserByID(h.db, id)
-	if err != nil {
-		response.Fail(c, "not found", nil)
+	if ginutil.WriteGORMError(c, err, "not found") {
 		return
 	}
 	response.Success(c, "success", row)
 }
 
 func (h *Handlers) deleteSIPUser(c *gin.Context) {
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	rows, err := persist.SoftDeleteSIPUserByID(h.db, id)
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
 	if rows == 0 {
@@ -84,9 +76,7 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 //   - 入局话单的 tenant_id / inbound_trunk_number_id 由被叫 DID 在 sip_trunk_numbers 的解析结果写入（与限并发、号码池作用域一致）。
 //     未匹配 DID 且未开启 SIP_INBOUND_ALLOW_UNKNOWN_DID 的呼叫不会落库为租户数据。
 func (h *Handlers) listSIPCalls(c *gin.Context) {
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 
 	var (
 		list  []persist.SIPCall
@@ -106,8 +96,7 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 		tid := middleware.CurrentTenantID(c)
 		list, total, err = persist.ListSIPCallsPage(h.db, tid, page, size, c.Query("callId"), c.Query("state"))
 	}
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
 	for i := range list {
@@ -142,13 +131,12 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 			}
 		}
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, list, total, page, size)
 }
 
 func (h *Handlers) getSIPCall(c *gin.Context) {
-	id, idErr := utils.ParseID(c.Param("id"))
-	if idErr != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 

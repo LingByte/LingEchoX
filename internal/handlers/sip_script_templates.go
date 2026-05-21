@@ -1,14 +1,12 @@
 package handlers
 
 import (
-	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
-	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,27 +21,22 @@ type sipScriptTemplateWriteReq struct {
 
 func (h *Handlers) listSIPScriptTemplates(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 	list, total, err := models.ListSIPScriptTemplatesPage(h.db, tid, page, size, c.Query("scriptId"), c.Query("name"))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, list, total, page, size)
 }
 
 func (h *Handlers) getSIPScriptTemplate(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, id, tid)
-	if err != nil {
-		response.Fail(c, "not found", nil)
+	if ginutil.WriteGORMError(c, err, "not found") {
 		return
 	}
 	response.Success(c, "success", row)
@@ -52,8 +45,7 @@ func (h *Handlers) getSIPScriptTemplate(c *gin.Context) {
 func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
 	var req sipScriptTemplateWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	spec, err := models.ParseScriptTemplateSpec(req.ScriptSpec)
@@ -86,8 +78,7 @@ func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
 	if op := middleware.AuditOperator(c); op != "" {
 		row.SetCreateInfo(op)
 	}
-	if err := h.db.Create(&row).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, h.db.Create(&row).Error) {
 		return
 	}
 	response.Success(c, "success", row)
@@ -95,22 +86,18 @@ func (h *Handlers) createSIPScriptTemplate(c *gin.Context) {
 
 func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	var req sipScriptTemplateWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	row, err := models.GetActiveSIPScriptTemplateForTenant(h.db, id, tid)
-	if err != nil {
-		response.Fail(c, "not found", nil)
+	if ginutil.WriteGORMError(c, err, "not found") {
 		return
 	}
-	updateBy := middleware.AuditOperator(c)
 	updates, err := models.BuildSIPScriptTemplateUpdates(
 		row,
 		req.Name,
@@ -119,14 +106,13 @@ func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 		req.Description,
 		req.Enabled,
 		req.ScriptSpec,
-		updateBy,
+		middleware.AuditOperator(c),
 	)
 	if err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
-	if err := h.db.Model(&row).Updates(updates).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, h.db.Model(&row).Updates(updates).Error) {
 		return
 	}
 	row, _ = models.ReloadSIPScriptTemplateByID(h.db, id)
@@ -135,14 +121,12 @@ func (h *Handlers) updateSIPScriptTemplate(c *gin.Context) {
 
 func (h *Handlers) deleteSIPScriptTemplate(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	n, err := models.SoftDeleteSIPScriptTemplateByIDForTenant(h.db, id, tid, middleware.AuditOperator(c))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
 	if n == 0 {

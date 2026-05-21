@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/llm"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"

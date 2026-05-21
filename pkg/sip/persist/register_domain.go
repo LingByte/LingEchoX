@@ -4,7 +4,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 )
 

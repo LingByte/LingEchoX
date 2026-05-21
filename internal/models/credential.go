@@ -9,13 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"gorm.io/gorm"
-)
-
-const (
-	CredentialStatusActive   = "active"
-	CredentialStatusDisabled = "disabled"
 )
 
 // Credential is tenant-scoped API access (AK/SK) with optional IP allowlist.
@@ -33,7 +28,7 @@ type Credential struct {
 }
 
 func (Credential) TableName() string {
-	return constants.CREDENTIAL_TABLE_NAME
+	return constants.CredentialTableName
 }
 
 // CredentialMatchesPermissionCodes checks AK/SK permission JSON against required route codes (requireAll = AND).
@@ -75,10 +70,34 @@ func CredentialMatchesPermissionCodes(db *gorm.DB, credID uint, required []strin
 	return false, nil
 }
 
+// GetCredentialByIDForTenant loads one credential scoped to tenant (not deleted).
+func GetCredentialByIDForTenant(db *gorm.DB, id, tenantID uint) (Credential, error) {
+	var row Credential
+	err := db.Where("id = ? AND tenant_id = ?", id, tenantID).First(&row).Error
+	return row, err
+}
+
+// UpdateCredentialStatus sets status and optional update_by when status changes.
+func UpdateCredentialStatus(db *gorm.DB, cred *Credential, status, updateBy string) error {
+	if cred == nil || cred.ID == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	if cred.Status == status {
+		return nil
+	}
+	meta := BaseModel{}
+	meta.SetUpdateInfo(updateBy)
+	updates := map[string]any{"status": status}
+	if meta.UpdateBy != "" {
+		updates["update_by"] = meta.UpdateBy
+	}
+	return db.Model(&Credential{}).Where("id = ?", cred.ID).Updates(updates).Error
+}
+
 func GetActiveCredentialByAccessKey(db *gorm.DB, ak string) (Credential, error) {
 	var row Credential
 	err := db.Model(&Credential{}).
-		Where("access_key = ? AND status = ?", ak, CredentialStatusActive).
+		Where("access_key = ? AND status = ?", ak, constants.CredentialStatusActive).
 		First(&row).Error
 	return row, err
 }

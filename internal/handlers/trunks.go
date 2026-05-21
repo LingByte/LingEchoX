@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/stores"
@@ -68,22 +69,18 @@ type trunkNumberWriteReq struct {
 
 func (h *Handlers) listTrunks(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 	list, total, err := models.ListTrunksPage(h.db, 0, page, size, c.Query("name"))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, list, total, page, size)
 }
 
 func (h *Handlers) createTrunk(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
 	var req trunkWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -99,7 +96,7 @@ func (h *Handlers) createTrunk(c *gin.Context) {
 		LocalAddr:   strings.TrimSpace(req.LocalAddr),
 	}
 	if err := h.db.Create(&row).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", row)
@@ -107,9 +104,8 @@ func (h *Handlers) createTrunk(c *gin.Context) {
 
 func (h *Handlers) getTrunk(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	row, err := models.GetTrunkByID(h.db, id)
@@ -122,14 +118,12 @@ func (h *Handlers) getTrunk(c *gin.Context) {
 
 func (h *Handlers) updateTrunk(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	var req trunkWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -148,7 +142,7 @@ func (h *Handlers) updateTrunk(c *gin.Context) {
 		"local_addr":  strings.TrimSpace(req.LocalAddr),
 	}
 	if err := h.db.Model(&models.Trunk{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	row, _ := models.GetTrunkByID(h.db, id)
@@ -157,9 +151,8 @@ func (h *Handlers) updateTrunk(c *gin.Context) {
 
 func (h *Handlers) deleteTrunk(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	if _, err := models.GetTrunkByIDBare(h.db, id); err != nil {
@@ -167,16 +160,14 @@ func (h *Handlers) deleteTrunk(c *gin.Context) {
 		return
 	}
 	if err := models.SoftDeleteTrunkCascade(h.db, id); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": id})
 }
 
 func (h *Handlers) listTrunkNumbers(c *gin.Context) {
-	p, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	s, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	page, size := utils.NormalizePage(p, s, 100)
+	page, size := ginutil.QueryPage(c, 100)
 	var trunkID uint
 	if s := strings.TrimSpace(c.Query("trunkId")); s != "" {
 		v, err := strconv.ParseUint(s, 10, 32)
@@ -213,18 +204,16 @@ func (h *Handlers) listTrunkNumbers(c *gin.Context) {
 
 	tid := middleware.CurrentTenantID(c)
 	list, total, err := models.ListTrunkNumbersForTenant(h.db, tid, page, size, c.Query("number"))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+	if ginutil.WriteInternalError(c, err) {
 		return
 	}
-	response.Success(c, "success", gin.H{"list": list, "total": total, "page": page, "size": size})
+	ginutil.PageSuccess(c, list, total, page, size)
 }
 
 func (h *Handlers) createTrunkNumber(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
 	var req trunkNumberWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	number := strings.TrimSpace(req.Number)
@@ -285,7 +274,7 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 		OutboundTrunkNumberID: req.OutboundTrunkNumberID,
 	}
 	if err := h.db.Create(&row).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", row)
@@ -293,9 +282,8 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 
 func (h *Handlers) getTrunkNumber(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	row, err := models.GetTrunkNumberByID(h.db, id)
@@ -308,14 +296,12 @@ func (h *Handlers) getTrunkNumber(c *gin.Context) {
 
 func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	var req trunkNumberWriteReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "invalid body", err.Error())
+	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	number := strings.TrimSpace(req.Number)
@@ -380,7 +366,7 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 		"outbound_trunk_number_id": req.OutboundTrunkNumberID,
 	}
 	if err := h.db.Model(&models.TrunkNumber{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	row, _ := models.GetTrunkNumberByID(h.db, id)
@@ -406,81 +392,54 @@ func (h *Handlers) uploadTrunkNumberAudio(kind string) gin.HandlerFunc {
 		panic(fmt.Sprintf("uploadTrunkNumberAudio: unsupported kind %q", kind))
 	}
 	return func(c *gin.Context) {
-		h.handleTrunkNumberAudioUpload(c, kind)
-	}
-}
-
-func (h *Handlers) handleTrunkNumberAudioUpload(c *gin.Context, kind string) {
-	// Platform admin only (enforced by route middleware in handlers/urls.go).
-	_ = middleware.AuthPlatformAdminID // keep import in case future hardening checks role explicitly
-	fh, err := c.FormFile("file")
-	if err != nil || fh == nil {
-		response.Fail(c, "请选择 WAV 文件", nil)
-		return
-	}
-	if fh.Size > 0 && fh.Size > maxWelcomeWAVBytes {
-		response.Fail(c, fmt.Sprintf("WAV 文件不能超过 %d MiB", maxWelcomeWAVBytes>>20), nil)
-		return
-	}
-	src, err := fh.Open()
-	if err != nil {
-		response.Fail(c, "无法读取文件", nil)
-		return
-	}
-	defer src.Close()
-	body, err := io.ReadAll(io.LimitReader(src, maxWelcomeWAVBytes+1))
-	if err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	if len(body) > maxWelcomeWAVBytes {
-		response.Fail(c, fmt.Sprintf("WAV 文件不能超过 %d MiB", maxWelcomeWAVBytes>>20), nil)
-		return
-	}
-	if err := welcomeaudio.ValidateBytes(body); err != nil {
-		response.Fail(c, "仅支持 WAV (RIFF/WAVE) 文件", err.Error())
-		return
-	}
-	// Key 按 "<kind>/<yyyymm>/<时间戳>.wav" 分目录便于后续生命周期管理
-	// (S3 lifecycle / 本地按月归档清理)。kind 已在 uploadTrunkNumberAudio
-	// 注册期校验过白名单，这里直接拼接安全。
-	now := time.Now().UTC()
-	key := path.Join(
-		kind,
-		fmt.Sprintf("%04d%02d", now.Year(), int(now.Month())),
-		strings.ReplaceAll(strconv.FormatInt(now.UnixNano(), 36), "-", "")+".wav",
-	)
-	st := stores.Default()
-	if err := st.Write(key, bytes.NewReader(body)); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
-		return
-	}
-	// URL 解析顺序与 tenant_users.uploadMeAvatar 保持一致：
-	//   1) stores.PublicObjectURL 给的绝对 URL（含 STORAGE_PUBLIC_BASE_URL 兜底）
-	//   2) 落到 /uploads/<key> 由网关回源
-	u := strings.TrimSpace(stores.PublicObjectURL(st, key))
-	if lower := strings.ToLower(u); !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
-		proto := c.Request.Header.Get("X-Forwarded-Proto")
-		if proto == "" {
-			proto = "http"
-			if c.Request.TLS != nil {
-				proto = "https"
-			}
+		// Platform admin only (enforced by route middleware in handlers/urls.go).
+		fh, err := c.FormFile("file")
+		if err != nil || fh == nil {
+			response.Fail(c, "请选择 WAV 文件", nil)
+			return
 		}
-		if host := strings.TrimSpace(c.Request.Host); host != "" {
-			u = proto + "://" + host + "/uploads/" + strings.TrimPrefix(key, "/")
-		} else {
-			u = "/uploads/" + strings.TrimPrefix(key, "/")
+		if fh.Size > 0 && fh.Size > maxWelcomeWAVBytes {
+			response.Fail(c, fmt.Sprintf("WAV 文件不能超过 %d MiB", maxWelcomeWAVBytes>>20), nil)
+			return
 		}
+		src, err := fh.Open()
+		if err != nil {
+			response.Fail(c, "无法读取文件", nil)
+			return
+		}
+		defer src.Close()
+		body, err := io.ReadAll(io.LimitReader(src, maxWelcomeWAVBytes+1))
+		if err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+		if len(body) > maxWelcomeWAVBytes {
+			response.Fail(c, fmt.Sprintf("WAV 文件不能超过 %d MiB", maxWelcomeWAVBytes>>20), nil)
+			return
+		}
+		if err := welcomeaudio.ValidateBytes(body); err != nil {
+			response.Fail(c, "仅支持 WAV (RIFF/WAVE) 文件", err.Error())
+			return
+		}
+		now := time.Now().UTC()
+		key := path.Join(
+			kind,
+			fmt.Sprintf("%04d%02d", now.Year(), int(now.Month())),
+			strings.ReplaceAll(strconv.FormatInt(now.UnixNano(), 36), "-", "")+".wav",
+		)
+		st := stores.Default()
+		if err := st.Write(key, bytes.NewReader(body)); err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+		response.Success(c, "success", gin.H{"url": ginutil.UploadURL(c, key), "key": key, "size": len(body)})
 	}
-	response.Success(c, "success", gin.H{"url": u, "key": key, "size": len(body)})
 }
 
 func (h *Handlers) deleteTrunkNumber(c *gin.Context) {
 	// Platform admin only (enforced by route middleware).
-	id, err := utils.ParseID(c.Param("id"))
-	if err != nil {
-		response.Fail(c, "invalid id", nil)
+	id, ok := ginutil.ParamID(c, "id")
+	if !ok {
 		return
 	}
 	if _, err := models.GetTrunkNumberByID(h.db, id); err != nil {
@@ -488,7 +447,7 @@ func (h *Handlers) deleteTrunkNumber(c *gin.Context) {
 		return
 	}
 	if err := models.SoftDeleteTrunkNumberByID(h.db, id); err != nil {
-		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		ginutil.WriteInternalError(c, err)
 		return
 	}
 	response.Success(c, "success", gin.H{"id": id})

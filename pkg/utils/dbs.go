@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )

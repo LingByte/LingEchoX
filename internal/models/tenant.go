@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	pinyinLib "github.com/mozillazg/go-pinyin"
 	"gorm.io/datatypes"
@@ -44,7 +44,7 @@ type Tenant struct {
 }
 
 func (Tenant) TableName() string {
-	return constants.TENANT_TABLE_NAME
+	return constants.TenantTableName
 }
 
 // TenantProvisionInput is the payload for tenant self-register or platform provisioning.
@@ -176,7 +176,7 @@ func ProvisionTenantWithAdmin(db *gorm.DB, req TenantProvisionInput, passwordHas
 
 		roleRow := &TenantRole{
 			TenantID:    tenant.ID,
-			Name:        TenantAdminRoleName,
+			Name:        constants.TenantAdminRoleName,
 			Description: "组织管理员，注册时自动创建",
 			IsSystem:    true,
 		}
@@ -191,8 +191,8 @@ func ProvisionTenantWithAdmin(db *gorm.DB, req TenantProvisionInput, passwordHas
 			Email:        email,
 			PasswordHash: passwordHash,
 			DisplayName:  display,
-			Status:       TenantUserStatusActive,
-			Source:       TenantUserSourceRegister,
+			Status:       constants.TenantUserStatusActive,
+			Source:       constants.TenantUserSourceRegister,
 		}
 		u.SetCreateInfo(attachTag)
 		if e := CreateTenantUser(tx, u); e != nil {

@@ -1,12 +1,9 @@
 package models
 
 import (
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"gorm.io/gorm"
 )
-
-// TenantAdminRoleName is the default full-access role created on tenant registration.
-const TenantAdminRoleName = "管理员"
 
 // TenantRole is a named role within one tenant.
 type TenantRole struct {
@@ -19,7 +16,7 @@ type TenantRole struct {
 }
 
 func (TenantRole) TableName() string {
-	return constants.TENANT_ROLE_TABLE_NAME
+	return constants.TenantRoleTableName
 }
 
 // TenantUserRole assigns roles to a tenant user.
@@ -31,7 +28,7 @@ type TenantUserRole struct {
 }
 
 func (TenantUserRole) TableName() string {
-	return constants.TENANT_USER_ROLE_TABLE_NAME
+	return constants.TenantUserRoleTableName
 }
 
 // CreateTenantRole inserts a tenant-scoped role.
@@ -104,10 +101,10 @@ func ListTenantRolesForUser(db *gorm.DB, tenantUserID uint) ([]TenantRole, error
 
 // ListEffectivePermissionCodesForTenantUser returns distinct permission codes granted via roles.
 func ListEffectivePermissionCodesForTenantUser(db *gorm.DB, tenantUserID uint) ([]string, error) {
-	perm := constants.PERMISSION_TABLE_NAME
-	trp := constants.TENANT_ROLE_PERMISSION_TABLE_NAME
-	tr := constants.TENANT_ROLE_TABLE_NAME
-	tur := constants.TENANT_USER_ROLE_TABLE_NAME
+	perm := constants.PermissionTableName
+	trp := constants.TenantRolePermissionTableName
+	tr := constants.TenantRoleTableName
+	tur := constants.TenantUserRoleTableName
 	var codes []string
 	err := db.Table(perm).
 		Select("DISTINCT "+perm+".code").

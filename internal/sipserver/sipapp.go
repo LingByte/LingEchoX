@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/config"
 	"github.com/LinByte/VoiceServer/pkg/logger"
@@ -616,7 +617,7 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 		}
 	}
 	inboundTrunkNumberID := resolveInboundTrunkNumberPK(db, calledUser)
-	mode := models.ACDDispatchModeWeight
+	mode := constants.ACDDispatchModeWeight
 	if inboundTrunkNumberID > 0 && tenantID > 0 {
 		if tn, err := models.GetTrunkNumberByIDForTenant(db, inboundTrunkNumberID, tenantID); err == nil && tn.ID > 0 {
 			mode = models.NormalizeACDDispatchMode(tn.ACDDispatchMode)
@@ -630,9 +631,9 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 			return outbound.DialTarget{}, false
 		}
 
-		if row.RouteType == models.ACDPoolRouteTypeWeb {
+		if row.RouteType == constants.ACDPoolRouteTypeWeb {
 			if strings.TrimSpace(inboundCallID) != "" {
-				if err := models.UpdateACDPoolTargetWorkState(ctx, db, row.ID, models.ACDWorkStateRinging, "sip-transfer"); err == nil {
+				if err := models.UpdateACDPoolTargetWorkState(ctx, db, row.ID, constants.ACDWorkStateRinging, "sip-transfer"); err == nil {
 					webseat.BindInboundCallToWebACD(strings.TrimSpace(inboundCallID), row.ID)
 				}
 			}
@@ -646,7 +647,7 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 		var outboundCallerUser, outboundCallerDisplay string
 		src := strings.ToLower(strings.TrimSpace(row.SipSource))
 		switch src {
-		case models.ACDSipSourceTrunk:
+		case constants.ACDSipSourceTrunk:
 			host := row.SipTrunkHost
 			sig := row.SipTrunkSignalingAddr
 			port := row.SipTrunkPort

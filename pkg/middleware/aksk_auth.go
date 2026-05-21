@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -86,6 +87,7 @@ func tryAttachCredentialAKSK(c *gin.Context, db *gorm.DB) (attempted, ok bool) {
 
 	cred, err := models.GetActiveCredentialByAccessKey(db, ak)
 	if err != nil {
+		logger.Errorf("get active credential error %s", err)
 		abortAuthJSON(c, http.StatusUnauthorized, 401, "unknown or revoked access key")
 		return true, false
 	}

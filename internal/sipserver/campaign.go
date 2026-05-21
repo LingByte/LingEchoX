@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
-	"github.com/LinByte/VoiceServer/pkg/constants"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/scriptlisten"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
@@ -110,7 +110,7 @@ func (s *CampaignService) CreateCampaign(ctx context.Context, in CreateCampaignI
 	}
 	c := &models.SIPCampaign{
 		Name:              strings.TrimSpace(in.Name),
-		Status:            models.SIPCampaignStatusDraft,
+		Status:            constants.SIPCampaignStatusDraft,
 		Scenario:          emptyOr(in.Scenario, string(outbound.ScenarioCampaign)),
 		MediaProfile:      emptyOr(in.MediaProfile, string(outbound.MediaProfileAI)),
 		ScriptID:          strings.TrimSpace(in.ScriptID),
@@ -158,7 +158,7 @@ func (s *CampaignService) EnqueueContacts(ctx context.Context, campaignID uint, 
 			CallerName:  strings.TrimSpace(c.CallerName),
 			RequestURI:  strings.TrimSpace(c.RequestURI),
 			Priority:    c.Priority,
-			Status:      models.SIPCampaignContactReady,
+			Status:      constants.SIPCampaignContactReady,
 			MaxAttempts: maxInt(campaign.MaxAttempts, 3),
 			NextRunAt:   &now,
 			Variables:   datatypes.JSON(b),
@@ -171,15 +171,15 @@ func (s *CampaignService) EnqueueContacts(ctx context.Context, campaignID uint, 
 }
 
 func (s *CampaignService) StartCampaign(ctx context.Context, campaignID uint) error {
-	return s.setCampaignStatus(ctx, campaignID, models.SIPCampaignStatusRunning)
+	return s.setCampaignStatus(ctx, campaignID, constants.SIPCampaignStatusRunning)
 }
 
 func (s *CampaignService) PauseCampaign(ctx context.Context, campaignID uint) error {
-	return s.setCampaignStatus(ctx, campaignID, models.SIPCampaignStatusPaused)
+	return s.setCampaignStatus(ctx, campaignID, constants.SIPCampaignStatusPaused)
 }
 
 func (s *CampaignService) ResumeCampaign(ctx context.Context, campaignID uint) error {
-	return s.setCampaignStatus(ctx, campaignID, models.SIPCampaignStatusRunning)
+	return s.setCampaignStatus(ctx, campaignID, constants.SIPCampaignStatusRunning)
 }
 
 func (s *CampaignService) setCampaignStatus(ctx context.Context, campaignID uint, status string) error {
@@ -245,7 +245,7 @@ func (s *CampaignService) HandleDialEvent(ctx context.Context, evt outbound.Dial
 		s.updateAttemptRow(ctx, campaignID, contactID, attemptNo, attemptUpdates)
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).
 			Where("id = ?", contactID).
-			Updates(map[string]any{"status": models.SIPCampaignContactAnswered, "last_call_id": evt.CallID}).Error
+			Updates(map[string]any{"status": constants.SIPCampaignContactAnswered, "last_call_id": evt.CallID}).Error
 		s.appendEvent(ctx, models.SIPCampaignEvent{
 			CampaignID:    campaignID,
 			ContactID:     contactID,
@@ -288,9 +288,9 @@ func (s *CampaignService) markAttemptFailed(ctx context.Context, campaignID, con
 	}
 	now := time.Now()
 	retryAt := s.computeNextRetry(attemptNo)
-	state := models.SIPCampaignContactFailed
+	state := constants.SIPCampaignContactFailed
 	if retryAt != nil && attemptNo < contact.MaxAttempts {
-		state = models.SIPCampaignContactRetrying
+		state = constants.SIPCampaignContactRetrying
 		s.metrics.Retrying.Add(1)
 	}
 	attemptUpdates := map[string]any{
@@ -318,8 +318,8 @@ func (s *CampaignService) markAttemptFailed(ctx context.Context, campaignID, con
 			Message:       "scheduled retry at " + retryAt.Format(time.RFC3339),
 		})
 	}
-	if state == models.SIPCampaignContactFailed && attemptNo >= contact.MaxAttempts {
-		updates["status"] = models.SIPCampaignContactExhausted
+	if state == constants.SIPCampaignContactFailed && attemptNo >= contact.MaxAttempts {
+		updates["status"] = constants.SIPCampaignContactExhausted
 	}
 	_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).Where("id = ?", contactID).Updates(updates).Error
 }
@@ -732,9 +732,9 @@ func (s *CampaignService) CancelCampaignQueuedTasks(ctx context.Context, campaig
 	if len(canceledContactIDs) > 0 && s.db != nil {
 		now := time.Now()
 		_ = s.db.WithContext(ctx).Model(&models.SIPCampaignContact{}).
-			Where("campaign_id = ? AND id IN ? AND status = ?", campaignID, canceledContactIDs, models.SIPCampaignContactDialing).
+			Where("campaign_id = ? AND id IN ? AND status = ?", campaignID, canceledContactIDs, constants.SIPCampaignContactDialing).
 			Updates(map[string]any{
-				"status":         models.SIPCampaignContactReady,
+				"status":         constants.SIPCampaignContactReady,
 				"failure_reason": "",
 				"next_run_at":    &now,
 			}).Error

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -29,7 +29,7 @@ type SIPScriptTemplate struct {
 }
 
 func (SIPScriptTemplate) TableName() string {
-	return constants.SIP_SCRIPT_TEMPLATE_TABLE_NAME
+	return constants.SIPScriptTemplateTableName
 }
 
 // ActiveSIPScriptTemplates limits to non–soft-deleted rows.

@@ -4,7 +4,7 @@ package middleware
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
-	"github.com/LinByte/VoiceServer/pkg/constants"
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
