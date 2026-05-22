@@ -308,15 +308,60 @@ func NewDefaultSession() *MediaSession {
 		shutdownCh:         make(chan struct{}),
 	}
 
-	// Initialize new architecture components
-	session.eventBus = NewEventBus(ctx, session.QueueSize, 4)
 	session.processorRegistry = NewProcessorRegistry()
 	session.router = NewRouter(StrategyBroadcast)
-
-	// Subscribe to events
-	session.setupEventHandlers()
+	session.initEventBus()
 
 	return session
+}
+
+// WithQueueSize sets TX/output queue depth and rebuilds the per-session EventBus
+// before Serve(). SIP call setup must call this after NewDefaultSession — the bus
+// is initially sized to QueueSize (256); leaving it causes "event bus queue full"
+// when SIP_MEDIA_TX_QUEUE_SIZE is 3600 but the bus still buffers only 256 packets.
+func (s *MediaSession) WithQueueSize(n int) *MediaSession {
+	if n > 0 {
+		s.QueueSize = n
+	}
+	if !s.Running {
+		s.initEventBus()
+	}
+	return s
+}
+
+func (s *MediaSession) initEventBus() {
+	q := s.QueueSize
+	if q <= 0 {
+		q = 256
+		s.QueueSize = q
+	}
+	if s.eventBus != nil {
+		s.eventBus.Close()
+	}
+	s.eventBus = NewEventBus(s.ctx, q, mediaEventBusWorkers(q))
+	s.setupEventHandlers()
+}
+
+// mediaEventBusWorkers mirrors pkg/config.MediaEventBusWorkersFromEnv (cannot import config: cycle).
+func mediaEventBusWorkers(queueSize int) int {
+	const maxWorkers = 32
+	if s := os.Getenv("SIP_MEDIA_EVENT_BUS_WORKERS"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err == nil && n > 0 {
+			if n > maxWorkers {
+				return maxWorkers
+			}
+			return n
+		}
+	}
+	switch {
+	case queueSize >= 2048:
+		return 24
+	case queueSize >= 512:
+		return 12
+	default:
+		return 6
+	}
 }
 
 // setupEventHandlers configures default event handlers

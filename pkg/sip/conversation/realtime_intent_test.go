@@ -23,12 +23,18 @@ func TestRealtimeAugmentSystemPrompt_ContainsMarker(t *testing.T) {
 }
 
 func TestRealtimeAugmentSystemPrompt_TransferTool(t *testing.T) {
-	out := realtimeAugmentSystemPrompt("你是客服", true, 3)
+	out := realtimeAugmentSystemPrompt("你是客服", true, 2)
 	if !strings.Contains(out, "transfer_to_agent") {
 		t.Fatalf("tool rule missing: %q", out)
 	}
-	if !strings.Contains(out, "累计 3 次") {
+	if !strings.Contains(out, "后台累计用户 2 次") {
 		t.Fatalf("confirm count rule missing: %q", out)
+	}
+	if !strings.Contains(out, "请问有什么可以帮您的") {
+		t.Fatalf("normal reply guidance missing: %q", out)
+	}
+	if !strings.Contains(out, "禁止主动提及") {
+		t.Fatalf("no-proactive-transfer rule missing: %q", out)
 	}
 	if strings.Contains(out, transferAgentMarker) {
 		t.Fatalf("marker should not appear in tool mode: %q", out)
@@ -42,7 +48,12 @@ func TestRealtimeMatchTransferAckPhrase(t *testing.T) {
 			t.Fatalf("expected ack match for %q", p)
 		}
 	}
-	neg := []string{"", "请稍候", "听得清，您请说。"}
+	neg := []string{
+		"",
+		"请稍候",
+		"听得清，您请说。",
+		"您好，我是智能助手，可以帮您查询信息、计算问题或转接人工客服。",
+	}
 	for _, n := range neg {
 		if realtimeMatchTransferAckPhrase(n) {
 			t.Fatalf("false positive for %q", n)

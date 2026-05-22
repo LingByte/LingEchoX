@@ -3,8 +3,8 @@ package conversation
 import "testing"
 
 func TestTransferConfirmRequired_Default(t *testing.T) {
-	if got := TransferConfirmRequired(VoiceEnv{}); got != 3 {
-		t.Fatalf("default want 3 got %d", got)
+	if got := TransferConfirmRequired(VoiceEnv{}); got != 2 {
+		t.Fatalf("default want 2 got %d", got)
 	}
 }
 
@@ -33,6 +33,22 @@ func TestRecordSIPTransferIntent_PerTurn(t *testing.T) {
 	}
 	if c := recordSIPTransferIntent(id, "转人工"); c != 3 {
 		t.Fatalf("third want 3 got %d", c)
+	}
+}
+
+func TestSipTransferMayExecute_DefaultTwo(t *testing.T) {
+	const id = "test-call-exec-2"
+	defer cleanupSIPTransferConfirm(id)
+
+	recordSIPTransferIntent(id, "转人工")
+	allowed, _ := sipTransferMayExecute(id, 2)
+	if allowed {
+		t.Fatal("should block at count 1 when required=2")
+	}
+	recordSIPTransferIntent(id, "转人工")
+	allowed, count := sipTransferMayExecute(id, 2)
+	if !allowed || count != 2 {
+		t.Fatalf("want allowed at 2, got allowed=%v count=%d", allowed, count)
 	}
 }
 

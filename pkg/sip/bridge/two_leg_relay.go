@@ -14,8 +14,6 @@ import (
 )
 
 // CanRawDatagramRelay is true when both legs share the same codec clock/channels so RTP payloads
-// can be forwarded bit-transparently (only payload-type remapping in TwoLegPayloadRelay).
-// SRTP must match on both legs if used (this helper does not inspect SRTP).
 func CanRawDatagramRelay(a, b media.CodecConfig) bool {
 	na := strings.ToLower(strings.TrimSpace(a.Codec))
 	nb := strings.ToLower(strings.TrimSpace(b.Codec))
@@ -67,37 +65,28 @@ func cloneUDPAddr(a *net.UDPAddr) *net.UDPAddr {
 	return &b
 }
 
-// TwoLegPayloadRelay forwards **raw RTP UDP datagrams** between two legs: transparent RTP (preserve
-// peer SSRC / sequence number / timestamp); only the 7-bit payload type is remapped when SDP PT
-// differs between legs.
+// TwoLegPayloadRelay forwards raw RTP UDP datagrams** between two legs: transparent RTP (preserve peer SSRC / sequence number / timestamp); only the 7-bit payload type is remapped when SDP PT
 type TwoLegPayloadRelay struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-
-	callerSess *rtp.Session
-	agentSess  *rtp.Session
-
-	callerPT   uint8
-	agentPT    uint8
-	callerDTMF uint8
-	agentDTMF  uint8
-
-	// Baseline from SDP at Start(); refreshed from each ReadFromUDP (symmetric RTP), like legacy startRTPBridge addr learning.
-	mu            sync.Mutex
-	lastCallerRTP *net.UDPAddr
-	lastAgentRTP  *net.UDPAddr
-
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	wg                   sync.WaitGroup
+	callerSess           *rtp.Session
+	agentSess            *rtp.Session
+	callerPT             uint8
+	agentPT              uint8
+	callerDTMF           uint8
+	agentDTMF            uint8
+	mu                   sync.Mutex
+	lastCallerRTP        *net.UDPAddr
+	lastAgentRTP         *net.UDPAddr
 	recMu                sync.Mutex
 	onUserAudio          func(seq uint16, ts uint32, payload []byte)
 	onAgentToCallerAudio func(seq uint16, ts uint32, payload []byte)
-
-	startOnce sync.Once
-	stopOnce  sync.Once
+	startOnce            sync.Once
+	stopOnce             sync.Once
 }
 
 // SetInboundRecording captures RTP audio forwarded during raw relay: user = caller→agent packets;
-// agentToCaller = agent→caller packets (written toward the original caller). Optional; nil skips.
 func (r *TwoLegPayloadRelay) SetInboundRecording(onUser, onAgentToCaller func(seq uint16, ts uint32, payload []byte)) {
 	if r == nil {
 		return
@@ -275,8 +264,6 @@ func (r *TwoLegPayloadRelay) runForward(fromCaller bool) {
 }
 
 // mapRelayPayloadType maps negotiated audio / telephone-event PT across legs.
-// Unknown payload types must not be forwarded: the peer leg's PT numbering is unrelated to ours
-// (e.g. comfort-noise, RED, or dynamic types); relaying them unchanged decodes as garbage/noise.
 func mapRelayPayloadType(cur uint8, srcAudioPT, srcDTMF, dstAudioPT, dstDTMF uint8) (newPT uint8, ok bool) {
 	cur &= 0x7F
 	if cur == srcAudioPT&0x7F {

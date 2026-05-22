@@ -1,8 +1,8 @@
 {
-  "name": "lingStorage",
+  "name": "lingechox-web",
   "version": "1.0.0",
   "type": "module",
-  "description": "lingStorage",
+  "description": "LingEchoX operations console (React + Vite + TypeScript).",
   "main": "index.js",
   "scripts": {
     "dev": "vite",

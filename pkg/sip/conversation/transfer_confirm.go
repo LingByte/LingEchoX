@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	defaultTransferConfirmCount = 3
+	defaultTransferConfirmCount = 2
 	minTransferConfirmCount     = 1
 	maxTransferConfirmCount     = 10
 	transferConfirmIdleReset    = 2 * time.Minute
+	// Shown to the user (and in tool spoken_zh) while confirm count is not met.
+	transferConfirmNormalReplyZH = "请问有什么可以帮您的？"
 )
 
 var (
@@ -28,7 +30,7 @@ type sipTransferConfirmState struct {
 }
 
 // TransferConfirmRequired returns how many distinct user transfer intents are
-// required before dial is allowed (clamped 1–10, default 3).
+// required before dial is allowed (clamped 1–10, default 2).
 func TransferConfirmRequired(env VoiceEnv) int {
 	n := env.TransferConfirmCount
 	if n <= 0 {
@@ -140,17 +142,10 @@ func transferConfirmToolPayload(count, required, remaining int) map[string]any {
 }
 
 func transferConfirmSpokenZH(count, required, remaining int) string {
-	if remaining <= 0 {
-		return "好的，正在为您转接人工客服，请稍候。"
-	}
-	switch remaining {
-	case 1:
-		return "已了解您需要人工客服，请再确认一次，我将为您转接。"
-	case 2:
-		return "好的，若您仍需人工客服，请再说一次，我会为您转接。"
-	default:
-		return "已记录您的需求，请继续说明是否需要转接人工客服。"
-	}
+	_ = count
+	_ = required
+	_ = remaining
+	return transferConfirmNormalReplyZH
 }
 
 // transferConfirmSessionHint is appended to realtime instructions after each user
@@ -163,16 +158,14 @@ func transferConfirmSessionHint(callID string, confirmRequired int) string {
 	count := sipTransferConfirmCount(callID)
 	allowed, _ := sipTransferMayExecute(callID, confirmRequired)
 	if allowed {
-		return "【系统状态】转人工确认已满足（" + strconv.Itoa(count) + "/" + strconv.Itoa(confirmRequired) +
-			"）。可调用 transfer_to_agent，之后可告知用户正在转接请稍候。"
+		return "【系统状态·仅模型可见】转人工确认已满足（" + strconv.Itoa(count) + "/" + strconv.Itoa(confirmRequired) +
+			"）。请调用 transfer_to_agent；对用户仅说「" + transferConfirmNormalReplyZH + "」或同类正常接待语。" +
+			"禁止对用户说「正在为您转接」「请稍候」「马上转接」——转接由系统在后台执行，话术上当作普通咨询接待。"
 	}
-	remaining := confirmRequired - count
-	if remaining < 1 {
-		remaining = 1
-	}
-	return "【系统状态】转人工确认 " + strconv.Itoa(count) + "/" + strconv.Itoa(confirmRequired) +
-		"，尚未满足。禁止说「正在转接」「马上转接」「请稍候」等已转接话术。" +
-		"本轮请仅对用户说：" + transferConfirmSpokenZH(count, confirmRequired, remaining)
+	return "【系统状态·仅模型可见】用户转人工意图累计 " + strconv.Itoa(count) + "/" + strconv.Itoa(confirmRequired) +
+		"（后台计数，勿对用户透露次数、剩余次数，勿要求「再说一次转人工」或追问是否要转人工）。" +
+		"严禁对用户说「正在为您转接」「正在转接」「请稍候」「马上转接」等任何转接进行中的表述。" +
+		"本轮对用户只能像正常客服一样回复，例如：「" + transferConfirmNormalReplyZH + "」。"
 }
 
 func mergeRealtimeInstructions(base, hint string) string {
@@ -190,12 +183,13 @@ func mergeRealtimeInstructions(base, hint string) string {
 // syncRealtimeTransferInstructions pushes the latest confirm counter into the
 // realtime session so the next model reply matches server gate state.
 func syncRealtimeTransferInstructions(agent realtime.Agent, baseInstructions, callID string, confirmRequired int) {
-	if agent == nil || confirmRequired <= 1 {
+	if agent == nil {
 		return
 	}
 	hint := transferConfirmSessionHint(callID, confirmRequired)
 	full := mergeRealtimeInstructions(baseInstructions, hint)
-	if err := agent.UpdateInstructions(full); err != nil {
+	if full == "" {
 		return
 	}
+	_ = agent.UpdateInstructions(full)
 }

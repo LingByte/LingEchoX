@@ -123,7 +123,7 @@ type VoiceEnv struct {
 	// per-vendor fields), passed through to realtime.NewAgentFromCredential.
 	RealtimeConfigRaw map[string]any
 	// TransferConfirmCount: user must express transfer intent this many times
-	// (separate final transcripts) before dial. 0 = use default (3). Clamped 1–10.
+	// (separate final transcripts) before dial. 0 = use default (2). Clamped 1–10.
 	TransferConfirmCount int
 }
 

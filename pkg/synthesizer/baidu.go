@@ -16,7 +16,7 @@ import (
 )
 
 type BaiduTTSConfig struct {
-	Tok           string `json:"tok" env:"tok" env:"BAIDU_ACCESS_TOKEN"`
+	Tok           string `json:"tok" env:"BAIDU_ACCESS_TOKEN"`
 	Cuid          string `json:"cuid" env:"cuid"`
 	Ctp           string `json:"ctp" env:"ctp" default:"1"`
 	Lan           string `json:"lan" env:"lan" default:"zh"`

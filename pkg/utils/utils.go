@@ -5,6 +5,7 @@ package utils
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -31,7 +32,9 @@ var letterRunes = []rune("0123456789abcdefghijklmnopqrstuvwxyz")
 var numberRunes = []rune("0123456789")
 
 func init() {
-	rand.Seed(time.Now().UnixNano())
+	// math/rand has been auto-seeded since Go 1.20 (top-level Source).
+	// Calling Seed is a no-op on a global state and explicit Seed() is
+	// deprecated (SA1019). Keep init() purely for SnowflakeUtil.
 	SnowflakeUtil, _ = NewSnowflake()
 }
 
@@ -98,10 +101,14 @@ func StructAsMap(form any, fields []string) (vals map[string]any) {
 	return vals
 }
 
-// GenerateSecureToken generate a fixed-length secure token
+// GenerateSecureToken generates a cryptographically secure URL-safe
+// token of the given byte length (output is base64 URL-encoded so the
+// string length is larger than `length`). Uses crypto/rand — the prior
+// implementation used math/rand which is predictable and unsuitable
+// for any auth/session/CSRF/recovery-token use case.
 func GenerateSecureToken(length int) (string, error) {
 	token := make([]byte, length)
-	if _, err := rand.Read(token); err != nil {
+	if _, err := cryptorand.Read(token); err != nil {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(token), nil

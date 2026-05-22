@@ -54,7 +54,6 @@ type TwoLegPCMBridge struct {
 }
 
 // NewTwoLegPCMBridge builds a bidirectional bridge. Transports must use the same codec config
-// as their respective RTP sessions (callerRx/callerTx share one session; agentRx/agentTx share another).
 func NewTwoLegPCMBridge(
 	callerRx, callerTx, agentRx, agentTx pcmBridgeLeg,
 ) (*TwoLegPCMBridge, error) {

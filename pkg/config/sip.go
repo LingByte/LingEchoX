@@ -91,3 +91,26 @@ func MediaTxQueueSizeFromEnv() int {
 	}
 	return n
 }
+
+// MediaEventBusWorkersFromEnv returns worker count for per-session media EventBus.
+// Realtime SIP feeds one packet per RTP frame; too few workers stalls the bus.
+func MediaEventBusWorkersFromEnv(queueSize int) int {
+	const maxWorkers = 32
+	if s := utils.GetEnv("SIP_MEDIA_EVENT_BUS_WORKERS"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err == nil && n > 0 {
+			if n > maxWorkers {
+				return maxWorkers
+			}
+			return n
+		}
+	}
+	switch {
+	case queueSize >= 2048:
+		return 24
+	case queueSize >= 512:
+		return 12
+	default:
+		return 6
+	}
+}

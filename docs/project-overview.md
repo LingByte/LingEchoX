@@ -8,11 +8,12 @@ LingEchoX 是一个面向语音联络场景的 AI + SIP 平台，目标是把「
 
 - **后端（Go）**：`cmd` + `internal` + `pkg`
   - `cmd/server/main.go` 负责启动流程、配置加载、数据库初始化、HTTP 服务与嵌入式 SIP 服务。
-  - `internal/handler` 提供 API 路由与业务入口。
+  - `cmd/bootstrap` 提供配置、DB、路由组装的可复用启动逻辑。
+  - `internal/handlers` 提供 API 路由与业务入口（多租户、SIP 业务、外呼活动、脚本模板等）。
   - `pkg` 提供可复用能力模块，如 SIP、媒体编解码、ASR、TTS、LLM、日志、配置、中间件等。
-- **前端（React）**：`qiniu`
-  - 基于 Vite + TypeScript + Tailwind。
-  - 覆盖 SIP 用户、通话记录、号码池、外呼任务、脚本管理等核心页面。
+- **前端（React）**：`web`
+  - 基于 Vite + TypeScript + Tailwind + Arco Design + Zustand。
+  - 覆盖 SIP 用户、通话记录、号码池、外呼任务、脚本管理、Web 坐席、租户/成员/角色权限等核心页面。
 
 ## 3. 已有关键能力（基于当前代码扫描）
 
@@ -44,20 +45,13 @@ LingEchoX 是一个面向语音联络场景的 AI + SIP 平台，目标是把「
 
 ## 4. 前端当前页面能力
 
-`qiniu/src/pages` 当前可见页面包含（部分）：
+`web/src/pages` 当前可见页面（实际存在）：
 
-- `SIPUsers`
-- `CallRecords`
-- `NumberPool`
-- `OutboundTasks`
-- `ScriptManager`
-- `WebAgents`
-- `Settings`
-- `Storage`
-- `Users`
-- `OperationLogs`
-- `Notifications`
-- `Documentation`
+- 业务台：`Overview` / `SIPUsers` / `CallRecords` / `NumberPool` / `OutboundTasks` / `ScriptManager` / `ScriptManagerNew` / `WebAgents`
+- 中继与号码：`SIPTrunks` / `SIPTrunkNumbers`
+- 凭据：`AccessKeys`
+- 租户体系：`TenantLogin` / `TenantRegister` / `TenantManagement` / `TenantAiConfig` / `TenantMembers` / `TenantDepartments` / `TenantRolePermissions` / `Profile`
+- 联络中心子组件：`pages/ContactCenter/`（`ACDPoolTab` / `OutboundCampaignTab` / `ScriptManagerTab` / `ScriptSpecEditor` / `WebSeatContactTab` / `WebSeatTerminalLog`）
 
 这说明前端已具备运营台形态，具备继续向统一客服/外呼工作台扩展的基础。
 

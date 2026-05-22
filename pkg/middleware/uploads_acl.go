@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
@@ -51,6 +52,12 @@ var (
 func uploadsRecordingsPublicAllowed() bool {
 	uploadsRecordingsPublicOnce.Do(func() {
 		uploadsRecordingsPublic = strings.EqualFold(strings.TrimSpace(utils.GetEnv(envUploadsRecordingsPublic)), "true")
+		if uploadsRecordingsPublic && logger.Lg != nil {
+			// Loud startup-time warning: this opens raw call recordings
+			// to anyone who can guess Call-ID + timestamp. Operators
+			// should only flip this on local/dev networks.
+			logger.Lg.Warn("uploads-acl: UPLOADS_RECORDINGS_PUBLIC=true → /uploads/sip/recordings/* is PUBLIC; do NOT use in production")
+		}
 	})
 	return uploadsRecordingsPublic
 }

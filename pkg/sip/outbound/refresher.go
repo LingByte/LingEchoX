@@ -271,9 +271,12 @@ func (r *outRefresher) handleUPDATEResponse(resp *stack.Message) bool {
 			zap.Int("peer_min_se", peerMin))
 		// Immediate retry — don't wait the full half-interval, peer
 		// has already started its countdown from the rejected UPDATE.
-		go func() {
+		// SafeGo so a panic inside the SIP stack on this UPDATE retry
+		// (e.g. transport closed mid-flight) doesn't take down the
+		// whole outbound manager.
+		logger.SafeGo("sip-outbound-refresh-retry", func() {
 			r.sendUPDATE()
-		}()
+		})
 		return true
 
 	case st == 481:

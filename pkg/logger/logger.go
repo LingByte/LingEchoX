@@ -279,6 +279,12 @@ const (
 	TraceIDKey   contextKey = "trace_id"
 	RequestIDKey contextKey = "request_id"
 	UserIDKey    contextKey = "user_id"
+	// 新增：业务级追踪锚点。任一中间件 / service / SIP leg 设置后，下游
+	// 任何 logger.*Ctx / logger.FromContext 输出都会自动带上这些字段，
+	// 不必每个调用方手写 zap.Int64("tenant_id", ...).
+	TenantIDKey   contextKey = "tenant_id"
+	CallIDKey     contextKey = "call_id"
+	CampaignIDKey contextKey = "campaign_id"
 )
 
 // InfoCtx 带 context 的 info 日志方法
@@ -331,6 +337,15 @@ func appendContextFields(ctx context.Context, fields ...zap.Field) []zap.Field {
 	}
 	if userID := ctx.Value(UserIDKey); userID != nil {
 		fields = append(fields, zap.String(string(UserIDKey), fmt.Sprintf("%v", userID)))
+	}
+	if tenantID := ctx.Value(TenantIDKey); tenantID != nil {
+		fields = append(fields, zap.String(string(TenantIDKey), fmt.Sprintf("%v", tenantID)))
+	}
+	if callID := ctx.Value(CallIDKey); callID != nil {
+		fields = append(fields, zap.String(string(CallIDKey), fmt.Sprintf("%v", callID)))
+	}
+	if campaignID := ctx.Value(CampaignIDKey); campaignID != nil {
+		fields = append(fields, zap.String(string(CampaignIDKey), fmt.Sprintf("%v", campaignID)))
 	}
 
 	return fields

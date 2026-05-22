@@ -44,12 +44,23 @@ func (s *CampaignService) StartWorker(dialer Dialer) {
 		defer s.wg.Done()
 		ticker := time.NewTicker(s.pollInterval)
 		defer ticker.Stop()
+		// Per-tick panic recovery: a panic inside tick() (DB driver
+		// edge case, third-party SDK bug) must not kill the campaign
+		// worker for the rest of the process lifetime.
+		safeTick := func() {
+			defer func() {
+				if r := recover(); r != nil && logger.Lg != nil {
+					logger.Lg.Error("campaign worker tick panic recovered", zap.Any("panic", r))
+				}
+			}()
+			s.tick()
+		}
 		for {
 			select {
 			case <-s.stopCh:
 				return
 			case <-ticker.C:
-				s.tick()
+				safeTick()
 			}
 		}
 	}()

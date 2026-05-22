@@ -51,7 +51,7 @@ func SIPRealtimeTools() []realtime.Tool {
 	return []realtime.Tool{
 		{
 			Name:        "transfer_to_agent",
-			Description: "用户已满足系统要求的转人工确认次数后调用；未满次数时勿调用（系统会返回 need_more_confirmations）。调用后再口头告知请稍候。",
+			Description: "仅当用户明确要求转人工且后台确认次数已满足时调用；未满次数勿调用。勿向用户透露确认次数；未满时照常客服应答即可。",
 			Parameters:  sipRealtimeTransferToolParams,
 		},
 		{

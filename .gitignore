@@ -96,6 +96,10 @@ ssl/*.pfx
 lingecho.com.key
 lingecho.com_bundle.pem
 
+# Private keys / signing material
+keys/*
+!keys/.gitkeep
+
 .env
 pnpm-lock.yaml
 

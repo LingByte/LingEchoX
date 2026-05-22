@@ -113,9 +113,16 @@ func New(cfg map[string]any, opts realtime.Options) (realtime.Agent, error) {
 	if c.DialTimeoutMs <= 0 {
 		c.DialTimeoutMs = defaultDialMs
 	}
-	if strings.TrimSpace(opts.SystemPrompt) != "" && strings.TrimSpace(c.Instructions) == "" {
-		// Per-call SystemPrompt overrides credential-level when set.
-		c.Instructions = opts.SystemPrompt
+	// Merge tenant instructions (credential) with per-call rules (SystemPrompt).
+	// Previously SystemPrompt was ignored when instructions was set — tenant
+	// persona must stay primary and augment rules append after it.
+	instr := strings.TrimSpace(c.Instructions)
+	sys := strings.TrimSpace(opts.SystemPrompt)
+	switch {
+	case instr != "" && sys != "":
+		c.Instructions = instr + "\n\n" + sys
+	case sys != "":
+		c.Instructions = sys
 	}
 	if strings.TrimSpace(opts.Voice) != "" {
 		c.Voice = opts.Voice
@@ -212,7 +219,7 @@ func (a *agent) doStart(ctx context.Context) error {
 	if err := a.sendJSON(map[string]any{
 		"type":    "session.update",
 		"session": a.buildSession(),
-	}); err != nil {
+	}, false); err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("aliyunomni: session.update: %w", err)
 	}
@@ -278,14 +285,14 @@ func (a *agent) PushAudio(pcm []byte) error {
 	return a.sendJSON(map[string]any{
 		"type":  "input_audio_buffer.append",
 		"audio": base64.StdEncoding.EncodeToString(pcm),
-	})
+	}, true)
 }
 
 func (a *agent) CommitInputAudio() error {
 	if a.closed.Load() {
 		return realtime.ErrAgentClosed
 	}
-	return a.sendJSON(map[string]any{"type": "input_audio_buffer.commit"})
+	return a.sendJSON(map[string]any{"type": "input_audio_buffer.commit"}, false)
 }
 
 // Cancel sends response.cancel so the model stops its current audio reply.
@@ -296,7 +303,7 @@ func (a *agent) Cancel() error {
 	if a.closed.Load() {
 		return realtime.ErrAgentClosed
 	}
-	return a.sendJSON(map[string]any{"type": "response.cancel"})
+	return a.sendJSON(map[string]any{"type": "response.cancel"}, false)
 }
 
 // UpdateInstructions sends session.update with new instructions mid-call.
@@ -314,7 +321,7 @@ func (a *agent) UpdateInstructions(instructions string) error {
 		"session": map[string]any{
 			"instructions": instructions,
 		},
-	})
+	}, false)
 }
 
 func (a *agent) Close() error {
@@ -342,7 +349,7 @@ func (a *agent) Close() error {
 // sendJSON queues a single JSON event onto the writer goroutine. Drops on
 // closed channel after Close() — callers see ErrAgentClosed via the
 // closed flag, never a panic.
-func (a *agent) sendJSON(event map[string]any) error {
+func (a *agent) sendJSON(event map[string]any, nonBlocking bool) error {
 	if a.closed.Load() {
 		return realtime.ErrAgentClosed
 	}
@@ -352,6 +359,18 @@ func (a *agent) sendJSON(event map[string]any) error {
 	buf, err := json.Marshal(event)
 	if err != nil {
 		return err
+	}
+	if nonBlocking {
+		select {
+		case a.sendCh <- buf:
+			return nil
+		case <-a.rootCtx.Done():
+			return realtime.ErrAgentClosed
+		default:
+			// WS writer backed up — drop this frame so SIP media EventBus
+			// workers are not stalled (mobile / jitter bursts).
+			return nil
+		}
 	}
 	select {
 	case a.sendCh <- buf:
@@ -573,9 +592,9 @@ func (a *agent) finishResponseTurn(raw []byte) {
 					"call_id": fc.CallID,
 					"output":  output,
 				},
-			})
+			}, false)
 		}
-		_ = a.sendJSON(map[string]any{"type": "response.create"})
+		_ = a.sendJSON(map[string]any{"type": "response.create"}, false)
 	}
 	a.emit(realtime.Event{Type: realtime.EventAssistantTurnEnd, Vendor: ProviderSlug, Raw: raw})
 }

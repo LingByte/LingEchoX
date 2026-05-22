@@ -515,12 +515,14 @@ func (volc *Volcengine) parseResponse(msg []byte) (VolcEngineResponse, error) {
 		logrus.Debug("volcengine asr: server ack seq: ", seq)
 	} else if messageType == byte(ServerErrorResponse) {
 		code := int32(binary.BigEndian.Uint32(payload[:4]))
-		payloadSize = int(binary.BigEndian.Uint32(payload[4:8]))
+		// payloadSize bytes [4:8] are part of the wire format header but
+		// not needed for the error path — we slice the whole payload[8:]
+		// as the message and return immediately.
 		payloadMsg = payload[8:]
 		var errResponse = VolcEngineResponse{}
 		payloadMsg, _ = gzipDecompress(payloadMsg)
 		_ = json.Unmarshal(payloadMsg, &errResponse)
-		return VolcEngineResponse{}, errors.New(fmt.Sprintf("volcengine asr: server response error code: %d msg: %s", code, errResponse.Message))
+		return VolcEngineResponse{}, fmt.Errorf("volcengine asr: server response error code: %d msg: %s", code, errResponse.Message)
 	}
 	if payloadSize == 0 {
 		return VolcEngineResponse{}, errors.New("volcengine asr: payload size is 0")

@@ -134,10 +134,37 @@ type cdrState struct {
 	errors []string
 }
 
-func (s *cdrState) snapshot() cdrState {
+// cdrSnapshot is a lock-free, point-in-time copy of cdrState. We use a
+// distinct type so go vet -copylocks doesn't flag the embedded mutex,
+// and so callers can't accidentally mutate the snapshot expecting it
+// to be visible to other readers.
+type cdrSnapshot struct {
+	startedAt     time.Time
+	answeredAt    time.Time
+	activeCounted bool
+	activeEnded   bool
+	codec         string
+	endStatus     string
+	hangupBy      string
+	reasonClass   string
+	sipFinalCode  int
+	errors        []string
+}
+
+func (s *cdrState) snapshot() cdrSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := *s
+	out := cdrSnapshot{
+		startedAt:     s.startedAt,
+		answeredAt:    s.answeredAt,
+		activeCounted: s.activeCounted,
+		activeEnded:   s.activeEnded,
+		codec:         s.codec,
+		endStatus:     s.endStatus,
+		hangupBy:      s.hangupBy,
+		reasonClass:   s.reasonClass,
+		sipFinalCode:  s.sipFinalCode,
+	}
 	if len(s.errors) > 0 {
 		out.errors = append([]string(nil), s.errors...)
 	}

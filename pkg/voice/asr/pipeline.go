@@ -131,13 +131,22 @@ func (p *Pipeline) SetErrorCallback(cb func(err error, fatal bool)) {
 	p.onErr = cb
 }
 
+// GetMetrics returns a snapshot of pipeline metrics. The returned value
+// is a field-by-field copy so the caller never observes a torn read and
+// the embedded sync.RWMutex is not copied (go vet -copylocks).
 func (p *Pipeline) GetMetrics() Metrics {
 	if p == nil || p.metrics == nil {
 		return Metrics{}
 	}
 	p.metrics.mu.RLock()
 	defer p.metrics.mu.RUnlock()
-	return *p.metrics
+	return Metrics{
+		FirstPacketTime: p.metrics.FirstPacketTime,
+		LastPacketTime:  p.metrics.LastPacketTime,
+		ASRFirstResult:  p.metrics.ASRFirstResult,
+		ASRLatency:      p.metrics.ASRLatency,
+		TotalAudioBytes: p.metrics.TotalAudioBytes,
+	}
 }
 
 // ProcessPCM feeds one PCM chunk (no decode stage). Use when MediaSession already decoded RTP.

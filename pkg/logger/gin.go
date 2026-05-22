@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +48,63 @@ func FromGin(c *gin.Context) *zap.Logger {
 		return Lg.With(zap.String("x-reqid", id))
 	}
 	return Lg
+}
+
+// ContextFromGin 把 Gin 上挂的常用追踪字段桥接到标准 context.Context。
+//
+// 业务层（service / SIP / 异步 goroutine）经常需要原生 ctx，而不是 gin.Context。
+// 这个 helper 把以下已知字段一次性注入到返回的 ctx 上：
+//   - x-reqid          （ReqIDFromGin 的结果）
+//   - auth.tenantId    （uint，由 jwt_auth / aksk_auth middleware 设置）
+//   - auth.userId      （uint，同上）
+//
+// 之后业务侧用 logger.FromContext(ctx).Info(...) 即可自动带齐 ID，goroutine
+// 透传也只需把这个 ctx 带过去。
+//
+// 注意：不强依赖 middleware 包以避免循环依赖；auth key 字面量与 middleware
+// 包定义保持一致，由 logger 包内部 const 镜像。
+const (
+	ginAuthTenantIDKey = "auth.tenantId"
+	ginAuthUserIDKey   = "auth.userId"
+)
+
+func ContextFromGin(c *gin.Context) context.Context {
+	if c == nil || c.Request == nil {
+		return context.Background()
+	}
+	ctx := c.Request.Context()
+	if id := ReqIDFromGin(c); id != "" {
+		ctx = WithRequestID(ctx, id)
+	}
+	if v, ok := c.Get(ginAuthTenantIDKey); ok {
+		if n, ok := v.(uint); ok && n > 0 {
+			ctx = WithTenantID(ctx, int64(n))
+		}
+	}
+	if v, ok := c.Get(ginAuthUserIDKey); ok {
+		if n, ok := v.(uint); ok && n > 0 {
+			// UserIDKey 已存在；保持字符串编码与现有 appendContextFields 一致。
+			ctx = context.WithValue(ctx, UserIDKey, formatUint(n))
+		}
+	}
+	return ctx
+}
+
+// formatUint 是为了避免引 strconv 在 gin.go 顶部，本文件已经因 strings 引入
+// 较多 stdlib，能少一个包还是少一个。
+func formatUint(n uint) string {
+	const digits = "0123456789"
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = digits[n%10]
+		n /= 10
+	}
+	return string(buf[i:])
 }
 
 // GinZapFields returns zap fields for HTTP handlers (x-reqid, method, path).

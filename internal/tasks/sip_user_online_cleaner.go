@@ -40,13 +40,24 @@ func (c *SIPUserOnlineCleaner) Start() {
 		defer c.wg.Done()
 		ticker := time.NewTicker(c.interval)
 		defer ticker.Stop()
-		c.sweep()
+		// safeSweep wraps sweep() in a per-tick recover so a single
+		// panic (e.g. transient DB driver bug) does not kill the
+		// background ticker for the rest of the process lifetime.
+		safeSweep := func() {
+			defer func() {
+				if r := recover(); r != nil && logger.Lg != nil {
+					logger.Lg.Error("sip user online cleaner panic recovered", zap.Any("panic", r))
+				}
+			}()
+			c.sweep()
+		}
+		safeSweep()
 		for {
 			select {
 			case <-c.stopCh:
 				return
 			case <-ticker.C:
-				c.sweep()
+				safeSweep()
 			}
 		}
 	}()

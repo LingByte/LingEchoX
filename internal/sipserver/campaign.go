@@ -543,7 +543,10 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 		},
 	})
 	releaseScriptMode = false
-	go func() {
+	// Wrap with SafeGo so a panic inside the user-defined script runner
+	// (e.g. malformed script JSON, third-party LLM SDK bug) does NOT
+	// crash the whole SIP server.
+	logger.SafeGo("campaign-script-runner", func() {
 		defer conversation.ClearSIPScriptMode(leg.CallID)
 		if err := runner.Run(ctx, leg); err != nil {
 			if logger.Lg != nil {
@@ -567,7 +570,7 @@ func (s *CampaignService) RunScriptIfConfigured(ctx context.Context, leg outboun
 				Meta:          datatypes.JSON([]byte(`{}`)),
 			})
 		}
-	}()
+	})
 }
 
 type turnFetchResult struct {

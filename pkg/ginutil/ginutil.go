@@ -93,7 +93,10 @@ func UploadURL(c *gin.Context, key string) string {
 	if lower := strings.ToLower(u); strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 		return u
 	}
-	u = strings.TrimPrefix(u, "/")
+	// PublicObjectURL only returns a non-http value for local-disk stores
+	// without STORAGE_PUBLIC_BASE_URL, in which case it's empty — we fall
+	// through to host synthesis below. No dead assignment to u; the value
+	// would never be observed past this point.
 	proto := strings.TrimSpace(c.Request.Header.Get("X-Forwarded-Proto"))
 	if proto == "" {
 		proto = "http"

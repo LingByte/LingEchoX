@@ -24,14 +24,14 @@ It combines SIP telephony, outbound campaigns, script-driven calling, ASR/TTS or
 ```text
 .
 ├── cmd/
-│   ├── server/          # HTTP API + embedded SIP bootstrap
-│   └── example/         # minimal AK/SK API client (see cmd/example/README.md)
-├── internal/            # handlers, models, SIP app glue logic
-├── pkg/                 # reusable modules (sip/media/asr/tts/llm/config/logger)
-├── qiniu/               # frontend app (React + Vite)
-├── scripts/             # reserved scripts directory
-├── env.example          # environment configuration template
-└── docs/                # project docs and roadmap
+│   ├── bootstrap/        # config/db/router bootstrap shared by server entry
+│   └── server/           # HTTP API + embedded SIP entry point
+├── internal/             # handlers, models, SIP app glue logic
+├── pkg/                  # reusable modules (sip/media/asr/tts/llm/config/logger)
+├── web/                  # frontend app (React + Vite + TypeScript)
+├── scripts/              # reserved scripts directory
+├── env.example           # environment configuration template
+└── docs/                 # project docs and roadmap
 ```
 
 ## Quick Start
@@ -50,13 +50,7 @@ go mod download
 go run ./cmd/server
 ```
 
-Tenant integrations can call HTTP APIs with **access key + secret key** only (no user password). See `cmd/example/README.md` and run:
-
-```bash
-export LINGECHO_ACCESS_KEY='ak_…'
-export LINGECHO_SECRET_KEY='…'
-go run ./cmd/example
-```
+Tenant integrations can call HTTP APIs with **access key + secret key** only (no user password). Sign each request with your AK/SK and include the AK/SK headers expected by the platform.
 
 Default API server address:
 
@@ -65,7 +59,7 @@ Default API server address:
 ### 3) Frontend setup
 
 ```bash
-cd qiniu
+cd web
 npm install
 npm run dev
 ```

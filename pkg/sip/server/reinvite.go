@@ -63,7 +63,7 @@ func (s *SIPServer) handleReInvite(msg *stack.Message, addr *net.UDPAddr, cs *si
 	if err != nil {
 		return s.makeResponse(msg, 488, "Not Acceptable Here", "", toWithTag)
 	}
-	if strings.ToLower(strings.TrimSpace(negNew.Name)) != strings.ToLower(strings.TrimSpace(cs.NegotiatedCodec().Name)) {
+	if !strings.EqualFold(strings.TrimSpace(negNew.Name), strings.TrimSpace(cs.NegotiatedCodec().Name)) {
 		logger.Warn("sip re-INVITE rejected (codec change not supported)",
 			zap.String("call_id", callID),
 			zap.String("existing", cs.NegotiatedCodec().Name),

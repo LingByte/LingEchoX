@@ -4,6 +4,8 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"time"
+
 	"github.com/LinByte/VoiceServer/cmd/bootstrap"
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/sipserver"
@@ -48,6 +50,7 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	h.registerSIPContactCenterRoutes(protected)
 	h.registerTenantUserRoutes(protected)
 	h.registerPlatformTenantRoutes(protected)
+	h.registerPlatformSystemRoutes(protected)
 	h.registerAccountRoutes(protected)
 	h.registerCredentialRoutes(protected)
 	h.registerLingechoWebSeatRoutes(r)
@@ -249,8 +252,14 @@ func (h *Handlers) registerSIPContactCenterRoutes(r *gin.RouterGroup) {
 }
 
 func (h *Handlers) registerTenantPublicRoutes(r *gin.RouterGroup) {
-	r.POST("/register", h.registerTenant)
-	r.POST("/login", h.tenantLogin)
+	// Throttle credential-bearing endpoints by client IP to make
+	// credential stuffing / brute force noisy and slow. Limits are
+	// intentionally generous (10 req / 5 min, burst 10) so a human
+	// retrying a typo or a shared NAT with multiple users is not
+	// affected, but a botnet hammering one IP gets 429s quickly.
+	authLimit := middleware.AuthRateLimiter(10, 5*time.Minute, 10)
+	r.POST("/register", authLimit, h.registerTenant)
+	r.POST("/login", authLimit, h.tenantLogin)
 }
 
 // registerPlatformTenantRoutes mounts /tenants — cross-tenant
@@ -263,6 +272,22 @@ func (h *Handlers) registerPlatformTenantRoutes(r *gin.RouterGroup) {
 		g.POST("", h.createTenantPlatform)
 		g.PUT("/:id", h.updateTenantPlatform)
 		g.DELETE("/:id", h.deleteTenantPlatform)
+	}
+}
+
+// registerPlatformSystemRoutes mounts /system/* read-only ops endpoints
+// for platform admins. See handlers/system_status.go for the data source.
+//
+// We intentionally separate this from /metrics:
+//   - /metrics speaks Prometheus text (counters/gauges/histograms) and
+//     is for time-series scrapers; it has its own IP ACL.
+//   - /system/status is JSON, includes runtime.MemStats + disk-cache
+//     stats, and is meant for interactive ops dashboards / human eyes.
+func (h *Handlers) registerPlatformSystemRoutes(r *gin.RouterGroup) {
+	g := r.Group("system")
+	g.Use(middleware.RequirePlatformAdmin())
+	{
+		g.GET("/status", h.getSystemStatus)
 	}
 }
 

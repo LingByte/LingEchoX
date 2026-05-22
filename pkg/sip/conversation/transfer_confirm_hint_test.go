@@ -9,15 +9,24 @@ func TestTransferConfirmSessionHint_NotReady(t *testing.T) {
 	const id = "hint-not-ready"
 	defer cleanupSIPTransferConfirm(id)
 	recordSIPTransferIntent(id, "转人工")
-	h := transferConfirmSessionHint(id, 3)
-	if strings.Contains(h, "禁止说") == false {
+	h := transferConfirmSessionHint(id, 2)
+	if !strings.Contains(h, "严禁") && !strings.Contains(h, "禁止") {
 		t.Fatalf("expected forbid transfer promise: %q", h)
 	}
-	if !strings.Contains(h, "本轮请仅对用户说") {
-		t.Fatalf("expected explicit say-this line: %q", h)
+	if !strings.Contains(h, transferConfirmNormalReplyZH) {
+		t.Fatalf("expected normal reply example: %q", h)
 	}
-	if strings.Contains(h, "再说一次") == false {
-		t.Fatalf("expected guide phrase: %q", h)
+	for _, bad := range []string{"请再确认一次", "若您仍需人工", "已记录您的需求，请继续说明是否要"} {
+		if strings.Contains(h, bad) {
+			t.Fatalf("must not use old coach-to-repeat script %q in: %s", bad, h)
+		}
+	}
+}
+
+func TestTransferConfirmSpokenZH_NotReady(t *testing.T) {
+	got := transferConfirmSpokenZH(1, 2, 1)
+	if got != transferConfirmNormalReplyZH {
+		t.Fatalf("want %q got %q", transferConfirmNormalReplyZH, got)
 	}
 }
 

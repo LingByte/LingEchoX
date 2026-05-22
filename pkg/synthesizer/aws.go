@@ -6,8 +6,7 @@ package synthesizer
 import (
 	"context"
 	"fmt"
-
-	"io/ioutil"
+	"io"
 
 	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -96,7 +95,7 @@ func (as *AmazonService) Synthesize(ctx context.Context, handler SynthesisHandle
 	if err != nil {
 		return err
 	}
-	audioData, err := ioutil.ReadAll(resp.AudioStream)
+	audioData, err := io.ReadAll(resp.AudioStream)
 	if err != nil {
 		return err
 	}

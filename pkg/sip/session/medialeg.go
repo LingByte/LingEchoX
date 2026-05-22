@@ -95,8 +95,7 @@ func NewMediaLeg(parent context.Context, callID string, rtpSess *siprtp.Session,
 	if q <= 0 {
 		q = defaultOutputQueue
 	}
-	ms := media.NewDefaultSession().Context(ctx).SetSessionID("sip-" + callID)
-	ms.QueueSize = q
+	ms := media.NewDefaultSession().Context(ctx).SetSessionID("sip-" + callID).WithQueueSize(q)
 	ms.Decode(dec).Encode(enc).Input(leg.rx).Output(leg.tx)
 	if !cfg.AllowUplinkEcho {
 		ms.Set(media.KeySIPSuppressUplinkEcho, true)

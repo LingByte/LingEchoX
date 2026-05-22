@@ -5,7 +5,7 @@ package synthesizer
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 	"testing"
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
@@ -54,7 +54,7 @@ func TestQCloudSerivce(t *testing.T) {
 	h := &testSynthesisHandler{}
 	svc.Synthesize(ctx, h, "hello lingecho")
 	// 保存为OPUS文件（可直接播放）
-	err := ioutil.WriteFile("output.opus", h.result, 0644)
+	err := os.WriteFile("output.opus", h.result, 0644)
 	if err != nil {
 		t.Fatal("保存音频文件失败:", err)
 	}

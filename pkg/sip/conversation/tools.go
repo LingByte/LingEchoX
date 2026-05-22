@@ -26,7 +26,7 @@ func registerSIPTransferTool(provider llm.LLMProvider, callID string, confirmReq
 	}`)
 	provider.RegisterFunctionTool(
 		"transfer_to_agent",
-		"当用户明确要求转人工且系统确认次数已满足时调用；未满次数时勿调用，口头安抚即可。",
+		"当用户明确要求转人工且后台确认次数已满足时调用；未满次数勿调用，对用户照常解答、勿透露还剩几次。",
 		params,
 		func(args map[string]interface{}, _ interface{}) (string, error) {
 			allowed, count := sipTransferMayExecute(callID, confirmRequired)

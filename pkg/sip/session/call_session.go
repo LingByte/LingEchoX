@@ -419,8 +419,8 @@ func NewCallSession(callID string, rtpSess *rtp.Session, sdpCodecs []sdp.Codec) 
 	cs.rxTransport = rxTransport
 	cs.txTransport = txTransport
 
-	ms := media.NewDefaultSession().Context(ctx).SetSessionID("sip-call-" + callID)
-	ms.QueueSize = config.MediaTxQueueSizeFromEnv()
+	ms := media.NewDefaultSession().Context(ctx).SetSessionID("sip-call-" + callID).
+		WithQueueSize(config.MediaTxQueueSizeFromEnv())
 	ms.Decode(dec).
 		Encode(enc).
 		Input(rxTransport).

@@ -88,7 +88,7 @@ function App() {
                     <Route path="/overview" element={<RequireAuth><Overview /></RequireAuth>} />
                     <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
                     <Route path="/sip-users" element={<RequireAuth><RequirePlatform><SIPUsers /></RequirePlatform></RequireAuth>} />
-                    <Route path="/call-records" element={<RequireAuth><CallRecords /></RequireAuth>} />
+                    <Route path="/call-records" element={<RequireAuth><RequireTenant><CallRecords /></RequireTenant></RequireAuth>} />
                     <Route path="/number-pool" element={<RequireAuth><RequireTenant><NumberPool /></RequireTenant></RequireAuth>} />
                     <Route path="/outbound-tasks" element={<RequireAuth><RequireTenant><OutboundTasks /></RequireTenant></RequireAuth>} />
                     <Route path="/script-manager/new" element={<RequireAuth><RequireTenant><ScriptManagerNew /></RequireTenant></RequireAuth>} />

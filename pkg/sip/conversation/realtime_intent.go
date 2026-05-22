@@ -45,6 +45,7 @@ const transferAgentMarker = "[TRANSFER_TO_AGENT]"
 // positives cause unnecessary transfers, which are user-visible.
 var transferUserPhrasesDefault = []string{
 	"转人工",
+	"人工，", // e.g.「人工，人工」— not matched inside「主人公」
 	"人工客服",
 	"真人客服",
 	"找客服",
@@ -55,41 +56,61 @@ var transferUserPhrasesDefault = []string{
 	"转接人工",
 }
 
-// transferAckPhrases match assistant replies that mean a transfer is in progress.
-// Used when the model speaks the acknowledgement but omits the FC tool call.
+// transferAckPromisePhrases are active transfer-in-progress wording only.
+// Capability lines like「可以转接人工客服」must not match.
+var transferAckPromisePhrases = []string{
+	"正在为您转接",
+	"正在转接",
+	"马上为您转接",
+	"马上转接",
+	"已为您转接",
+	"这就为您转接",
+	"开始为您转接",
+	"帮您转接人工",
+	"为您转接人工",
+}
+
+// realtimeMatchTransferAckPhrase reports the assistant is promising an active
+// transfer (not merely mentioning the transfer capability).
 func realtimeMatchTransferAckPhrase(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return false
 	}
-	hasTransfer := false
-	for _, h := range []string{"转接", "转人工", "人工客服"} {
-		if strings.Contains(t, h) {
-			hasTransfer = true
-			break
+	for _, p := range transferAckPromisePhrases {
+		if strings.Contains(t, p) {
+			return true
 		}
 	}
-	return hasTransfer
+	// e.g.「请稍候，正在转接」— require both cues, not「请稍候」alone.
+	if strings.Contains(t, "稍候") && strings.Contains(t, "转接") {
+		return true
+	}
+	return false
 }
+
+// realtimeNoProactiveTransferRule keeps transfer capability internal until the user asks.
+const realtimeNoProactiveTransferRule = "话术约束：自我介绍、问候、产品解答时禁止主动提及转人工、人工客服、真人客服、" +
+	"「可转人工」「如需转接」等表述；不要向用户罗列或暗示转人工选项。仅当用户明确说要转人工/找人工/接线员时，才进入转人工流程。"
 
 func realtimeTransferToolPromptRule(confirmRequired int) string {
 	confirmRequired = clampTransferConfirmCount(confirmRequired)
+	tools := "后台工具（勿向用户宣读）：get_current_time、is_business_hours、calculate；" +
+		"transfer_to_agent 仅用户明确要求转人工时调用，平时勿提起。"
 	if confirmRequired <= 1 {
-		return "可用工具：get_current_time、is_business_hours、calculate、transfer_to_agent（转人工）。" +
-			"问时间请调用 get_current_time。用户明确要求转人工时调用 transfer_to_agent，再口头告知正在转接请稍候。"
+		return realtimeNoProactiveTransferRule + "\n" + tools +
+			" 问时间请调用 get_current_time。用户明确要转人工时调用 transfer_to_agent；对用户说「请问有什么可以帮您的」等正常接待语，勿说「正在转接」「请稍候」。"
 	}
-	return "可用工具：get_current_time、is_business_hours、calculate、transfer_to_agent（转人工）。" +
-		"问时间请调用 get_current_time，不要编造。" +
-		"转人工安全规则：用户须在多轮对话中累计 " + strconv.Itoa(confirmRequired) + " 次明确表达转人工意图后，才可调用 transfer_to_agent；" +
-		"未满次数时工具会返回 need_more_confirmations，必须严格按 spoken_zh 回复。" +
-		"未满次数时严禁说「正在转接」「马上转接」「请稍候转接」等已转接承诺，避免误导用户。" +
-		"满足次数后调用 transfer_to_agent，再口头告知「正在为您转接，请稍候」。"
+	return realtimeNoProactiveTransferRule + "\n" + tools +
+		" 问时间请调用 get_current_time，不要编造。" +
+		" 转人工由后台累计用户 " + strconv.Itoa(confirmRequired) + " 次明确表达后才可调用 transfer_to_agent（勿向用户透露累计几次或还剩几次）。" +
+		"未满次数时勿调用该工具；对用户只能正常接待，例如「请问有什么可以帮您的」，严禁「正在为您转接」「请稍候」「马上转接」，不要追问「再说一次转人工」。" +
+		"满足次数后调用 transfer_to_agent；对用户仍只说「请问有什么可以帮您的」等，转接在后台进行，禁止「正在为您转接」「请稍候」。"
 }
 
-// realtimeAugmentSystemPrompt merges the operator-supplied system prompt
-// with transfer rules. When useTransferTool is true, instruct the model to
-// call transfer_to_agent; otherwise use the legacy text-marker contract.
-func realtimeAugmentSystemPrompt(userPrompt string, useTransferTool bool, transferConfirmRequired int) string {
+// realtimeAugmentSystemPrompt appends transfer/tool rules after operatorCore.
+// Pass empty operatorCore to get rules-only (for merging with tenant instructions).
+func realtimeAugmentSystemPrompt(operatorCore string, useTransferTool bool, transferConfirmRequired int) string {
 	var rule string
 	if useTransferTool {
 		rule = realtimeTransferToolPromptRule(transferConfirmRequired)
@@ -98,7 +119,7 @@ func realtimeAugmentSystemPrompt(userPrompt string, useTransferTool bool, transf
 			" `" + transferAgentMarker + "` 标记（这是系统识别用的指令，对用户不可见，请勿读出来）。" +
 			"如果用户没有要求转人工，绝对不要输出该标记。"
 	}
-	user := strings.TrimSpace(userPrompt)
+	user := strings.TrimSpace(operatorCore)
 	if user == "" {
 		return rule
 	}

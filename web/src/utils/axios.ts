@@ -7,7 +7,8 @@ import { genReqId, X_REQ_ID_HEADER } from '@/utils/reqId'
 const axiosInstance: AxiosInstance = axios.create({
   // 统一走配置的后端地址；当 url 为绝对地址时 axios 会优先使用 url 本身
   baseURL: getApiBaseURL(),
-  timeout: 1000000,
+  // 30s default; long-running endpoints should pass their own timeout via config.
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -43,18 +44,18 @@ axiosInstance.interceptors.request.use(
       config.params = { _t: Date.now() }
     }
     
-    // 添加调试信息
-    // @ts-ignore
-    console.log('Making request to:', config.baseURL + config.url, {
-      method: config.method,
-      'x-reqid': headers[X_REQ_ID_HEADER] ?? headers['X-Req-ID'],
-      params: config.params,
-    })
-    
+    // 调试信息仅在开发模式下打印，避免生产环境泄漏请求细节。
+    if (import.meta.env.DEV) {
+      // @ts-ignore
+      console.debug('[req]', config.method, config.baseURL + config.url, {
+        'x-reqid': headers[X_REQ_ID_HEADER] ?? headers['X-Req-ID'],
+      })
+    }
+
     return config
   },
   (error) => {
-    console.error('Request interceptor error:', error)
+    if (import.meta.env.DEV) console.error('Request interceptor error:', error)
     return Promise.reject(error)
   }
 )
@@ -72,40 +73,26 @@ axiosInstance.interceptors.response.use(
     return response
   },
   (error) => {
-      console.error('Response interceptor error:', error)
-    // 处理网络错误和HTTP状态码错误
+    if (import.meta.env.DEV) console.error('Response interceptor error:', error)
     if (error.response) {
-        console.log('Response status:', error.response.status)
-      // 服务器返回了错误状态码
       const status = error.response.status
-
-      switch (status) {
-        case 401:
-            console.log('Unauthorized')
-            useAuthStore.getState().clearUser()
-            // window.location.href = '/'
-            console.log('Unauthorized: Please log in')
-          break
-        case 403:
-          console.error('Forbidden: Access denied')
-          break
-        case 404:
-          console.error('Not Found: API endpoint not found')
-          break
-        case 500:
-          console.error('Internal Server Error')
-          break
-        default:
-          console.error(`HTTP Error ${status}:`, error.response.data)
+      if (status === 401) {
+        // 清理登录态并跳转到登录页，避免 UI 停留在“假装在线”状态。
+        useAuthStore.getState().clearUser()
+        if (typeof window !== 'undefined') {
+          const onAuthPage =
+            window.location.pathname === '/login' || window.location.pathname === '/register'
+          if (!onAuthPage) {
+            window.location.href = '/login'
+          }
+        }
+      } else if (import.meta.env.DEV) {
+        console.error(`HTTP ${status}:`, error.response.data)
       }
-    } else if (error.request) {
-      // 网络错误 - 连接被拒绝或超时
-      console.error('Network Error:', error.message)
-    } else {
-      // 其他错误
-      console.error('Error:', error.message)
+    } else if (import.meta.env.DEV) {
+      console.error('Network/Other Error:', error.message)
     }
-    
+
     return Promise.reject(error)
   }
 )

@@ -44,13 +44,21 @@ func flushOutboundCallQoS(leg *outLeg) {
 	clockRate := uint32(8000)
 	jitterMs := float64(snap.LocalJitter) * 1000.0 / float64(clockRate)
 
+	// Surface the negotiated codec from cdrState (set during answer
+	// SDP parsing). Falls back to pcmu when nothing was recorded —
+	// the qos package treats unknown values as G.711 anyway.
+	codec := leg.cdr.snapshot().codec
+	if codec == "" {
+		codec = "pcmu"
+	}
+
 	// MOS estimate from the E-Model.
 	mos := qos.Estimate(qos.MOSInput{
 		RTTMs:            snap.RTTMs,
 		JitterRTPUnits:   snap.LocalJitter,
 		JitterClockRate:  clockRate,
 		PeerLossFraction: lossFraction,
-		Codec:            "pcmu", // TODO: surface negotiated codec from rtpSess
+		Codec:            codec,
 	})
 
 	sipMetrics.ObserveCallQoS(snap.RTTMs, jitterMs, lossFraction, mos.MOS)

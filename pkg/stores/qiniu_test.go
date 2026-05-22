@@ -21,6 +21,13 @@ func readAll(t *testing.T, r io.Reader) string {
 }
 
 func checkEnvReady() bool {
+	// Require explicit opt-in for the live qiniu integration test so plain
+	// `go test ./...` (which loads developer .env files via godotenv) doesn't
+	// hit production buckets — and doesn't fail when the AK/SK lacks the
+	// delete IAM permission this test exercises.
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("QINIU_INTEGRATION_TEST")), "true") {
+		return false
+	}
 	accessKey := utils.GetEnv("QINIU_ACCESS_KEY")
 	secretKey := utils.GetEnv("QINIU_SECRET_KEY")
 	bucket := utils.GetEnv("QINIU_BUCKET")
