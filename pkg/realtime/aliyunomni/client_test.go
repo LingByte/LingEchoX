@@ -70,7 +70,7 @@ func TestBuildURL(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"default base", "", "qwen3-omni-flash-realtime", defaultBaseURL + "?model=qwen3-omni-flash-realtime", false},
+		{"default base", "", defaultModel, defaultBaseURL + "?model=" + defaultModel, false},
 		{"custom base no model", "ws://x/y", "m1", "ws://x/y?model=m1", false},
 		{"custom preserves caller model", "ws://x/y?model=already", "m1", "ws://x/y?model=already", false},
 		{"https rejected", "https://x", "m", "", true},
@@ -275,6 +275,117 @@ func TestEndToEnd_FakeServer(t *testing.T) {
 	}
 }
 
+func TestFunctionCalling_FakeServer(t *testing.T) {
+	var (
+		gotToolOutput atomic.Bool
+		gotRespCreate atomic.Bool
+	)
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		mustWriteJSON(t, conn, map[string]any{"type": "session.created"})
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var head struct {
+				Type string          `json:"type"`
+				Item json.RawMessage `json:"item"`
+			}
+			_ = json.Unmarshal(raw, &head)
+			switch head.Type {
+			case "session.update":
+				mustWriteJSON(t, conn, map[string]any{"type": "session.updated"})
+			case "input_audio_buffer.append":
+				if !gotToolOutput.Load() {
+					mustWriteJSON(t, conn, map[string]any{
+						"type":      "response.function_call_arguments.done",
+						"call_id":   "call_test_1",
+						"name":      "transfer_to_agent",
+						"arguments": `{"reason":"用户要求转人工"}`,
+					})
+					mustWriteJSON(t, conn, map[string]any{"type": "response.done"})
+				}
+			case "conversation.item.create":
+				var item struct {
+					Type string `json:"type"`
+				}
+				_ = json.Unmarshal(head.Item, &item)
+				if item.Type == "function_call_output" {
+					gotToolOutput.Store(true)
+				}
+			case "response.create":
+				gotRespCreate.Store(true)
+			}
+			if gotToolOutput.Load() && gotRespCreate.Load() {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1)
+	var toolCalled atomic.Bool
+	done := make(chan struct{})
+	a, err := New(
+		map[string]any{"apiKey": "sk-test", "baseUrl": wsURL},
+		realtime.Options{
+			Tools: []realtime.Tool{{
+				Name:        "transfer_to_agent",
+				Description: "转人工",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+			}},
+			ToolHandler: func(name string, args map[string]any) string {
+				if name == "transfer_to_agent" {
+					toolCalled.Store(true)
+				}
+				return `{"ok":true}`
+			},
+			OnEvent: func(ev realtime.Event) {
+				if ev.Type == realtime.EventAssistantTurnEnd {
+					select {
+					case <-done:
+					default:
+						close(done)
+					}
+				}
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.PushAudio(make([]byte, 640)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("timeout")
+	}
+	time.Sleep(50 * time.Millisecond)
+	_ = a.Close()
+	if !toolCalled.Load() {
+		t.Fatal("ToolHandler not invoked")
+	}
+	if !gotToolOutput.Load() {
+		t.Fatal("server did not receive function_call_output")
+	}
+	if !gotRespCreate.Load() {
+		t.Fatal("server did not receive response.create after tool output")
+	}
+}
+
 // TestPushAudio_AfterClose is a regression guard for the SIP teardown
 // race: callers MUST NOT panic when pushing audio after Close.
 func TestPushAudio_AfterClose(t *testing.T) {
@@ -291,6 +402,9 @@ func TestPushAudio_AfterClose(t *testing.T) {
 	}
 	if err := a.Cancel(); err != realtime.ErrAgentClosed {
 		t.Fatalf("expected ErrAgentClosed, got %v", err)
+	}
+	if err := a.UpdateInstructions("test"); err != realtime.ErrAgentClosed {
+		t.Fatalf("expected ErrAgentClosed on UpdateInstructions, got %v", err)
 	}
 }
 

@@ -490,4 +490,5 @@ func CleanupCallState(callID string) {
 	stopNoAgentRetryLoop(callID)
 	ResetTransferRoutingState(callID)
 	ClearSIPScriptMode(callID)
+	cleanupSIPTransferConfirm(callID)
 }

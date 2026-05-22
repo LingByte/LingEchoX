@@ -11,7 +11,7 @@ import (
 // Copyright (c) 2026 LingByte
 // SPDX-License-Identifier: MIT
 
-func registerSIPTransferTool(provider llm.LLMProvider, callID string, lg *zap.Logger) {
+func registerSIPTransferTool(provider llm.LLMProvider, callID string, confirmRequired int, lg *zap.Logger) {
 	if provider == nil || strings.TrimSpace(callID) == "" {
 		return
 	}
@@ -26,16 +26,27 @@ func registerSIPTransferTool(provider llm.LLMProvider, callID string, lg *zap.Lo
 	}`)
 	provider.RegisterFunctionTool(
 		"transfer_to_agent",
-		"当且仅当用户明确要求转人工客服时调用该工具。调用后系统会执行转人工，不要让用户重复确认。",
+		"当用户明确要求转人工且系统确认次数已满足时调用；未满次数时勿调用，口头安抚即可。",
 		params,
 		func(args map[string]interface{}, _ interface{}) (string, error) {
+			allowed, count := sipTransferMayExecute(callID, confirmRequired)
+			if !allowed {
+				if lg != nil {
+					lg.Info("sip voice: transfer tool blocked (confirm count)",
+						zap.String("call_id", callID),
+						zap.Int("count", count),
+						zap.Int("required", confirmRequired),
+					)
+				}
+				return transferConfirmToolMessage(count, confirmRequired), nil
+			}
 			if lg != nil {
 				lg.Info("sip voice: transfer tool invoked",
 					zap.String("call_id", callID),
 					zap.Any("args", args),
+					zap.Int("confirm_count", count),
 				)
 			}
-			// Keep UX consistent with Alibaba flow: transfer only after current TTS reply finishes.
 			markSIPTransferPending(callID)
 			return "transfer_requested", nil
 		},

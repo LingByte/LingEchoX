@@ -37,7 +37,7 @@ func NewVoicedialogLoopbackLLMProvider(ctx context.Context, callID string, lg *z
 		lg = logger.Lg
 	}
 	if lg != nil {
-		registerSIPTransferTool(p, callID, lg.Named("voicedialog-loopback"))
+		registerSIPTransferTool(p, callID, TransferConfirmRequired(VoiceEnv{}), lg.Named("voicedialog-loopback"))
 	}
 	cleanup := func() { p.Hangup() }
 	return p, env.LLMModel, cleanup, nil

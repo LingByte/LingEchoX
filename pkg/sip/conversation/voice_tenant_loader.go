@@ -178,6 +178,12 @@ func VoiceEnvFromTenantJSON(asrRaw, ttsRaw, llmRaw, realtimeRaw []byte, voiceMod
 	out.LLMAppID = strFromMap(lm, "appId", "app_id")
 	out.LLMModel = strFromMap(lm, "model")
 
+	n := parseTransferConfirmCount(rm)
+	if n == 0 {
+		n = parseTransferConfirmCount(lm)
+	}
+	out.TransferConfirmCount = n
+
 	if strings.EqualFold(out.LLMProvider, "coze") {
 		botID := strFromMap(lm, "botId", "bot_id")
 		userID := strFromMap(lm, "userId", "user_id")

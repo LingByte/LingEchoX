@@ -129,6 +129,12 @@ export const TENANT_LLM_PROVIDER_RULES: AiProviderRule[] = [
     fields: [
       { key: 'apiKey', label: 'API Key', type: 'password', required: true },
       { key: 'appId', label: 'App ID', type: 'text', required: true },
+      {
+        key: 'transferConfirmCount',
+        label: '转人工确认次数',
+        type: 'number',
+        placeholder: '默认 3；填 1 立即转（与实时多模态共用逻辑）',
+      },
       { key: 'model', label: '模型', type: 'text' },
     ],
   },
@@ -163,7 +169,7 @@ export const TENANT_REALTIME_PROVIDER_RULES: AiProviderRule[] = [
     label: '阿里云 Qwen-Omni 实时多模态',
     fields: [
       { key: 'apiKey', label: 'DashScope API Key', type: 'password', required: true, placeholder: 'sk-xxx (DASHSCOPE_API_KEY)' },
-      { key: 'model', label: '模型', type: 'text', placeholder: 'qwen3-omni-flash-realtime（默认）' },
+      { key: 'model', label: '模型', type: 'text', placeholder: 'qwen3.5-omni-flash-realtime-2026-03-15（默认）' },
       { key: 'voice', label: '音色', type: 'text', placeholder: 'Cherry / Ethan / Chelsie / Serena ...' },
       {
         key: 'instructions',
@@ -173,6 +179,12 @@ export const TENANT_REALTIME_PROVIDER_RULES: AiProviderRule[] = [
         placeholder: '例：你是售后客服，回答简洁专业；可粘贴较长话术与业务规则',
       },
       { key: 'temperature', label: '温度（可选）', type: 'number', placeholder: '0.6 ~ 1.2（留空=0.6，越低越稳定）' },
+      {
+        key: 'transferConfirmCount',
+        label: '转人工确认次数',
+        type: 'number',
+        placeholder: '默认 3：用户每轮说转人工计 1 次，满 N 次才拨号；填 1 表示立即转',
+      },
       { key: 'baseUrl', label: 'WS 端点（可选）', type: 'text', placeholder: '留空=北京区；新加坡区 wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime' },
     ],
   },

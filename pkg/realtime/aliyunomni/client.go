@@ -59,7 +59,7 @@ import (
 const (
 	ProviderSlug   = "aliyun_omni"
 	defaultBaseURL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-	defaultModel   = "qwen3-omni-flash-realtime"
+	defaultModel   = "qwen3.5-omni-flash-realtime-2026-03-15"
 	defaultVoice   = "Cherry"
 	defaultDialMs  = 10000
 	defaultSendBuf = 64
@@ -84,7 +84,7 @@ type Config struct {
 // snake_case accepted):
 //
 //	apiKey       (required) DashScope API key (sk-…)
-//	model                  default qwen3-omni-flash-realtime
+//	model                  default qwen3.5-omni-flash-realtime-2026-03-15
 //	voice                  default Cherry
 //	instructions           system prompt / persona
 //	baseUrl                override WS endpoint
@@ -125,6 +125,12 @@ func New(cfg map[string]any, opts realtime.Options) (realtime.Agent, error) {
 
 // --- agent implementation ---------------------------------------------------
 
+type pendingFunctionCall struct {
+	CallID    string
+	Name      string
+	Arguments string
+}
+
 type agent struct {
 	cfg  Config
 	opts realtime.Options
@@ -140,6 +146,9 @@ type agent struct {
 	// goroutine) and Cancel (control goroutine) don't race on the WS.
 	sendCh chan []byte
 	wg     sync.WaitGroup
+
+	pendingFCMu sync.Mutex
+	pendingFCs  []pendingFunctionCall
 
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -175,6 +184,7 @@ func (a *agent) doStart(ctx context.Context) error {
 	dialer.HandshakeTimeout = time.Duration(a.cfg.DialTimeoutMs) * time.Millisecond
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+a.cfg.APIKey)
+	headers.Set("X-DashScope-OmniRealtime", "true")
 
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
@@ -216,9 +226,13 @@ func (a *agent) buildSession() map[string]any {
 	}
 	session := map[string]any{
 		"voice":               a.cfg.Voice,
+		"modalities":          mods,
 		"output_modalities":   mods,
 		"input_audio_format":  "pcm16",
 		"output_audio_format": "pcm16",
+	}
+	if tools := realtime.ToolsForSession(a.opts.Tools); len(tools) > 0 {
+		session["tools"] = tools
 	}
 	if !a.opts.DisableServerVAD {
 		// Vendor default is server VAD on; we set it explicitly so future
@@ -283,6 +297,24 @@ func (a *agent) Cancel() error {
 		return realtime.ErrAgentClosed
 	}
 	return a.sendJSON(map[string]any{"type": "response.cancel"})
+}
+
+// UpdateInstructions sends session.update with new instructions mid-call.
+func (a *agent) UpdateInstructions(instructions string) error {
+	instructions = strings.TrimSpace(instructions)
+	if instructions == "" {
+		return nil
+	}
+	a.cfg.Instructions = instructions
+	if a.closed.Load() || a.conn == nil {
+		return realtime.ErrAgentClosed
+	}
+	return a.sendJSON(map[string]any{
+		"type": "session.update",
+		"session": map[string]any{
+			"instructions": instructions,
+		},
+	})
 }
 
 func (a *agent) Close() error {
@@ -469,8 +501,28 @@ func (a *agent) dispatch(raw []byte) {
 			AudioPC: pcm,
 		})
 
+	case "response.function_call_arguments.done":
+		var msg wireFunctionCallDone
+		_ = json.Unmarshal(raw, &msg)
+		if msg.Name != "" && msg.CallID != "" {
+			a.pendingFCMu.Lock()
+			a.pendingFCs = append(a.pendingFCs, pendingFunctionCall{
+				CallID:    msg.CallID,
+				Name:      msg.Name,
+				Arguments: msg.Arguments,
+			})
+			a.pendingFCMu.Unlock()
+		} else {
+			a.emit(realtime.Event{
+				Type:   realtime.EventError,
+				Vendor: ProviderSlug,
+				Err:    fmt.Errorf("aliyunomni: function_call_arguments.done missing name/call_id"),
+				Raw:    raw,
+			})
+		}
+
 	case "response.done":
-		a.emit(realtime.Event{Type: realtime.EventAssistantTurnEnd, Vendor: ProviderSlug, Raw: raw})
+		a.finishResponseTurn(raw)
 
 	case "error":
 		var msg wireError
@@ -494,6 +546,38 @@ func (a *agent) dispatch(raw []byte) {
 		// Silently ignore events we don't translate. Forwarding raw to
 		// debug logs is the SIP layer's job.
 	}
+}
+
+// finishResponseTurn executes pending function calls (if any), posts outputs
+// back to DashScope, and signals assistant turn end to SIP attach.
+func (a *agent) finishResponseTurn(raw []byte) {
+	a.pendingFCMu.Lock()
+	pending := append([]pendingFunctionCall(nil), a.pendingFCs...)
+	a.pendingFCs = nil
+	a.pendingFCMu.Unlock()
+
+	if len(pending) > 0 && a.opts.ToolHandler != nil {
+		for _, fc := range pending {
+			var args map[string]any
+			if fc.Arguments != "" {
+				_ = json.Unmarshal([]byte(fc.Arguments), &args)
+			}
+			if args == nil {
+				args = map[string]any{}
+			}
+			output := a.opts.ToolHandler(fc.Name, args)
+			_ = a.sendJSON(map[string]any{
+				"type": "conversation.item.create",
+				"item": map[string]any{
+					"type":    "function_call_output",
+					"call_id": fc.CallID,
+					"output":  output,
+				},
+			})
+		}
+		_ = a.sendJSON(map[string]any{"type": "response.create"})
+	}
+	a.emit(realtime.Event{Type: realtime.EventAssistantTurnEnd, Vendor: ProviderSlug, Raw: raw})
 }
 
 func (a *agent) emit(ev realtime.Event) {
@@ -568,6 +652,12 @@ type wireDelta struct {
 
 type wireTranscript struct {
 	Transcript string `json:"transcript"`
+}
+
+type wireFunctionCallDone struct {
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type wireError struct {

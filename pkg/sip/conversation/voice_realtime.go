@@ -17,13 +17,11 @@ package conversation
 //   - agent EventUserSpeechStarted → barge-in (cancels in-flight reply
 //     server-side via response.cancel; SIP path drops any AI PCM still
 //     in flight).
-//   - Transfer-to-agent: realtime providers don't support tool calling,
-//     so we (a) augment the system prompt with a sentinel-marker rule
-//     and watch EventAssistantText(final), (b) fall back to keyword
-//     matching the user transcript via realtimeMatchTransferIntent.
-//     Either path calls markSIPTransferPending — the existing transfer
-//     consumer (consumeSIPTransferPending) reuses TriggerTransferToAgent
-//     unchanged.
+//   - Transfer-to-agent: Qwen3.5-Omni-Realtime uses WS Function Calling
+//     (transfer_to_agent). The tool only marks pending; dial runs after the
+//     assistant turn ends and local playback buffer drains (parity with
+//     pipeline "transfer after TTS"). Legacy marker/keyword paths apply
+//     only when FC tools are disabled.
 //   - Once IsTransferInProgress fires (transfer ringing / loading music
 //     started), both directions of audio between caller and agent are
 //     hard-gated so the AI cannot talk over the hold music or the human
@@ -78,11 +76,9 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 		)
 	}
 
-	// Effective system prompt: caller-supplied (popSIPCallSystemPrompt
-	// already used by pipeline mode) plus the transfer marker rule.
-	// The augment is idempotent — the rule is appended once, not woven
-	// into instructions, so operator prompts stay in control.
-	systemPrompt := realtimeAugmentSystemPrompt(popSIPCallSystemPrompt(cs.CallID))
+	useTransferTool := realtimeSupportsTransferTools(env)
+	transferConfirmRequired := TransferConfirmRequired(env)
+	baseSystemPrompt := realtimeAugmentSystemPrompt(popSIPCallSystemPrompt(cs.CallID), useTransferTool, transferConfirmRequired)
 
 	hangupPhrases := sipHangupPhrasesFromEnv()
 
@@ -154,21 +150,25 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 		return false
 	}
 
-	// triggerTransferOnce flips the pending flag, fires the actual
-	// TriggerTransferToAgent (same code path the LLM tool callback uses)
-	// and stops the agent so it doesn't keep talking while the hold
-	// music plays. Idempotent — safe under repeated invocations from
-	// both user-side and assistant-side detectors.
+	// executeTransfer runs the dial leg after the caller has heard the AI
+	// transfer acknowledgement (FC path) or immediately (legacy keyword/marker).
 	transferStartedLocal := atomic.Bool{}
-	triggerTransfer := func(reason string) {
+	executeTransfer := func(reason string) {
 		if !transferStartedLocal.CompareAndSwap(false, true) {
 			return
+		}
+		if useTransferTool {
+			if !consumeSIPTransferPending(cs.CallID) {
+				transferStartedLocal.Store(false)
+				return
+			}
+		} else {
+			markSIPTransferPending(cs.CallID)
 		}
 		lg.Info("sip voice (realtime): transfer trigger",
 			zap.String("call_id", cs.CallID),
 			zap.String("reason", reason),
 		)
-		markSIPTransferPending(cs.CallID)
 		// Stop the model immediately; we don't want it to finish a
 		// sentence over the agent's "loading…" music. We *don't* close
 		// the agent here — leaving the WS open keeps the door open for
@@ -217,14 +217,25 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 					)
 				}
 			}
-			// `consumeSIPTransferPending` is invoked by the existing
-			// transfer consumer; we trip the same path so the rest of
-			// the SIP code (TriggerTransferToAgent, ringback, ACD pool,
-			// no-agent retry) works identically.
-			if consumeSIPTransferPending(cs.CallID) {
-				TriggerTransferToAgent(context.Background(), cs.CallID, lg)
-			}
+			TriggerTransferToAgent(context.Background(), cs.CallID, lg)
 		}()
+	}
+
+	waitRealtimePlaybackDrain := func(ctx context.Context, maxWait time.Duration) {
+		deadline := time.Now().Add(maxWait)
+		for time.Now().Before(deadline) {
+			if ctx.Err() != nil {
+				return
+			}
+			aiBufMu.Lock()
+			empty := len(aiBuf) == 0
+			aiBufMu.Unlock()
+			if empty {
+				time.Sleep(bargeInGrace)
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 
 	onEvent := func(ev realtime.Event) {
@@ -234,6 +245,7 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 				zap.String("call_id", cs.CallID),
 				zap.String("vendor", ev.Vendor),
 			)
+			syncRealtimeTransferInstructions(agent, baseSystemPrompt, cs.CallID, transferConfirmRequired)
 
 		case realtime.EventSessionClose:
 			lg.Info("sip voice (realtime): session closed",
@@ -299,8 +311,18 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 				zap.String("call_id", cs.CallID),
 				zap.String("text", ev.Text),
 			)
-			if realtimeMatchTransferIntent("user", ev.Text, nil) {
-				triggerTransfer("user_keyword")
+			if c := recordSIPTransferIntent(cs.CallID, ev.Text); c > 0 && realtimeMatchTransferIntent("user", ev.Text, nil) {
+				lg.Info("sip voice (realtime): transfer intent recorded",
+					zap.String("call_id", cs.CallID),
+					zap.Int("count", c),
+					zap.Int("required", transferConfirmRequired),
+				)
+			}
+			syncRealtimeTransferInstructions(agent, baseSystemPrompt, cs.CallID, transferConfirmRequired)
+			if !useTransferTool && realtimeMatchTransferIntent("user", ev.Text, nil) {
+				if allowed, _ := sipTransferMayExecute(cs.CallID, transferConfirmRequired); allowed {
+					executeTransfer("user_keyword")
+				}
 			}
 
 		case realtime.EventAssistantText:
@@ -320,9 +342,44 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 					zap.String("call_id", cs.CallID),
 					zap.String("text", clean),
 				)
-				// Transfer marker (model-driven path).
-				if realtimeMatchTransferIntent("assistant", full, nil) {
-					triggerTransfer("assistant_marker")
+				// Transfer marker (legacy path when FC tools are off).
+				if !useTransferTool && realtimeMatchTransferIntent("assistant", full, nil) {
+					if allowed, _ := sipTransferMayExecute(cs.CallID, transferConfirmRequired); allowed {
+						executeTransfer("assistant_marker")
+					}
+				}
+				// FC path: dial after the ack is spoken. Tool may fire first
+				// (vendor flow) or the model may only speak without calling it.
+				if useTransferTool && !transferStartedLocal.Load() {
+					toolPending := isSIPTransferPending(cs.CallID)
+					ackPhrase := realtimeMatchTransferAckPhrase(clean)
+					allowed, cnt := sipTransferMayExecute(cs.CallID, transferConfirmRequired)
+					if (toolPending || ackPhrase) && allowed {
+						reason := "function_call"
+						if !toolPending {
+							reason = "assistant_ack"
+							lg.Info("sip voice (realtime): transfer ack without tool call, scheduling dial",
+								zap.String("call_id", cs.CallID),
+								zap.String("text", clean),
+							)
+							markSIPTransferPending(cs.CallID)
+						}
+						go func(r string) {
+							waitRealtimePlaybackDrain(ms.GetContext(), 15*time.Second)
+							if ms == nil || ms.GetContext().Err() != nil {
+								return
+							}
+							executeTransfer(r)
+						}(reason)
+					} else if (toolPending || ackPhrase) && !allowed {
+						lg.Warn("sip voice (realtime): model promised transfer before confirm count (dial blocked)",
+							zap.String("call_id", cs.CallID),
+							zap.Int("count", cnt),
+							zap.Int("required", transferConfirmRequired),
+							zap.String("assistant_text", clean),
+							zap.String("should_have_said", transferConfirmSpokenZH(cnt, transferConfirmRequired, transferConfirmRequired-cnt)),
+						)
+					}
 				}
 				// Hangup phrase: same semantics as pipeline mode —
 				// only assistant farewells release.
@@ -433,8 +490,8 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 	// the WebSocket. We do both before registering the PCM processor so
 	// any cred/handshake failure surfaces as a clean attach error and
 	// the call leg falls back to config_error.wav.
-	a, err := realtime.NewAgentFromCredential(env.RealtimeConfigRaw, realtime.Options{
-		SystemPrompt:     systemPrompt,
+	rtOpts := realtime.Options{
+		SystemPrompt: mergeRealtimeInstructions(baseSystemPrompt, transferConfirmSessionHint(cs.CallID, transferConfirmRequired)),
 		Voice:            realtimeVoiceFromEnv(env),
 		InputSampleRate:  realtimeAgentInputRate,
 		OutputSampleRate: agentOutputRateOrDefault(env),
@@ -446,7 +503,12 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 		// works (see realtimeTemperatureFromEnv).
 		Temperature: realtimeTemperatureFromEnv(env),
 		OnEvent:     onEvent,
-	})
+	}
+	if useTransferTool {
+		rtOpts.Tools = SIPRealtimeTools()
+		rtOpts.ToolHandler = newSIPRealtimeToolHandler(cs.CallID, transferConfirmRequired, lg, executeTransfer)
+	}
+	a, err := realtime.NewAgentFromCredential(env.RealtimeConfigRaw, rtOpts)
 	if err != nil {
 		return fmt.Errorf("sip conversation: realtime agent: %w", err)
 	}
@@ -458,6 +520,9 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 	lg.Info("sip voice (realtime) attached",
 		zap.String("call_id", cs.CallID),
 		zap.String("provider", env.RealtimeProvider),
+		zap.Bool("transfer_tools", useTransferTool),
+		zap.Int("transfer_confirm_required", transferConfirmRequired),
+		zap.Int("tools_count", len(rtOpts.Tools)),
 		zap.Int("pcm_bridge_hz", pcmBridgeSR),
 		zap.Int("agent_in_hz", realtimeAgentInputRate),
 		zap.Int("agent_out_hz", agentOutputRateOrDefault(env)),

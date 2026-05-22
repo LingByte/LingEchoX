@@ -60,6 +60,16 @@ func markSIPTransferPending(callID string) {
 	sipTransferPendingMu.Unlock()
 }
 
+func isSIPTransferPending(callID string) bool {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return false
+	}
+	sipTransferPendingMu.Lock()
+	defer sipTransferPendingMu.Unlock()
+	return sipTransferPendingByCallID[callID]
+}
+
 func consumeSIPTransferPending(callID string) bool {
 	callID = strings.TrimSpace(callID)
 	if callID == "" {
@@ -112,6 +122,9 @@ type VoiceEnv struct {
 	// RealtimeConfigRaw is the full tenant realtime JSON (provider +
 	// per-vendor fields), passed through to realtime.NewAgentFromCredential.
 	RealtimeConfigRaw map[string]any
+	// TransferConfirmCount: user must express transfer intent this many times
+	// (separate final transcripts) before dial. 0 = use default (3). Clamped 1–10.
+	TransferConfirmCount int
 }
 
 // sipVoicePCMBridgeRate is the negotiated PCM rate between RTP decode and encode (must match MediaSession).
@@ -422,7 +435,7 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	if err != nil {
 		return fmt.Errorf("sip conversation: llm provider init: %w", err)
 	}
-	registerSIPTransferTool(llmProvider, cs.CallID, lg)
+	registerSIPTransferTool(llmProvider, cs.CallID, TransferConfirmRequired(env), lg)
 	lg.Info("sip voice pipeline config",
 		zap.String("llm_model", llmModel),
 		zap.String("llm_provider", env.LLMProvider),
@@ -600,6 +613,13 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				zap.Bool("asr_isFinal", asrIsFinal),
 				zap.String("trigger", trigger),
 			)
+			if c := recordSIPTransferIntent(cs.CallID, userText); c > 0 && realtimeMatchTransferIntent("user", userText, nil) {
+				lg.Info("sip voice: transfer intent recorded",
+					zap.String("call_id", cs.CallID),
+					zap.Int("count", c),
+					zap.Int("required", TransferConfirmRequired(env)),
+				)
+			}
 
 			var reply string
 			var err error

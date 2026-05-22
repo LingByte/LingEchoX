@@ -8,10 +8,10 @@ package conversation
 // Why this file exists:
 // ---------------------
 // The classic SIP voice path uses LLM tool calls (`transfer_to_agent`) to
-// trigger transfers — see `tools.go`. Realtime providers like Qwen-Omni
-// realtime do **not** support function/tool calling on the WS protocol;
-// the assistant only emits text + audio. So in realtime mode we drive
-// transfer detection entirely from text:
+// trigger transfers — see `tools.go`. Qwen3.5-Omni-Realtime supports
+// Function Calling on the WS protocol (see `realtime_tools.go` and
+// pkg/realtime/aliyunomni). When tools are disabled we drive transfer
+// detection from text:
 //
 //  1. The system prompt is augmented (see realtimeAugmentSystemPrompt) so
 //     the model is *instructed* to append a sentinel marker
@@ -31,6 +31,7 @@ package conversation
 // and reuses `sipHangupPhrasesFromEnv()` from voice.go.
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -54,16 +55,49 @@ var transferUserPhrasesDefault = []string{
 	"转接人工",
 }
 
+// transferAckPhrases match assistant replies that mean a transfer is in progress.
+// Used when the model speaks the acknowledgement but omits the FC tool call.
+func realtimeMatchTransferAckPhrase(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	hasTransfer := false
+	for _, h := range []string{"转接", "转人工", "人工客服"} {
+		if strings.Contains(t, h) {
+			hasTransfer = true
+			break
+		}
+	}
+	return hasTransfer
+}
+
+func realtimeTransferToolPromptRule(confirmRequired int) string {
+	confirmRequired = clampTransferConfirmCount(confirmRequired)
+	if confirmRequired <= 1 {
+		return "可用工具：get_current_time、is_business_hours、calculate、transfer_to_agent（转人工）。" +
+			"问时间请调用 get_current_time。用户明确要求转人工时调用 transfer_to_agent，再口头告知正在转接请稍候。"
+	}
+	return "可用工具：get_current_time、is_business_hours、calculate、transfer_to_agent（转人工）。" +
+		"问时间请调用 get_current_time，不要编造。" +
+		"转人工安全规则：用户须在多轮对话中累计 " + strconv.Itoa(confirmRequired) + " 次明确表达转人工意图后，才可调用 transfer_to_agent；" +
+		"未满次数时工具会返回 need_more_confirmations，必须严格按 spoken_zh 回复。" +
+		"未满次数时严禁说「正在转接」「马上转接」「请稍候转接」等已转接承诺，避免误导用户。" +
+		"满足次数后调用 transfer_to_agent，再口头告知「正在为您转接，请稍候」。"
+}
+
 // realtimeAugmentSystemPrompt merges the operator-supplied system prompt
-// with the marker contract. We always append (never prepend) so the
-// caller's intent dominates style/persona while the marker rule sits at
-// the bottom as a hard constraint the model is unlikely to drop.
-//
-// Empty `userPrompt` is fine — the marker rule alone is a valid prompt.
-func realtimeAugmentSystemPrompt(userPrompt string) string {
-	const rule = "重要规则：当用户明确要求转接人工客服 / 真人客服时，请在你回复的最后单独追加一行" +
-		" `" + transferAgentMarker + "` 标记（这是系统识别用的指令，对用户不可见，请勿读出来）。" +
-		"如果用户没有要求转人工，绝对不要输出该标记。"
+// with transfer rules. When useTransferTool is true, instruct the model to
+// call transfer_to_agent; otherwise use the legacy text-marker contract.
+func realtimeAugmentSystemPrompt(userPrompt string, useTransferTool bool, transferConfirmRequired int) string {
+	var rule string
+	if useTransferTool {
+		rule = realtimeTransferToolPromptRule(transferConfirmRequired)
+	} else {
+		rule = "重要规则：当用户明确要求转接人工客服 / 真人客服时，请在你回复的最后单独追加一行" +
+			" `" + transferAgentMarker + "` 标记（这是系统识别用的指令，对用户不可见，请勿读出来）。" +
+			"如果用户没有要求转人工，绝对不要输出该标记。"
+	}
 	user := strings.TrimSpace(userPrompt)
 	if user == "" {
 		return rule

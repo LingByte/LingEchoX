@@ -66,7 +66,7 @@ const (
 
 	// EventAssistantText carries an AI text fragment. `Final=true` ends
 	// the current assistant response. Used by SIP for hangup-phrase /
-	// transfer keyword detection (Omni realtime has no tool calling).
+	// transfer keyword detection when Tools are not configured.
 	EventAssistantText EventType = "assistant.text"
 	// EventAssistantAudio carries a chunk of AI audio at OutputSampleRate.
 	EventAssistantAudio EventType = "assistant.audio"
@@ -127,6 +127,11 @@ type Options struct {
 	// produce more deterministic / consistent replies which is what
 	// telephony deployments usually want (script adherence > variety).
 	Temperature float64
+	// Tools are sent in session.update (Qwen3.5-Omni-Realtime Function Calling).
+	Tools []Tool
+	// ToolHandler runs when the model requests a tool (response.done batch).
+	// Return value is sent back as function_call_output. Nil skips tool execution.
+	ToolHandler ToolHandler
 }
 
 // Agent is the provider-agnostic full-duplex realtime client. Implementations
@@ -151,6 +156,9 @@ type Agent interface {
 	Cancel() error
 	// Close tears the session down. Idempotent.
 	Close() error
+	// UpdateInstructions patches session instructions mid-call (e.g. transfer
+	// confirm counter). No-op or error if the session is not open.
+	UpdateInstructions(instructions string) error
 }
 
 // Provider is a credential-driven factory. cfg is the parsed JSON the

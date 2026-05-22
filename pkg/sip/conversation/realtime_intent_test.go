@@ -12,12 +12,40 @@ import (
 func TestRealtimeAugmentSystemPrompt_ContainsMarker(t *testing.T) {
 	cases := []string{"", "你是个人助理小云"}
 	for _, p := range cases {
-		out := realtimeAugmentSystemPrompt(p)
+		out := realtimeAugmentSystemPrompt(p, false, 3)
 		if !strings.Contains(out, transferAgentMarker) {
 			t.Fatalf("marker missing for input %q: got %q", p, out)
 		}
 		if p != "" && !strings.HasPrefix(out, p) {
 			t.Fatalf("operator prompt must come first; got %q", out)
+		}
+	}
+}
+
+func TestRealtimeAugmentSystemPrompt_TransferTool(t *testing.T) {
+	out := realtimeAugmentSystemPrompt("你是客服", true, 3)
+	if !strings.Contains(out, "transfer_to_agent") {
+		t.Fatalf("tool rule missing: %q", out)
+	}
+	if !strings.Contains(out, "累计 3 次") {
+		t.Fatalf("confirm count rule missing: %q", out)
+	}
+	if strings.Contains(out, transferAgentMarker) {
+		t.Fatalf("marker should not appear in tool mode: %q", out)
+	}
+}
+
+func TestRealtimeMatchTransferAckPhrase(t *testing.T) {
+	pos := []string{"正在为您转接，请稍候。", "好的，马上为您转接人工客服。"}
+	for _, p := range pos {
+		if !realtimeMatchTransferAckPhrase(p) {
+			t.Fatalf("expected ack match for %q", p)
+		}
+	}
+	neg := []string{"", "请稍候", "听得清，您请说。"}
+	for _, n := range neg {
+		if realtimeMatchTransferAckPhrase(n) {
+			t.Fatalf("false positive for %q", n)
 		}
 	}
 }
