@@ -165,6 +165,27 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	// 出局 / 主动 dial（campaign）的 CallSession remoteFromHeader 是空，
 	// 这种情况维持 Target.CallerDisplayName 默认值不动。
 	agentDisplayOverride := extractInboundCallerNumber(inboundCallID)
+	// PAI (RFC 3325) 透传真实主叫，From 维持中继外显号通过运营商 ANI 校验，
+	// 同时让坐席话机 / 软电话从 P-Asserted-Identity 取出真实手机号显示。
+	// URI 形态优先使用入局 From 的完整 sip:user@host（运营商原样回传，最贴近
+	// "operator-validated" 的语义），否则回落 tel:<number>。
+	agentAssertedURI := extractInboundCallerURI(inboundCallID)
+	paiSource := "inbound_from"
+	if agentAssertedURI == "" && agentDisplayOverride != "" {
+		agentAssertedURI = "tel:" + agentDisplayOverride
+		paiSource = "tel_fallback"
+	}
+	if agentAssertedURI == "" {
+		paiSource = "none"
+	}
+	lg.Info("sip transfer: P-Asserted-Identity prepared",
+		zap.String("inbound_call_id", inboundCallID),
+		zap.String("from_user", strings.TrimSpace(tgt.CallerUser)),
+		zap.String("from_display", agentDisplayOverride),
+		zap.String("pai_uri", agentAssertedURI),
+		zap.String("pai_display", agentDisplayOverride),
+		zap.String("pai_source", paiSource),
+	)
 	// Pull the inbound INVITE's To + History-Info + Diversion headers so
 	// we can extend the retarget chain on the outbound leg (RFC 7044 /
 	// RFC 5806). Look up via the same session helper used elsewhere in
@@ -187,9 +208,19 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 			// 用 DialRequest 的 user+display；否则 fallback 到 Target.*」，
 			// 单独设 CallerDisplayName 会被丢弃。所以这里把 user 部分显式
 			// 写成 Target.CallerUser（保留中继外显号通过 ANI 校验），同时
-			// 把 display 改成主叫真实手机号。
+			// 把 display 改成主叫真实手机号。真正的"号码透传"靠 PAI 头
+			// （见下面的 AssertedIdentity 设置），需中继支持。
 			req.CallerUser = strings.TrimSpace(tgt.CallerUser)
 			req.CallerDisplayName = agentDisplayOverride
+		}
+		if agentAssertedURI != "" {
+			// PAI 走 RFC 3325 的"运营商已验证主叫"语义，display-name 取
+			// 真实手机号方便坐席话机直接读出来。Privacy 头不设（默认 none），
+			// 让中继 SBC / 坐席侧自由消费这条 PAI。
+			req.AssertedIdentityURI = agentAssertedURI
+			if agentDisplayOverride != "" {
+				req.AssertedIdentityDisplayName = agentDisplayOverride
+			}
 		}
 		// AI / ACD-driven retarget: cause=302 (Moved Temporarily) is the
 		// closest fit and the Diversion reason is "unconditional"
@@ -229,6 +260,49 @@ func extractInboundCallerNumber(inboundCallID string) string {
 		return ""
 	}
 	return parseSIPUserPart(hdr)
+}
+
+// extractInboundCallerURI 取入站 INVITE From 头里完整的 sip:user@host
+// （去掉 display-name / 角括号 / ;params），用作 PAI URI。运营商落地的
+// From 通常带着它自己的 host，作为 PAI 透传给坐席侧最贴近 RFC 3325
+// "operator-validated identity" 的语义。无法解析时返回 ""，调用方会
+// 回落到 tel:<number> 形态。
+func extractInboundCallerURI(inboundCallID string) string {
+	inbound := lookupInboundSession(inboundCallID)
+	if inbound == nil {
+		return ""
+	}
+	hdr := inbound.RemoteFromHeader()
+	if hdr == "" {
+		return ""
+	}
+	return parseSIPNameAddrURI(hdr)
+}
+
+// parseSIPNameAddrURI 从 name-addr / addr-spec 形态的 SIP header 里提取
+// 纯 URI（含 scheme，但不含 <>、display-name、header params）。
+//
+//	"Bob" <sip:bob@host;user=phone>;tag=xxx → sip:bob@host;user=phone
+//	<sip:bob@host>                          → sip:bob@host
+//	sip:bob@host;tag=xxx                    → sip:bob@host
+func parseSIPNameAddrURI(header string) string {
+	s := strings.TrimSpace(header)
+	if s == "" {
+		return ""
+	}
+	if lt := strings.Index(s, "<"); lt >= 0 {
+		if gt := strings.Index(s[lt:], ">"); gt > 0 {
+			return strings.TrimSpace(s[lt+1 : lt+gt])
+		}
+	}
+	// addr-spec 形态：直接到第一个 header param 分隔符（;）就停。注意
+	// 不能用 URI 内部的 ;user=phone 来截断 —— 但 addr-spec 形态下 SIP
+	// 规范只允许 URI 没有外层包裹时把整个剩余串当 URI，header param 必须
+	// 写在 <> 外，否则解析歧义。这里保守处理：取首个 ';' 之前。
+	if i := strings.Index(s, ";"); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 // parseSIPUserPart 是 pkg/sip/persist.ExtractSIPUserPart 的精简同款实现，
@@ -485,6 +559,11 @@ func CleanupCallState(callID string) {
 	if callID == "" {
 		return
 	}
+	// 入局 BYE 到达时，桥接还没建立的转接 leg 仍在响铃 —— 必须给它
+	// 发 CANCEL，否则坐席手机会一直响到运营商 no-answer 超时（60-180s）。
+	// 已建立桥接的 leg 走 HangupTransferBridgeFull → bridgeSendOutboundBYE
+	// 路径，这里 LoadAndDelete 取不到东西就 no-op，互不冲突。
+	CancelPendingTransferLeg(callID)
 	transferStarted.Delete(callID)
 	stopTransferRinging(callID)
 	stopNoAgentRetryLoop(callID)

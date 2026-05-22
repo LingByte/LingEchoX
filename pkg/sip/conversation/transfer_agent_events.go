@@ -23,6 +23,15 @@ var (
 	transferExcludeMu           sync.Mutex
 	transferExcludeByInbound    = map[string][]uint{}
 	transferLastACDRowByInbound sync.Map // inbound Call-ID -> uint (acd_pool_targets.id)
+
+	// transferPendingOutbound 维护 inbound Call-ID -> outbound Call-ID
+	// 的映射，仅在转接外呼 leg 已经发出 INVITE 但还没建立桥接（即坐席手机
+	// 还在响铃 / 没接听）的窗口期内有效。CleanupCallState（入局 BYE）查
+	// 这张表来决定要不要给那条还在响的坐席 leg 发 CANCEL。
+	transferPendingOutbound sync.Map // inbound -> outbound
+
+	transferLegCancelMu sync.Mutex
+	transferLegCancelFn func(outboundCallID string) error
 )
 
 // SetTransferLegAbandoner wires outbound.Manager.AbandonEarlyTransferInvite for ring-timeout cleanup.
@@ -30,6 +39,61 @@ func SetTransferLegAbandoner(fn func(callID string) bool) {
 	transferLegAbandonMu.Lock()
 	defer transferLegAbandonMu.Unlock()
 	transferLegAbandonFn = fn
+}
+
+// SetTransferLegCanceller wires outbound.Manager.SendCANCEL so that a
+// PSTN caller hangup mid-ring tears down the agent-side INVITE
+// instead of letting the agent's phone ring until carrier no-answer
+// timeout (60-180s). Wired in cmd/sip after Manager construction.
+func SetTransferLegCanceller(fn func(outboundCallID string) error) {
+	transferLegCancelMu.Lock()
+	defer transferLegCancelMu.Unlock()
+	transferLegCancelFn = fn
+}
+
+// CancelPendingTransferLeg cancels an in-flight transfer-agent
+// INVITE keyed by its inbound Call-ID. No-op when no transfer is
+// pending for this call (campaign legs, already-bridged transfers,
+// or never-transferred calls). Called from CleanupCallState on
+// inbound hangup.
+func CancelPendingTransferLeg(inboundCallID string) {
+	inboundCallID = strings.TrimSpace(inboundCallID)
+	if inboundCallID == "" {
+		return
+	}
+	v, ok := transferPendingOutbound.LoadAndDelete(inboundCallID)
+	if !ok || v == nil {
+		return
+	}
+	outID, _ := v.(string)
+	outID = strings.TrimSpace(outID)
+	if outID == "" {
+		return
+	}
+	transferLegCancelMu.Lock()
+	fn := transferLegCancelFn
+	transferLegCancelMu.Unlock()
+	if fn == nil {
+		return
+	}
+	cancelTransferInviteWatch(outID)
+	if err := fn(outID); err != nil {
+		lg := logger.Lg
+		if lg == nil {
+			lg = zap.NewNop()
+		}
+		lg.Warn("sip transfer: CANCEL pending agent leg failed",
+			zap.String("inbound_call_id", inboundCallID),
+			zap.String("outbound_call_id", outID),
+			zap.Error(err))
+		return
+	}
+	lg := logger.Lg
+	if lg != nil {
+		lg.Info("sip transfer: CANCEL sent for pending agent leg",
+			zap.String("inbound_call_id", inboundCallID),
+			zap.String("outbound_call_id", outID))
+	}
 }
 
 func abandonTransferLeg(callID string) bool {
@@ -225,10 +289,16 @@ func HandleTransferAgentDialEvent(evt outbound.DialEvent) {
 	}
 	switch evt.State {
 	case outbound.DialEventInvited:
+		// 记录 inbound→outbound 映射，让入局 BYE 在桥接建立前能 CANCEL
+		// 那条还在响铃的坐席 leg。Established / Failed 时清掉，避免给已
+		// 经接通（用 BYE 处理）或已失败（无需 CANCEL）的 leg 再发 CANCEL。
+		transferPendingOutbound.Store(inbound, evt.CallID)
 		scheduleTransferInviteWatch(inbound, evt.CallID)
 	case outbound.DialEventEstablished:
+		transferPendingOutbound.Delete(inbound)
 		cancelTransferInviteWatch(evt.CallID)
 	case outbound.DialEventFailed:
+		transferPendingOutbound.Delete(inbound)
 		cancelTransferInviteWatch(evt.CallID)
 		onTransferAgentLegFailed(inbound, evt)
 	default:

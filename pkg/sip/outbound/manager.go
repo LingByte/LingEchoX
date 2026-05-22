@@ -607,6 +607,8 @@ func (m *Manager) Dial(ctx context.Context, req DialRequest) (callID string, err
 		zap.String("dst_udp", addr.String()),
 		zap.String("from_user", fromUser),
 		zap.String("signaling_addr_cfg", strings.TrimSpace(req.Target.SignalingAddr)),
+		zap.String("pai", invite.GetHeader("P-Asserted-Identity")),
+		zap.String("privacy", invite.GetHeader("Privacy")),
 	)
 	if m.cfg.OnEvent != nil {
 		m.cfg.OnEvent(DialEvent{
@@ -654,6 +656,18 @@ func (m *Manager) AbandonEarlyTransferInvite(callID string) bool {
 	}
 	requestURI := strings.TrimSpace(req.Target.RequestURI)
 	m.mu.Unlock()
+
+	// Send CANCEL on the wire BEFORE local cleanup — otherwise the
+	// agent's phone keeps ringing until the carrier's own no-answer
+	// timer (60-180s). Cleanup tears down leg.peer / leg.legs, so
+	// once cleanupLeg returns we can't reach the remote anymore.
+	// Failure here is logged but not fatal: cleanup must still run
+	// or we leak per-call state forever.
+	if err := buildAndSendCANCEL(leg); err != nil {
+		logger.Warn("sip outbound CANCEL on abandon failed",
+			zap.String("call_id", callID),
+			zap.Error(err))
+	}
 
 	leg.cleanupLeg()
 

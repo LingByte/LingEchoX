@@ -412,6 +412,7 @@ func Start(cfg Config) (*Embedded, error) {
 		return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID, exclude)
 	})
 	conversation.SetTransferLegAbandoner(outMgr.AbandonEarlyTransferInvite)
+	conversation.SetTransferLegCanceller(outMgr.SendCANCEL)
 	if logger.Lg != nil {
 		logger.Lg.Info("sipapp: SIP persistence and campaign worker wired to application database pool")
 	}
