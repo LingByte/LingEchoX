@@ -29,24 +29,22 @@ import (
 	"go.uber.org/zap"
 )
 
-// EngineAttachMode picks which engine.Mode the OnACK path requests
-// from the registry. The legacy attacher dispatches by env.VoiceMode
-// internally regardless, so this constant is informational today; it
-// becomes load-bearing in phase 3 when native cascaded / realtime
-// engines diverge.
-//
-// Defaulting to ModeCascaded is the safe choice: if the registry
-// somehow only has ModeCascaded wired (e.g. a future feature flag
-// disables realtime registration), realtime tenants still resolve
-// through the cascaded slot and AttachVoicePipeline routes them
-// correctly via env.VoiceMode.
-const EngineAttachMode = engine.ModeCascaded
+// EngineAttachFallbackMode is the safe default mode used when
+// ResolveAttachMode cannot determine a mode (nil cs, tenant config
+// load error). The per-mode attacher registered under this mode will
+// emit its own config_error.wav fallback, so the call leg still ends
+// cleanly. Cascaded is the safer default because every supported
+// tenant has historically had pipeline credentials configured even
+// when realtime is the operational choice.
+const EngineAttachFallbackMode = engine.ModeCascaded
 
-// AttachVoiceViaEngine wires the call through engine.New + Attach
-// instead of calling AttachVoicePipeline directly. Behaviour-neutral
-// today (delegates to the same legacy code via the wired attacher);
-// the difference is purely architectural — it puts the on-ACK path
-// on the same seam future engines will use.
+// AttachVoiceViaEngine wires the call through engine.New + Attach.
+// PR-7: mode is resolved up-front (ResolveAttachMode) so the
+// per-mode attacher receives the right mode and registry metrics are
+// mode-honest. Behaviour stays equivalent to AttachVoicePipeline:
+// the resolver applies the same "pipeline mode + pipeline creds
+// unusable + realtime ready → realtime" auto-fallback the historical
+// dispatcher did.
 //
 // Errors:
 //
@@ -67,8 +65,12 @@ func AttachVoiceViaEngine(ctx context.Context, cs *sipSession.CallSession, lg *z
 		// can't silently break this path.
 		return fmt.Errorf("dialog engine attach: failed to wrap CallSession (call_id=%q)", cs.CallID)
 	}
+	mode := ResolveAttachMode(ctx, cs, lg)
+	if !mode.IsValid() {
+		mode = EngineAttachFallbackMode
+	}
 	cfg := engine.Config{
-		Mode:     EngineAttachMode,
+		Mode:     mode,
 		CallID:   port.CallID(),
 		TenantID: port.TenantID(),
 	}

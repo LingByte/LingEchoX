@@ -45,17 +45,23 @@ import (
 // double-set guard.
 var dialogEngineBridgeOnce sync.Once
 
-// WireDialogEngineBridge registers the legacy attach path under both
-// engine.ModeCascaded and engine.ModeRealtime. Safe to call multiple
-// times; subsequent calls are no-ops.
+// WireDialogEngineBridge registers per-mode legacy attachers
+// (AttachCascadedLegacy + AttachRealtimeLegacy) in the engine.Mode
+// registry. Safe to call multiple times; subsequent calls are no-ops.
 //
 // Returns the modes successfully wired (in registration order) and
 // any per-mode error encountered. An error on one mode does not abort
 // registration of the other.
+//
+// PR-7 split: cascaded and realtime now own DISTINCT attachers. The
+// registered mode is load-bearing — the cascaded attacher will not
+// silently fall back to realtime via env.VoiceMode anymore; the OnACK
+// caller must resolve mode up-front (ResolveAttachMode in
+// dialog_engine_attach.go). This makes metrics and logs mode-honest.
 func WireDialogEngineBridge() (wired []engine.Mode, errs []error) {
 	dialogEngineBridgeOnce.Do(func() {
-		legacy.SetAttacher(engine.ModeCascaded, legacyVoiceAttacher(engine.ModeCascaded))
-		legacy.SetAttacher(engine.ModeRealtime, legacyVoiceAttacher(engine.ModeRealtime))
+		legacy.SetAttacher(engine.ModeCascaded, perModeLegacyAttacher(engine.ModeCascaded, AttachCascadedLegacy))
+		legacy.SetAttacher(engine.ModeRealtime, perModeLegacyAttacher(engine.ModeRealtime, AttachRealtimeLegacy))
 		for _, m := range []engine.Mode{engine.ModeCascaded, engine.ModeRealtime} {
 			if err := legacy.Register(m); err != nil {
 				errs = append(errs, fmt.Errorf("dialog engine bridge: register %q: %w", string(m), err))
@@ -67,18 +73,20 @@ func WireDialogEngineBridge() (wired []engine.Mode, errs []error) {
 	return wired, errs
 }
 
-// legacyVoiceAttacher builds the Attacher closure for one mode. We
-// capture mode purely so the log line names the right slot; the body
-// is identical because AttachVoicePipeline internally dispatches on
-// env.VoiceMode (tenant-configured), not on cfg.Mode.
+// perModeLegacyAttacher builds the legacy.Attacher closure that
+// satisfies the engine seam for ONE mode by delegating to the matching
+// AttachCascadedLegacy / AttachRealtimeLegacy entry point.
 //
-// Long-term plan (phase 3+): split this into a real cascaded-only
-// attacher and a real realtime-only attacher, each calling the
-// respective inner function directly. Doing so now would require
-// either duplicating ResolveTenantVoiceEnv / TenantVoiceReady or
-// exporting attachVoiceInner / attachRealtimeVoiceInner — both bigger
-// changes than this 'wire the seam' PR wants.
-func legacyVoiceAttacher(mode engine.Mode) legacy.Attacher {
+// Responsibilities:
+//   - Extract *sipSession.CallSession via the LegacyHandle escape hatch.
+//   - Adapt engine.Logger -> *zap.Logger.
+//   - Log a mode-mismatch warning when cfg.Mode disagrees with the
+//     registered mode (should never happen post-PR-7 because
+//     ResolveAttachMode picks before engine.New; treat as a defensive
+//     observability hook).
+//   - Translate the *zap.Logger-returning attach signature into the
+//     (Detach, error) shape the legacy bridge expects.
+func perModeLegacyAttacher(mode engine.Mode, fn func(context.Context, *sipSession.CallSession, *zap.Logger) error) legacy.Attacher {
 	return func(ctx context.Context, cfg engine.Config, port engine.MediaPort, lg engine.Logger) (engine.Detach, error) {
 		h, ok := port.(legacy.LegacyHandle)
 		if !ok {
@@ -95,17 +103,24 @@ func legacyVoiceAttacher(mode engine.Mode) legacy.Attacher {
 				sessVal, string(mode))
 		}
 		voiceLog := bridgeZapLogger(lg).Named("sip-voice")
-		voiceLog.Debug("dialog engine bridge attach (legacy path)",
-			zap.String("call_id", cs.CallID),
-			zap.String("cfg_mode", string(cfg.Mode)),
-			zap.String("registered_mode", string(mode)),
-		)
-		// Legacy lifecycle: AttachVoicePipeline wires processors onto
-		// the MediaSession; teardown is driven by ms.GetContext().Done(),
+		if cfg.Mode != mode && cfg.Mode != "" {
+			voiceLog.Warn("dialog engine bridge: cfg.Mode does not match registered mode",
+				zap.String("call_id", cs.CallID),
+				zap.String("cfg_mode", string(cfg.Mode)),
+				zap.String("registered_mode", string(mode)),
+			)
+		} else {
+			voiceLog.Debug("dialog engine bridge attach (per-mode legacy)",
+				zap.String("call_id", cs.CallID),
+				zap.String("mode", string(mode)),
+			)
+		}
+		// Legacy lifecycle: attach functions wire processors onto the
+		// MediaSession; teardown is driven by ms.GetContext().Done(),
 		// not by an explicit Detach handle. Returning nil from the
 		// Detach slot is part of the bridge contract documented in
 		// pkg/dialog/legacy/attacher.go.
-		if err := AttachVoicePipeline(ctx, cs, voiceLog); err != nil {
+		if err := fn(ctx, cs, voiceLog); err != nil {
 			return nil, err
 		}
 		return nil, nil

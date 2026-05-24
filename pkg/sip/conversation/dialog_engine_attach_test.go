@@ -64,8 +64,8 @@ func TestAttachVoiceViaEngine_HappyPathDelegatesToAttacher(t *testing.T) {
 		}
 		return nil, nil
 	}
-	legacy.SetAttacher(EngineAttachMode, att)
-	if err := legacy.Register(EngineAttachMode); err != nil {
+	legacy.SetAttacher(engine.ModeCascaded, att)
+	if err := legacy.Register(engine.ModeCascaded); err != nil {
 		t.Fatalf("legacy.Register: %v", err)
 	}
 
@@ -77,8 +77,8 @@ func TestAttachVoiceViaEngine_HappyPathDelegatesToAttacher(t *testing.T) {
 	if rec.invoked != 1 {
 		t.Errorf("attacher invoked %d times, want 1", rec.invoked)
 	}
-	if rec.cfg.Mode != EngineAttachMode {
-		t.Errorf("cfg.Mode = %q, want %q", rec.cfg.Mode, EngineAttachMode)
+	if rec.cfg.Mode != engine.ModeCascaded {
+		t.Errorf("cfg.Mode = %q, want %q", rec.cfg.Mode, engine.ModeCascaded)
 	}
 	if rec.callID != "c-happy" {
 		t.Errorf("port.CallID = %q, want %q", rec.callID, "c-happy")
@@ -104,8 +104,8 @@ func TestAttachVoiceViaEngine_AttacherErrorPropagates(t *testing.T) {
 	att := func(context.Context, engine.Config, engine.MediaPort, engine.Logger) (engine.Detach, error) {
 		return nil, wantErr
 	}
-	legacy.SetAttacher(EngineAttachMode, att)
-	if err := legacy.Register(EngineAttachMode); err != nil {
+	legacy.SetAttacher(engine.ModeCascaded, att)
+	if err := legacy.Register(engine.ModeCascaded); err != nil {
 		t.Fatalf("legacy.Register: %v", err)
 	}
 
@@ -116,11 +116,11 @@ func TestAttachVoiceViaEngine_AttacherErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestEngineAttachMode_IsRegisterableMode is a redundant guard:
-// EngineAttachMode is a constant and trivially valid, but if a future
-// change picks an invalid mode, this test catches it loudly.
-func TestEngineAttachMode_IsRegisterableMode(t *testing.T) {
-	if !EngineAttachMode.IsValid() {
-		t.Fatalf("EngineAttachMode = %q is not a valid engine.Mode", EngineAttachMode)
+// TestEngineAttachFallbackMode_IsRegisterableMode is a redundant
+// guard: EngineAttachFallbackMode is a constant and trivially valid,
+// but if a future change picks an invalid mode, this test catches it.
+func TestEngineAttachFallbackMode_IsRegisterableMode(t *testing.T) {
+	if !EngineAttachFallbackMode.IsValid() {
+		t.Fatalf("EngineAttachFallbackMode = %q is not a valid engine.Mode", EngineAttachFallbackMode)
 	}
 }

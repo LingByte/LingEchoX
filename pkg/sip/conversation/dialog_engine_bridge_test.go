@@ -8,8 +8,16 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
 	"github.com/LinByte/VoiceServer/pkg/dialog/legacy"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"go.uber.org/zap"
 )
+
+// noopLegacyAttach is the test-only attach function injected into
+// perModeLegacyAttacher to verify the closure's guard rails without
+// touching real AttachVoicePipeline code.
+func noopLegacyAttach(context.Context, *sipSession.CallSession, *zap.Logger) error {
+	return nil
+}
 
 // TestWireDialogEngineBridge_RegistersBothModes verifies that the
 // wire helper installs both cascaded and realtime in the engine
@@ -111,16 +119,16 @@ func TestZapEngineLogger_AdaptsFields(t *testing.T) {
 	}
 }
 
-func TestLegacyVoiceAttacher_RejectsMissingHandle(t *testing.T) {
-	att := legacyVoiceAttacher(engine.ModeCascaded)
+func TestPerModeLegacyAttacher_RejectsMissingHandle(t *testing.T) {
+	att := perModeLegacyAttacher(engine.ModeCascaded, noopLegacyAttach)
 	// Use a port that does NOT implement legacy.LegacyHandle.
 	if _, err := att(context.Background(), engine.Config{CallID: "c1"}, bareMediaPort{}, engine.NopLogger{}); err == nil {
 		t.Fatal("expected error when MediaPort lacks LegacyHandle")
 	}
 }
 
-func TestLegacyVoiceAttacher_RejectsWrongSessionType(t *testing.T) {
-	att := legacyVoiceAttacher(engine.ModeRealtime)
+func TestPerModeLegacyAttacher_RejectsWrongSessionType(t *testing.T) {
+	att := perModeLegacyAttacher(engine.ModeRealtime, noopLegacyAttach)
 	port := &handlePort{session: "not-a-call-session"}
 	_, err := att(context.Background(), engine.Config{CallID: "c2"}, port, engine.NopLogger{})
 	if err == nil {
@@ -128,12 +136,62 @@ func TestLegacyVoiceAttacher_RejectsWrongSessionType(t *testing.T) {
 	}
 }
 
-func TestLegacyVoiceAttacher_RejectsNilSession(t *testing.T) {
-	att := legacyVoiceAttacher(engine.ModeCascaded)
+func TestPerModeLegacyAttacher_RejectsNilSession(t *testing.T) {
+	att := perModeLegacyAttacher(engine.ModeCascaded, noopLegacyAttach)
 	port := &handlePort{session: nil}
 	_, err := att(context.Background(), engine.Config{CallID: "c3"}, port, engine.NopLogger{})
 	if !errors.Is(err, legacy.ErrNoLegacySession) {
 		t.Errorf("err = %v, want ErrNoLegacySession", err)
+	}
+}
+
+func TestPerModeLegacyAttacher_DelegatesOnHappyPath(t *testing.T) {
+	var got struct {
+		called int
+		cs     *sipSession.CallSession
+	}
+	att := perModeLegacyAttacher(engine.ModeCascaded, func(_ context.Context, cs *sipSession.CallSession, _ *zap.Logger) error {
+		got.called++
+		got.cs = cs
+		return nil
+	})
+	cs := &sipSession.CallSession{CallID: "happy"}
+	port := &handlePort{session: cs}
+	detach, err := att(context.Background(), engine.Config{Mode: engine.ModeCascaded, CallID: "happy"}, port, engine.NopLogger{})
+	if err != nil {
+		t.Fatalf("attacher: %v", err)
+	}
+	if detach != nil {
+		t.Errorf("expected nil Detach (legacy lifecycle owned by MediaSession), got %T", detach)
+	}
+	if got.called != 1 || got.cs != cs {
+		t.Errorf("delegate not invoked correctly: called=%d cs=%p (want %p)", got.called, got.cs, cs)
+	}
+}
+
+func TestPerModeLegacyAttacher_PropagatesError(t *testing.T) {
+	wantErr := errors.New("underlying failed")
+	att := perModeLegacyAttacher(engine.ModeRealtime, func(context.Context, *sipSession.CallSession, *zap.Logger) error {
+		return wantErr
+	})
+	cs := &sipSession.CallSession{CallID: "err"}
+	port := &handlePort{session: cs}
+	_, err := att(context.Background(), engine.Config{Mode: engine.ModeRealtime}, port, engine.NopLogger{})
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want %v", err, wantErr)
+	}
+}
+
+func TestPerModeLegacyAttacher_LogsModeMismatch(t *testing.T) {
+	// Smoke test: cfg.Mode != registered mode should not return an
+	// error (it's a defensive warn only). We use a NopLogger to avoid
+	// the log assertion machinery; not panicking + propagating to
+	// delegate is enough.
+	att := perModeLegacyAttacher(engine.ModeCascaded, noopLegacyAttach)
+	cs := &sipSession.CallSession{CallID: "mismatch"}
+	port := &handlePort{session: cs}
+	if _, err := att(context.Background(), engine.Config{Mode: engine.ModeRealtime}, port, engine.NopLogger{}); err != nil {
+		t.Errorf("mode mismatch must warn-not-fail; got err=%v", err)
 	}
 }
 
