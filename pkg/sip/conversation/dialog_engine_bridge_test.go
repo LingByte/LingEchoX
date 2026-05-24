@@ -51,6 +51,43 @@ func TestWireDialogEngineBridge_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestBridgeZapLogger_UnwrapsAndFallsBack(t *testing.T) {
+	// Path 1: passing a *zapEngineLogger unwraps to the original.
+	z, _ := zap.NewDevelopment()
+	wrapped := NewZapEngineLogger(z)
+	if got := bridgeZapLogger(wrapped); got != z {
+		t.Errorf("bridgeZapLogger(*zapEngineLogger) = %p, want %p (unwrap)", got, z)
+	}
+
+	// Path 2: passing engine.NopLogger falls back to a non-nil logger.
+	// (Either logger.Lg if initialised, or a fresh dev logger.)
+	if got := bridgeZapLogger(engine.NopLogger{}); got == nil {
+		t.Error("bridgeZapLogger(NopLogger) returned nil; want fallback")
+	}
+
+	// Path 3: passing nil falls back too.
+	if got := bridgeZapLogger(nil); got == nil {
+		t.Error("bridgeZapLogger(nil) returned nil; want fallback")
+	}
+}
+
+func TestZapEngineLogger_WithEmptyFieldsShortCircuits(t *testing.T) {
+	z, _ := zap.NewDevelopment()
+	lg := NewZapEngineLogger(z).(*zapEngineLogger)
+	if got := lg.With(); got != lg {
+		t.Error("With() with no fields should return receiver unchanged")
+	}
+}
+
+func TestZapFields_EmptyInputReturnsNil(t *testing.T) {
+	if got := zapFields(nil); got != nil {
+		t.Errorf("zapFields(nil) = %v, want nil", got)
+	}
+	if got := zapFields([]engine.Field{}); got != nil {
+		t.Errorf("zapFields([]) = %v, want nil", got)
+	}
+}
+
 func TestZapEngineLogger_AdaptsFields(t *testing.T) {
 	// Smoke test — we don't assert log output (no observer), just that
 	// every method runs without panicking and With chains correctly.

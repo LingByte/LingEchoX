@@ -170,7 +170,12 @@ func Start(cfg Config) (*Embedded, error) {
 			if logger.Lg != nil {
 				voiceLog = logger.Lg.Named("sip-voice")
 			}
-			return conversation.AttachVoicePipeline(ctx, cs, voiceLog)
+			// Phase 1 PR-6: route through engine.New(...).Attach.
+			// Behaviour-neutral — the registered cascaded factory
+			// delegates to AttachVoicePipeline. The seam exists so
+			// phase-3 native engines can be slotted in by registering
+			// a different factory; no caller change required.
+			return conversation.AttachVoiceViaEngine(ctx, cs, voiceLog)
 		},
 		OnRegisterSession: func(callID string, cs *sipSession.CallSession) {
 			if sipServerPtr != nil {
