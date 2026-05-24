@@ -30,7 +30,8 @@
 | PR-7 | `c1a5527` | Per-mode attachers | `AttachCascadedLegacy` + `AttachRealtimeLegacy` replace the single shared closure. `ResolveAttachMode` decides mode up-front. `cfg.Mode` becomes load-bearing. `perModeLegacyAttacher` factory in bridge. |
 | PR-8d | `336caec` | Retire AttachVoicePipeline body | `voicedialog/hub.go` switched from `AttachVoicePipeline` to `AttachRealtimeLegacy`. `AttachVoicePipeline` body shrunk from ~70 LOC to a 5-line wrapper that delegates to `ResolveAttachMode` + per-mode helpers. Single source of truth for attach logic now lives in `dialog_engine_legacy.go`. |
 | PR-8b | `70160c3` | Mode-tagged metrics | New `pkg/sip/metrics/voice_attach.go`: `sip_voice_attach_total{mode,result}` + `sip_voice_attach_mode_fallback_total{from,to}`. Wired into `AttachVoiceViaEngine` (per-call result) and `ResolveAttachMode` (auto-fallback). PR-7's mode-honesty is now observable. Zero allocation on hot path. |
-| PR-8a | _(this PR)_ | Extract tenant voice config | New `pkg/dialog/tenantcfg` package owns `VoiceEnv`, `JSONLoader`, `Resolve`, `VoiceReady`/`PipelineUsable`/`RealtimeReady`, `VoiceEnvFromJSON`. `pkg/sip/conversation` becomes consumer-only via type aliases (`type VoiceEnv = tenantcfg.VoiceEnv`) — every existing call site keeps compiling. `voice_tenant_loader.go` shrinks from 526 LOC to a ~180 LOC SIP-side shim (loader-forwarding + playback helpers that depend on `*CallSession`). 96.2% coverage on the new package. Unblocks PR-8c (native engines can now read tenant config without an import cycle through `pkg/sip`). |
+| PR-8a | `7901e00` | Extract tenant voice config | New `pkg/dialog/tenantcfg` package owns `VoiceEnv`, `JSONLoader`, `Resolve`, `VoiceReady`/`PipelineUsable`/`RealtimeReady`, `VoiceEnvFromJSON`. `pkg/sip/conversation` becomes consumer-only via type aliases (`type VoiceEnv = tenantcfg.VoiceEnv`) — every existing call site keeps compiling. `voice_tenant_loader.go` shrinks from 526 LOC to a ~180 LOC SIP-side shim (loader-forwarding + playback helpers that depend on `*CallSession`). 96.2% coverage on the new package. Unblocks PR-8c (native engines can now read tenant config without an import cycle through `pkg/sip`). |
+| PR-8c | _(this PR)_ | Native cascaded engine sketch | New `pkg/dialog/cascaded` package: full `engine.Engine` implementation with ASR→LLM→TTS stage pipeline. Stages are passthrough stubs that prove the seam end-to-end. Engine lifecycle is production-shaped: single-shot Attach, idempotent Detach, ctx-cancel teardown, deterministic input/output bridges between `MediaPort` and `pipeline.Pipeline`. Does NOT auto-register — `RegisterForTesting()` is opt-in so the legacy bridge keeps owning production traffic. 88.2% coverage, race-clean. |
 
 ---
 
@@ -111,9 +112,9 @@
 
 3. ~~**No mode-tagged metrics**~~. **Resolved in PR-8b.** `sip_voice_attach_total{mode,result}` + `sip_voice_attach_mode_fallback_total{from,to}` are emitted from `AttachVoiceViaEngine` and `ResolveAttachMode` respectively.
 
-4. **No native engine yet**. Every engine.Mode still ultimately calls `attachVoiceInner` via the legacy bridge. Phase 3 (PR-8c onward) starts replacing one mode with a native `engine.Engine` implementation.
+4. ~~**No native engine yet**~~. **Sketched in PR-8c.** `pkg/dialog/cascaded.Engine` implements `engine.Engine` natively over `pipeline.Pipeline`. Stages are passthrough stubs today; real ASR/LLM/TTS providers swap in via the `Stage` interface in follow-up PRs. Not registered in production — legacy bridge still owns `ModeCascaded` until each stage is hardened.
 
-5. **MediaPort streaming methods are stubs on `CallSessionPort`**. `InputPCM` returns a closed channel; `SendOutputPCM` returns `ErrLegacyBridgeOnly`. Real streaming bridges the underlying `media.MediaSession` ↔ `engine.PCMFrame` channels — phase 3 work.
+5. **MediaPort streaming methods are stubs on `CallSessionPort`**. `InputPCM` returns a closed channel; `SendOutputPCM` returns `ErrLegacyBridgeOnly`. The cascaded engine sketch tests against a `fakeMediaPort`; real streaming bridging `media.MediaSession` ↔ `engine.PCMFrame` is the next blocker before the native engine can serve real calls.
 
 ---
 
@@ -125,11 +126,7 @@ Choose by priority; they're independent:
 
 ### ~~PR-8b~~ — **Done.** Mode-tagged metrics wired via `pkg/sip/metrics/voice_attach.go`.
 
-### PR-8c — Native cascaded engine sketch (~400 LOC)
-- Create `pkg/dialog/cascaded` package with a minimal `engine.Engine` implementation that uses `pipeline.Pipeline` from PR-2.
-- Initially only wires ASR (other stages no-op), demonstrating the seam without touching production traffic. Gated behind a build tag or registry override.
-- **Unblocks**: full phase 3. After this lands, follow-up PRs port LLM + TTS stages and the legacy bridge can be retired for cascaded.
-- **Cost**: medium. Requires a real `MediaPort` streaming implementation on `CallSessionPort` (or a sibling adapter).
+### ~~PR-8c~~ — **Done.** `pkg/dialog/cascaded` ships a full `engine.Engine` skeleton with passthrough stages, `RegisterForTesting()` opt-in, and an in-process `fakeMediaPort` test rig. Real provider stages are the next follow-up.
 
 ### ~~PR-8d~~ — **Done.** Migrated `voicedialog/hub.go` to `AttachRealtimeLegacy`; `AttachVoicePipeline` thinned to a 5-line wrapper.
 
