@@ -413,6 +413,30 @@ func Start(cfg Config) (*Embedded, error) {
 	})
 	conversation.SetTransferLegAbandoner(outMgr.AbandonEarlyTransferInvite)
 	conversation.SetTransferLegCanceller(outMgr.SendCANCEL)
+	// Phase 1 PR-4: register the legacy attach path under the new
+	// engine.Mode registry so future call paths can target
+	// engine.New(...).Attach. Production OnACK still goes through
+	// AttachVoicePipeline directly — the registration is observable
+	// (engine.RegisteredModes()) but not yet on the hot path.
+	if wired, errs := conversation.WireDialogEngineBridge(); logger.Lg != nil {
+		modes := make([]string, 0, len(wired))
+		for _, m := range wired {
+			modes = append(modes, string(m))
+		}
+		if len(errs) > 0 {
+			logger.Lg.Warn("sipapp: dialog engine bridge wired with errors",
+				zap.Strings("wired_modes", modes),
+				zap.Int("error_count", len(errs)),
+			)
+			for _, e := range errs {
+				logger.Lg.Warn("sipapp: dialog engine bridge error", zap.Error(e))
+			}
+		} else {
+			logger.Lg.Info("sipapp: dialog engine bridge wired (registry only, hot path unchanged)",
+				zap.Strings("wired_modes", modes),
+			)
+		}
+	}
 	if logger.Lg != nil {
 		logger.Lg.Info("sipapp: SIP persistence and campaign worker wired to application database pool")
 	}
