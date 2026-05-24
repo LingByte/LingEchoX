@@ -90,21 +90,26 @@ func AttachInbound(_ context.Context, cs *sipSession.CallSession, meta InboundMe
 // Call from SIP ACK handling (pkg/sip/server).
 //
 // Realtime-mode tenants bypass the gateway entirely and go through the
-// embedded SIP voice path (`conversation.AttachVoicePipeline`), which
-// dispatches to `attachRealtimeVoiceInner`. The voicedialog gateway WS
-// protocol assumes the client drives turns via tts.speak — realtime
-// providers (Qwen-Omni, GPT-4o realtime) generate replies internally,
-// so there is no per-segment surface for the gateway to forward. Until
-// the gateway protocol is extended to passthrough omni events, the
-// embedded path is the right home for realtime calls.
+// embedded SIP voice path (`conversation.AttachRealtimeLegacy`, which
+// drives `attachRealtimeVoiceInner` after credential validation). The
+// voicedialog gateway WS protocol assumes the client drives turns via
+// tts.speak — realtime providers (Qwen-Omni, GPT-4o realtime) generate
+// replies internally, so there is no per-segment surface for the
+// gateway to forward. Until the gateway protocol is extended to
+// passthrough omni events, the embedded path is the right home for
+// realtime calls.
+//
+// PR-8d: switched from the legacy `AttachVoicePipeline` dispatcher to
+// the per-mode `AttachRealtimeLegacy` helper introduced in PR-7. We
+// already know the mode here (realtime detected upstream), so calling
+// the typed helper skips one round of mode-resolution inside
+// AttachVoicePipeline. Behaviour-neutral.
 func AttachInboundVoiceDialog(ctx context.Context, cs *sipSession.CallSession, from, to, remote, customVoiceWSURL string) error {
 	if cs == nil {
 		return nil
 	}
 	// Tenant voice-mode dispatch: when the tenant is on realtime mode,
-	// skip the gateway and run the embedded pipeline. This is the same
-	// `AttachVoicePipeline` outbound calls already use, which has its
-	// own `voiceMode == "realtime"` branch and runs Qwen-Omni etc.
+	// skip the gateway and run the embedded realtime pipeline.
 	if voiceEnv, loaded, err := conversation.ResolveTenantVoiceEnv(ctx, cs); err == nil && loaded {
 		realtime := strings.EqualFold(voiceEnv.VoiceMode, "realtime") ||
 			(voiceEnv.VoiceMode == "" && conversation.TenantRealtimeReady(voiceEnv))
@@ -113,8 +118,7 @@ func AttachInboundVoiceDialog(ctx context.Context, cs *sipSession.CallSession, f
 				zap.String(KeyCallID, cs.CallID),
 				zap.String("realtime_provider", voiceEnv.RealtimeProvider),
 			)
-			lg := logger.Lg
-			return conversation.AttachVoicePipeline(ctx, cs, lg)
+			return conversation.AttachRealtimeLegacy(ctx, cs, logger.Lg)
 		}
 	}
 	meta := InboundMeta{

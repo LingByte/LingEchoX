@@ -205,3 +205,35 @@ func TestAttachRealtimeLegacy_RealtimeCredsMissing(t *testing.T) {
 	cs := newTenantCS("c-rt-no-creds", 12)
 	_ = AttachRealtimeLegacy(context.Background(), cs, nil)
 }
+
+// --- AttachVoicePipeline (thin compat wrapper, PR-8d) ----------------
+
+func TestAttachVoicePipeline_NilCallSession(t *testing.T) {
+	if err := AttachVoicePipeline(context.Background(), nil, nil); err != nil {
+		t.Errorf("nil cs should be no-op, got err=%v", err)
+	}
+}
+
+// TestAttachVoicePipeline_DelegatesToPerModeAttacher asserts the wrapper
+// picks the right per-mode helper. We can't observe the dispatch
+// directly (the helpers don't expose a hook), but ResolveAttachMode is
+// 100% covered independently, and the helpers' early-return error paths
+// are covered above. The strongest signal here is "no panic, no goroutine
+// leak across both modes" — same shape as the per-mode tests.
+func TestAttachVoicePipeline_DelegatesToPerModeAttacher(t *testing.T) {
+	t.Run("cascaded path (no creds → config_error)", func(t *testing.T) {
+		installFakeVoiceLoader(t, fakeVoiceEnvLoader(nil, nil, nil, nil, "pipeline", true))
+		cs := newTenantCS("c-pl", 21)
+		_ = AttachVoicePipeline(context.Background(), cs, nil)
+	})
+	t.Run("realtime path (no creds → config_error)", func(t *testing.T) {
+		installFakeVoiceLoader(t, fakeVoiceEnvLoader(nil, nil, nil, nil, "realtime", true))
+		cs := newTenantCS("c-rt", 22)
+		_ = AttachVoicePipeline(context.Background(), cs, nil)
+	})
+	t.Run("no tenant → config_error", func(t *testing.T) {
+		installFakeVoiceLoader(t, fakeVoiceEnvLoader(nil, nil, nil, nil, "", false))
+		cs := &sipSession.CallSession{CallID: "no-tid"}
+		_ = AttachVoicePipeline(context.Background(), cs, nil)
+	})
+}

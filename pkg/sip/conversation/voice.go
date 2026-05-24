@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LinByte/VoiceServer/pkg/config"
+	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
 	"github.com/LinByte/VoiceServer/pkg/llm"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/media"
@@ -241,75 +242,33 @@ func (e VoiceEnv) readyForVoice() bool {
 		e.TTSAppID != "" && e.TTSSecretID != "" && e.TTSSecretKey != ""
 }
 
-// AttachVoicePipeline registers a MediaSession processor that feeds decoded PCM into ASR,
-// then on final transcripts runs the LLM and streams TTS back to the RTP output.
-// Call once per call from the SIP ACK path before MediaSession.Serve() starts (before StartOnACK).
+// AttachVoicePipeline is the historical voice-attach entry point.
+//
+// Retained as a thin wrapper for backward compatibility: it picks the
+// right mode via ResolveAttachMode and delegates to the per-mode
+// helpers (AttachCascadedLegacy / AttachRealtimeLegacy) introduced in
+// PR-7. Pre-PR-8d, this function inlined env loading + validation +
+// auto-fallback; that logic now lives in the per-mode helpers and is
+// the single source of truth.
+//
+// New code should NOT call AttachVoicePipeline directly. Use:
+//   - AttachVoiceViaEngine for the OnACK seam (goes through
+//     engine.New + the registered per-mode attacher).
+//   - AttachCascadedLegacy / AttachRealtimeLegacy when the mode is
+//     known up-front (e.g. voicedialog hub realtime branch).
+//
+// This wrapper triggers two tenant env loads (ResolveAttachMode + the
+// per-mode helper); acceptable because the OnACK path already pays
+// the same cost since PR-7 and PR-8a will dedupe via engine.Config.
 func AttachVoicePipeline(ctx context.Context, cs *sipSession.CallSession, lg *zap.Logger) error {
 	if cs == nil {
 		return nil
 	}
-	if lg == nil {
-		if logger.Lg != nil {
-			lg = logger.Lg
-		} else {
-			lg, _ = zap.NewDevelopment()
-		}
+	lg = ensureVoiceLogger(lg)
+	if ResolveAttachMode(ctx, cs, lg) == engine.ModeRealtime {
+		return AttachRealtimeLegacy(ctx, cs, lg)
 	}
-	tid := cs.TenantID()
-	if tid == 0 {
-		lg.Info("sip voice pipeline skipped (no tenant_id on call; play config_error)",
-			zap.String("call_id", cs.CallID))
-		return attachTenantConfigErrorPlayback(cs, lg)
-	}
-	env, loaded, err := ResolveTenantVoiceEnv(ctx, cs)
-	if err != nil {
-		lg.Warn("sip voice tenant env load error", zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid), zap.Error(err))
-		return attachTenantConfigErrorPlayback(cs, lg)
-	}
-	if !loaded {
-		lg.Info("sip voice tenant row missing or loader not ok", zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid))
-		return attachTenantConfigErrorPlayback(cs, lg)
-	}
-	// Last-mile mode normalization: if voice_mode persisted as "pipeline"
-	// (column default after AutoMigrate added the column for legacy rows)
-	// but pipeline credentials are unusable AND realtime credentials are
-	// valid, prefer realtime instead of bouncing to config_error.wav. The
-	// operator clearly filled in realtime — honoring that intent is much
-	// better UX than failing on a stale schema-default value.
-	if strings.EqualFold(env.VoiceMode, "pipeline") && !pipelineCredsUsable(env) && TenantRealtimeReady(env) {
-		lg.Warn("sip voice: pipeline credentials missing but realtime config present — auto-selecting realtime mode (please save tenant settings to persist voice_mode=realtime)",
-			zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid),
-			zap.String("realtime_provider", env.RealtimeProvider),
-		)
-		env.VoiceMode = "realtime"
-	}
-	if !TenantVoiceReady(env) {
-		// Per-mode diagnostic: report the right credential set so the
-		// operator doesn't have to grep "ASR/TTS/LLM" when they wired
-		// up realtime mode. The voice_mode field is included on every
-		// path so the runtime mode is obvious in logs.
-		if strings.EqualFold(env.VoiceMode, "realtime") {
-			lg.Info("sip voice tenant realtime config incomplete (missing apiKey / provider in realtime_config JSON)",
-				zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid),
-				zap.String("voice_mode", env.VoiceMode),
-				zap.String("realtime_provider", env.RealtimeProvider),
-				zap.Bool("realtime_config_present", len(env.RealtimeConfigRaw) > 0),
-			)
-		} else {
-			lg.Info("sip voice tenant pipeline config incomplete or unsupported ASR/TTS provider",
-				zap.String("call_id", cs.CallID), zap.Uint("tenant_id", tid),
-				zap.String("voice_mode", env.VoiceMode),
-				zap.String("asr_provider", env.ASRProvider),
-				zap.String("tts_provider", env.TTSProvider),
-				zap.String("llm_provider", env.LLMProvider),
-			)
-		}
-		return attachTenantConfigErrorPlayback(cs, lg)
-	}
-
-	return cs.AttachVoiceConversation(func() error {
-		return attachVoiceInner(ctx, cs, env, lg)
-	})
+	return AttachCascadedLegacy(ctx, cs, lg)
 }
 
 func sipHangupPhrasesFromEnv() []string {

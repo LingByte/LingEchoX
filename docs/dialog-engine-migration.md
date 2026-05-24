@@ -28,6 +28,7 @@
 | PR-5 | (merged with PR-4) | — | (folded into PR-4) |
 | PR-6 | `eebb632` | OnACK seam flip | `CallSessionPort` (implements `engine.MediaPort` + `legacy.LegacyHandle`). `AttachVoiceViaEngine` helper. **OnACK now flows through `engine.New(cfg).Attach`.** Behaviour-neutral. |
 | PR-7 | `c1a5527` | Per-mode attachers | `AttachCascadedLegacy` + `AttachRealtimeLegacy` replace the single shared closure. `ResolveAttachMode` decides mode up-front. `cfg.Mode` becomes load-bearing. `perModeLegacyAttacher` factory in bridge. |
+| PR-8d | _(this PR)_ | Retire AttachVoicePipeline body | `voicedialog/hub.go` switched from `AttachVoicePipeline` to `AttachRealtimeLegacy`. `AttachVoicePipeline` body shrunk from ~70 LOC to a 5-line wrapper that delegates to `ResolveAttachMode` + per-mode helpers. Single source of truth for attach logic now lives in `dialog_engine_legacy.go`. |
 
 ---
 
@@ -104,7 +105,7 @@
 
 1. **Double env load per call**. `ResolveAttachMode` loads tenant env to pick mode, then `AttachCascadedLegacy` / `AttachRealtimeLegacy` reload it. Each load is one DB hit (~10ms behind the loader cache, if any). Will be deduped in PR-8a when `VoiceEnv` moves into `engine.Config`.
 
-2. **`AttachVoicePipeline` still alive in `voice.go`**. It's the entry point for non-OnACK callers (`pkg/sip/voicedialog/hub.go`). Will be retired (or thinned to a wrapper around the per-mode helpers) once that caller is migrated.
+2. ~~**`AttachVoicePipeline` still alive in `voice.go`**~~. **Resolved in PR-8d.** `voicedialog/hub.go` migrated to `AttachRealtimeLegacy`; `AttachVoicePipeline` is now a 5-line compatibility wrapper that delegates to the per-mode helpers.
 
 3. **No mode-tagged metrics**. The PR-7 mode-honesty work isn't yet observable in dashboards. PR-8b would close this loop.
 
@@ -139,10 +140,7 @@ Choose by priority; they're independent:
 - **Unblocks**: full phase 3. After this lands, follow-up PRs port LLM + TTS stages and the legacy bridge can be retired for cascaded.
 - **Cost**: medium. Requires a real `MediaPort` streaming implementation on `CallSessionPort` (or a sibling adapter).
 
-### PR-8d — Migrate `voicedialog/hub.go` to `AttachVoiceViaEngine`
-- The only remaining direct caller of `AttachVoicePipeline`.
-- After this PR, `AttachVoicePipeline` becomes private (`attachVoicePipelineLegacy`) or is deleted entirely.
-- **Cost**: tiny (~30 LOC). Worth doing before PR-8a so the env extraction has fewer call sites.
+### ~~PR-8d~~ — **Done.** Migrated `voicedialog/hub.go` to `AttachRealtimeLegacy`; `AttachVoicePipeline` thinned to a 5-line wrapper.
 
 ---
 
