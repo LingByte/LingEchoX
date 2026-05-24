@@ -111,3 +111,18 @@ type Field struct {
 
 // F is the constructor used everywhere in this package.
 func F(key string, value any) Field { return Field{Key: key, Value: value} }
+
+// NopLogger is a Logger that drops every message. Useful as a safe
+// default in tests and for engines that haven't been wired with a
+// real logger yet. Returns itself from With so chained calls are
+// also no-op.
+type NopLogger struct{}
+
+func (NopLogger) Debug(string, ...Field) {}
+func (NopLogger) Info(string, ...Field)  {}
+func (NopLogger) Warn(string, ...Field)  {}
+func (NopLogger) Error(string, ...Field) {}
+func (NopLogger) With(...Field) Logger   { return NopLogger{} }
+
+// Compile-time assertion that NopLogger implements Logger.
+var _ Logger = NopLogger{}

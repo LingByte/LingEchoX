@@ -7,6 +7,7 @@ package provider
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/LinByte/VoiceServer/pkg/dialog/provider/asr"
@@ -59,7 +60,7 @@ func (r *Registry[T]) Get(name string) (T, error) {
 	return p, nil
 }
 
-// Names returns the sorted set of registered names. Useful for
+// Names returns the registered names in sorted order. Useful for
 // diagnostics / admin listings.
 func (r *Registry[T]) Names() []string {
 	r.mu.RLock()
@@ -68,6 +69,7 @@ func (r *Registry[T]) Names() []string {
 	for n := range r.providers {
 		out = append(out, n)
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -78,8 +80,8 @@ var ErrNotRegistered = errors.New("dialog/provider: not registered")
 // Global registries — one per provider kind. Vendor packages call
 // the appropriate Register at init().
 var (
-	ASRRegistry       = &Registry[asr.Provider]{}
-	TTSRegistry       = &Registry[tts.Provider]{}
-	LLMRegistry       = &Registry[llm.Provider]{}
+	ASRRegistry        = &Registry[asr.Provider]{}
+	TTSRegistry        = &Registry[tts.Provider]{}
+	LLMRegistry        = &Registry[llm.Provider]{}
 	MultimodalRegistry = &Registry[multimodal.Provider]{}
 )
