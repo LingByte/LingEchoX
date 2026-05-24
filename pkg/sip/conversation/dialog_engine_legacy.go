@@ -28,6 +28,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
 	"github.com/LinByte/VoiceServer/pkg/logger"
+	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"go.uber.org/zap"
 )
@@ -81,13 +82,13 @@ func loadVoiceEnvOrConfigError(ctx context.Context, cs *sipSession.CallSession, 
 // "last-mile mode normalisation" so the on-ACK seam preserves the
 // auto-fallback contract:
 //
-//   tenant row missing            → ModeCascaded (caller's per-mode
-//                                   attacher will hit config_error.wav)
-//   env.VoiceMode == "realtime"   → ModeRealtime
-//   env.VoiceMode == "pipeline" + pipeline creds unusable
-//                                 + realtime ready
-//                                 → ModeRealtime (auto-fallback)
-//   otherwise                     → ModeCascaded
+//	tenant row missing            → ModeCascaded (caller's per-mode
+//	                                attacher will hit config_error.wav)
+//	env.VoiceMode == "realtime"   → ModeRealtime
+//	env.VoiceMode == "pipeline" + pipeline creds unusable
+//	                              + realtime ready
+//	                              → ModeRealtime (auto-fallback)
+//	otherwise                     → ModeCascaded
 //
 // The lg argument is optional; nil falls back to logger.Lg.
 //
@@ -114,6 +115,7 @@ func ResolveAttachMode(ctx context.Context, cs *sipSession.CallSession, lg *zap.
 			zap.String("call_id", cs.CallID),
 			zap.Uint("tenant_id", cs.TenantID()),
 		)
+		sipMetrics.VoiceAttachModeFallback(sipMetrics.VoiceAttachModeCascaded, sipMetrics.VoiceAttachModeRealtime)
 		return engine.ModeRealtime
 	}
 	return engine.ModeCascaded

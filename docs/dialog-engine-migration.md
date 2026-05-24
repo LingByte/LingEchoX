@@ -28,7 +28,8 @@
 | PR-5 | (merged with PR-4) | — | (folded into PR-4) |
 | PR-6 | `eebb632` | OnACK seam flip | `CallSessionPort` (implements `engine.MediaPort` + `legacy.LegacyHandle`). `AttachVoiceViaEngine` helper. **OnACK now flows through `engine.New(cfg).Attach`.** Behaviour-neutral. |
 | PR-7 | `c1a5527` | Per-mode attachers | `AttachCascadedLegacy` + `AttachRealtimeLegacy` replace the single shared closure. `ResolveAttachMode` decides mode up-front. `cfg.Mode` becomes load-bearing. `perModeLegacyAttacher` factory in bridge. |
-| PR-8d | _(this PR)_ | Retire AttachVoicePipeline body | `voicedialog/hub.go` switched from `AttachVoicePipeline` to `AttachRealtimeLegacy`. `AttachVoicePipeline` body shrunk from ~70 LOC to a 5-line wrapper that delegates to `ResolveAttachMode` + per-mode helpers. Single source of truth for attach logic now lives in `dialog_engine_legacy.go`. |
+| PR-8d | `336caec` | Retire AttachVoicePipeline body | `voicedialog/hub.go` switched from `AttachVoicePipeline` to `AttachRealtimeLegacy`. `AttachVoicePipeline` body shrunk from ~70 LOC to a 5-line wrapper that delegates to `ResolveAttachMode` + per-mode helpers. Single source of truth for attach logic now lives in `dialog_engine_legacy.go`. |
+| PR-8b | _(this PR)_ | Mode-tagged metrics | New `pkg/sip/metrics/voice_attach.go`: `sip_voice_attach_total{mode,result}` + `sip_voice_attach_mode_fallback_total{from,to}`. Wired into `AttachVoiceViaEngine` (per-call result) and `ResolveAttachMode` (auto-fallback). PR-7's mode-honesty is now observable. Zero allocation on hot path. |
 
 ---
 
@@ -107,7 +108,7 @@
 
 2. ~~**`AttachVoicePipeline` still alive in `voice.go`**~~. **Resolved in PR-8d.** `voicedialog/hub.go` migrated to `AttachRealtimeLegacy`; `AttachVoicePipeline` is now a 5-line compatibility wrapper that delegates to the per-mode helpers.
 
-3. **No mode-tagged metrics**. The PR-7 mode-honesty work isn't yet observable in dashboards. PR-8b would close this loop.
+3. ~~**No mode-tagged metrics**~~. **Resolved in PR-8b.** `sip_voice_attach_total{mode,result}` + `sip_voice_attach_mode_fallback_total{from,to}` are emitted from `AttachVoiceViaEngine` and `ResolveAttachMode` respectively.
 
 4. **No native engine yet**. Every engine.Mode still ultimately calls `attachVoiceInner` via the legacy bridge. Phase 3 (PR-8c onward) starts replacing one mode with a native `engine.Engine` implementation.
 
@@ -125,14 +126,7 @@ Choose by priority; they're independent:
 - **Unblocks**: phase 3 native engines (they need to read env without depending on `conversation`).
 - **Cost**: ~10 import sites updated. One DB-mock helper in `pkg/dialog/tenantcfg` for tests.
 
-### PR-8b — Mode-tagged metrics (~150 LOC)
-- Add prometheus counters:
-  - `sip_voice_attach_total{mode}` — incremented in `AttachVoiceViaEngine` after `engine.New` succeeds.
-  - `sip_voice_attach_failed_total{mode, reason}` — incremented when the per-mode attacher returns config_error.
-  - `sip_voice_attach_mode_fallback_total{from, to}` — incremented when `ResolveAttachMode` applies the pipeline→realtime auto-fallback.
-- Wire into existing `pkg/metrics` registry.
-- **Unblocks**: dashboards / alerts on the PR-7 mode-honesty work.
-- **Cost**: small, no behaviour change.
+### ~~PR-8b~~ — **Done.** Mode-tagged metrics wired via `pkg/sip/metrics/voice_attach.go`.
 
 ### PR-8c — Native cascaded engine sketch (~400 LOC)
 - Create `pkg/dialog/cascaded` package with a minimal `engine.Engine` implementation that uses `pipeline.Pipeline` from PR-2.

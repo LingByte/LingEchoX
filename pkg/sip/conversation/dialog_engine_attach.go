@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
+	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"go.uber.org/zap"
 )
@@ -76,8 +77,14 @@ func AttachVoiceViaEngine(ctx context.Context, cs *sipSession.CallSession, lg *z
 	}
 	eng, err := engine.New(cfg)
 	if err != nil {
+		// Engine.New failures are config errors from this caller's
+		// perspective (the registry doesn't know about the mode).
+		// Counted under the resolved mode to keep the mode dimension
+		// honest in dashboards.
+		sipMetrics.VoiceAttach(string(cfg.Mode), false)
 		return fmt.Errorf("dialog engine attach: build engine for mode=%q: %w", string(cfg.Mode), err)
 	}
 	_, err = eng.Attach(ctx, port, NewZapEngineLogger(lg))
+	sipMetrics.VoiceAttach(string(cfg.Mode), err == nil)
 	return err
 }
