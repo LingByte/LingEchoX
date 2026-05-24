@@ -298,9 +298,21 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 	}
 	inbound := lookupInbound(inboundCallID)
 	if inbound == nil {
-		lg.Warn("sip transfer bridge: inbound session not found",
+		// 200 OK / CANCEL race: PSTN 用户挂断、我们已发 CANCEL，但坐席
+		// 那条 leg 同时 200 OK 进来 —— 入局 session 已被清，桥接做不成。
+		// 此时 outbound leg 已经 established（200 OK + ACK），必须发
+		// 标准 in-dialog BYE 把坐席手机挂掉；只 outboundCS.Stop() 仅停本地
+		// 媒体，坐席端会一直在通话状态等到自己挂或 RTP idle timeout。
+		lg.Warn("sip transfer bridge: inbound session gone after 200 OK (race vs CANCEL/hangup)",
 			zap.String("inbound_call_id", inboundCallID),
 			zap.String("outbound_call_id", outboundCallID))
+		if bridgeSendOutboundBYE != nil && outboundCallID != "" {
+			if err := bridgeSendOutboundBYE(outboundCallID); err != nil {
+				lg.Warn("sip transfer bridge: BYE on race fallback failed",
+					zap.String("outbound_call_id", outboundCallID),
+					zap.Error(err))
+			}
+		}
 		if outboundCS != nil {
 			outboundCS.Stop()
 		}

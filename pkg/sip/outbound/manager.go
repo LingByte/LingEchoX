@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
@@ -771,6 +772,26 @@ type outLeg struct {
 	// classification). Held by value so legs without a configured
 	// CDR sink pay only the zero-value cost.
 	cdr cdrState
+
+	// gotProvisional is set true on the first 1xx received for the
+	// INVITE. RFC 3261 §9.1 says CANCEL MUST NOT be sent before the
+	// first provisional — some strict proxies will silently drop a
+	// CANCEL that arrives before they have a transaction state for
+	// the original INVITE (race with the INVITE itself in transit).
+	gotProvisional atomic.Bool
+	// pendingCancel is set true when SendCANCEL is invoked before
+	// gotProvisional. The first 1xx hander then fires the CANCEL.
+	// A 500ms fallback timer also fires the CANCEL if no 1xx arrives,
+	// so a strictly silent carrier doesn't keep the agent ringing.
+	pendingCancel atomic.Bool
+	// cancelSent guards against duplicate CANCEL emissions when both
+	// the inbound-BYE path and the ring-timeout path race.
+	cancelSent atomic.Bool
+	// cancelStop closes when the INVITE transaction reaches a final
+	// response, telling the CANCEL retransmit goroutine to stop. Lazy
+	// init in startCancelRetransmit.
+	cancelStopMu sync.Mutex
+	cancelStop   chan struct{}
 }
 
 func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from *net.UDPAddr) {
@@ -812,6 +833,15 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 	}
 	if st >= 100 && st < 200 {
 		phrase := strings.TrimSpace(resp.StatusText)
+		// RFC 3261 §9.1: a CANCEL queued before the first provisional
+		// is held back to avoid racing the proxy's transaction state.
+		// The first 1xx unblocks it. We use CompareAndSwap so only the
+		// FIRST 1xx fires the deferred CANCEL (subsequent 18x are no-op).
+		if leg.gotProvisional.CompareAndSwap(false, true) {
+			if leg.pendingCancel.Load() {
+				go leg.fireDeferredCANCEL()
+			}
+		}
 		logger.Info("sip outbound provisional response",
 			zap.String("call_id", leg.params.CallID),
 			zap.Int("status", st),
@@ -841,6 +871,11 @@ func (leg *outLeg) handleResponse(ctx context.Context, resp *stack.Message, from
 		if reason == "" {
 			reason = "non_200"
 		}
+		// Final INVITE response → stop any CANCEL retransmit goroutine.
+		// 487 Request Terminated is the textbook reply to a successful
+		// CANCEL; other 4xx/5xx/6xx mean the transaction died on its
+		// own and any in-flight CANCEL is moot.
+		leg.stopCANCELRetransmit()
 		// Record the failure into the CDR before logging / event
 		// emission so even an Emit during cleanup carries the cause.
 		leg.cdrSetError(st, reason)
@@ -1124,6 +1159,9 @@ func (leg *outLeg) cleanupLeg() {
 	// otherwise a tick fired between the two could try to send on a
 	// nil peer and log a misleading "send failed" warning.
 	leg.stopRefresher()
+	// Stop any CANCEL retransmit goroutine for the same reason —
+	// once we drop the peer it would write to a nil socket.
+	leg.stopCANCELRetransmit()
 	// Flush per-call QoS into the metrics histograms BEFORE we close
 	// the RTP session. After Close() the snapshot would be empty.
 	// This is the once-per-call observation point — one RTCP read,

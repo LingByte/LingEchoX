@@ -197,6 +197,20 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	}
 
 	logger.SafeGo("transfer-outbound-dial", func() {
+		// 入局 BYE 可能在 SafeGo 调度之前就到达（PSTN 抖动 / 用户在
+		// "正在为您转接"播报中挂断）。此时 transferStarted 已被
+		// CleanupCallState 清掉，但本 goroutine 还没运行；如果再发
+		// INVITE 给坐席，会出现"坐席响铃后无人对接"的孤儿 leg。
+		// 这里 Dial 前再核一次 inbound session 还在不在，省一通无效
+		// 外呼 + 后续 30s 的 ring-timeout 兜底窗口。
+		if lookupInboundSession(inboundCallID) == nil {
+			lg.Info("sip transfer: inbound gone before agent dial — abort",
+				zap.String("inbound_call_id", inboundCallID))
+			stopTransferRinging(inboundCallID)
+			transferStarted.Delete(inboundCallID)
+			notifyTransferPhase(inboundCallID, "aborted", map[string]any{"reason": "inbound_gone"})
+			return
+		}
 		req := outbound.DialRequest{
 			Scenario:      outbound.ScenarioTransferAgent,
 			Target:        tgt,
@@ -239,6 +253,27 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 			return
 		}
 		lg.Info("sip transfer: agent leg INVITE sent", zap.String("inbound_call_id", inboundCallID), zap.String("outbound_call_id", cid))
+		// 处理"d.Dial 期间用户挂断"的深层 race：BYE 在 dial 中途到达，
+		// CleanupCallState → CancelPendingTransferLeg 跑时 transferPendingOutbound
+		// 还没被 DialEventInvited 写入（同步事件比 BYE 处理慢几微秒），LoadAndDelete
+		// 拿不到东西，结果坐席响铃直到 30s ring-timeout。dial 后再核一次 inbound
+		// 存活，如果已挂就主动 CANCEL（requestCANCEL 是 idempotent，与上游路径并发安全）。
+		if lookupInboundSession(inboundCallID) == nil {
+			lg.Info("sip transfer: inbound went away during dial — cancelling agent leg",
+				zap.String("inbound_call_id", inboundCallID),
+				zap.String("outbound_call_id", cid))
+			transferPendingOutbound.Delete(inboundCallID)
+			transferLegCancelMu.Lock()
+			fn := transferLegCancelFn
+			transferLegCancelMu.Unlock()
+			if fn != nil {
+				if err := fn(cid); err != nil {
+					lg.Warn("sip transfer: post-dial CANCEL failed",
+						zap.String("outbound_call_id", cid), zap.Error(err))
+				}
+			}
+			transferStarted.Delete(inboundCallID)
+		}
 	})
 }
 

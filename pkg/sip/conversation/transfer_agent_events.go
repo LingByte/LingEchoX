@@ -297,9 +297,15 @@ func HandleTransferAgentDialEvent(evt outbound.DialEvent) {
 	case outbound.DialEventEstablished:
 		transferPendingOutbound.Delete(inbound)
 		cancelTransferInviteWatch(evt.CallID)
+		// RFC 5589 §6: REFER 触发的外呼现在真正接通，给 transferor 发
+		// "SIP/2.0 200 OK" sipfrag NOTIFY（如有挂载回调）。非 REFER 路径
+		// 这里 LoadAndDelete 取不到东西，no-op。
+		fireReferTerminalNotifyForEvent(evt)
 	case outbound.DialEventFailed:
 		transferPendingOutbound.Delete(inbound)
 		cancelTransferInviteWatch(evt.CallID)
+		// 失败也走 NOTIFY（同上），sipfrag 反映真实 SIP 状态码。
+		fireReferTerminalNotifyForEvent(evt)
 		onTransferAgentLegFailed(inbound, evt)
 	default:
 	}
