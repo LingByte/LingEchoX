@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
+	"github.com/LinByte/VoiceServer/pkg/dialog/tenantcfg"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"go.uber.org/zap"
 )
@@ -15,9 +16,9 @@ import (
 // the package don't leak the override.
 func installFakeVoiceLoader(t *testing.T, fn TenantVoiceJSONLoader) {
 	t.Helper()
-	prev := tenantVoiceJSONLoader
-	tenantVoiceJSONLoader = fn
-	t.Cleanup(func() { tenantVoiceJSONLoader = prev })
+	prev := tenantcfg.Loader()
+	tenantcfg.SetLoader(fn)
+	t.Cleanup(func() { tenantcfg.SetLoader(prev) })
 }
 
 // fakeVoiceEnvLoader builds a TenantVoiceJSONLoader returning the

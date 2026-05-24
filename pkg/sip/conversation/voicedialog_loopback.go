@@ -11,7 +11,11 @@ import (
 )
 
 // ReadyForVoicedialogLoopbackLLM is true when tenant LLM JSON is sufficient for inbound voicedialog loopback.
-func (e VoiceEnv) ReadyForVoicedialogLoopbackLLM() bool {
+//
+// PR-8a: converted from a method on VoiceEnv to a free function so
+// VoiceEnv can be a type alias for tenantcfg.VoiceEnv (Go forbids
+// methods on non-local types). Callers updated to pass env in.
+func ReadyForVoicedialogLoopbackLLM(e VoiceEnv) bool {
 	return voiceEnvLLMReady(e)
 }
 
@@ -25,7 +29,7 @@ func NewVoicedialogLoopbackLLMProvider(ctx context.Context, callID string, lg *z
 	if err != nil {
 		return nil, "", nil, err
 	}
-	if !loaded || !env.ReadyForVoicedialogLoopbackLLM() {
+	if !loaded || !ReadyForVoicedialogLoopbackLLM(env) {
 		return nil, "", nil, fmt.Errorf("voicedialog loopback LLM: incomplete tenant llmConfig")
 	}
 	systemPrompt := popSIPCallSystemPrompt(callID)

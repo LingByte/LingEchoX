@@ -29,7 +29,8 @@
 | PR-6 | `eebb632` | OnACK seam flip | `CallSessionPort` (implements `engine.MediaPort` + `legacy.LegacyHandle`). `AttachVoiceViaEngine` helper. **OnACK now flows through `engine.New(cfg).Attach`.** Behaviour-neutral. |
 | PR-7 | `c1a5527` | Per-mode attachers | `AttachCascadedLegacy` + `AttachRealtimeLegacy` replace the single shared closure. `ResolveAttachMode` decides mode up-front. `cfg.Mode` becomes load-bearing. `perModeLegacyAttacher` factory in bridge. |
 | PR-8d | `336caec` | Retire AttachVoicePipeline body | `voicedialog/hub.go` switched from `AttachVoicePipeline` to `AttachRealtimeLegacy`. `AttachVoicePipeline` body shrunk from ~70 LOC to a 5-line wrapper that delegates to `ResolveAttachMode` + per-mode helpers. Single source of truth for attach logic now lives in `dialog_engine_legacy.go`. |
-| PR-8b | _(this PR)_ | Mode-tagged metrics | New `pkg/sip/metrics/voice_attach.go`: `sip_voice_attach_total{mode,result}` + `sip_voice_attach_mode_fallback_total{from,to}`. Wired into `AttachVoiceViaEngine` (per-call result) and `ResolveAttachMode` (auto-fallback). PR-7's mode-honesty is now observable. Zero allocation on hot path. |
+| PR-8b | `70160c3` | Mode-tagged metrics | New `pkg/sip/metrics/voice_attach.go`: `sip_voice_attach_total{mode,result}` + `sip_voice_attach_mode_fallback_total{from,to}`. Wired into `AttachVoiceViaEngine` (per-call result) and `ResolveAttachMode` (auto-fallback). PR-7's mode-honesty is now observable. Zero allocation on hot path. |
+| PR-8a | _(this PR)_ | Extract tenant voice config | New `pkg/dialog/tenantcfg` package owns `VoiceEnv`, `JSONLoader`, `Resolve`, `VoiceReady`/`PipelineUsable`/`RealtimeReady`, `VoiceEnvFromJSON`. `pkg/sip/conversation` becomes consumer-only via type aliases (`type VoiceEnv = tenantcfg.VoiceEnv`) — every existing call site keeps compiling. `voice_tenant_loader.go` shrinks from 526 LOC to a ~180 LOC SIP-side shim (loader-forwarding + playback helpers that depend on `*CallSession`). 96.2% coverage on the new package. Unblocks PR-8c (native engines can now read tenant config without an import cycle through `pkg/sip`). |
 
 ---
 
@@ -104,7 +105,7 @@
 
 ## Open Issues / Tech Debt
 
-1. **Double env load per call**. `ResolveAttachMode` loads tenant env to pick mode, then `AttachCascadedLegacy` / `AttachRealtimeLegacy` reload it. Each load is one DB hit (~10ms behind the loader cache, if any). Will be deduped in PR-8a when `VoiceEnv` moves into `engine.Config`.
+1. **Double env load per call**. `ResolveAttachMode` loads tenant env to pick mode, then `AttachCascadedLegacy` / `AttachRealtimeLegacy` reload it. Each load is one DB hit (~10ms behind the loader cache, if any). Now feasible to dedupe via `engine.Config.VoiceEnv` in a follow-up since PR-8a moved `VoiceEnv` to `pkg/dialog/tenantcfg` (no import cycle).
 
 2. ~~**`AttachVoicePipeline` still alive in `voice.go`**~~. **Resolved in PR-8d.** `voicedialog/hub.go` migrated to `AttachRealtimeLegacy`; `AttachVoicePipeline` is now a 5-line compatibility wrapper that delegates to the per-mode helpers.
 
@@ -120,11 +121,7 @@
 
 Choose by priority; they're independent:
 
-### PR-8a — Extract VoiceEnv to `pkg/dialog/tenantcfg` (~600 LOC)
-- Move `VoiceEnv`, `pipelineCredsUsable`, `TenantRealtimeReady`, `TenantVoiceJSONLoader`, `ResolveTenantVoiceEnv` to a new top-level package.
-- Keep `conversation` package focused on attach logic.
-- **Unblocks**: phase 3 native engines (they need to read env without depending on `conversation`).
-- **Cost**: ~10 import sites updated. One DB-mock helper in `pkg/dialog/tenantcfg` for tests.
+### ~~PR-8a~~ — **Done.** `VoiceEnv` + parser + predicates + loader live in `pkg/dialog/tenantcfg`; `pkg/sip/conversation` consumes via type aliases.
 
 ### ~~PR-8b~~ — **Done.** Mode-tagged metrics wired via `pkg/sip/metrics/voice_attach.go`.
 

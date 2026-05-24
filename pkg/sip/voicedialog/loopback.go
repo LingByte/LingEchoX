@@ -211,7 +211,7 @@ func runLoopbackAssistant(callID string, c *websocket.Conn) {
 	cs := conversation.LookupInboundCallSession(callID)
 	ctx := context.Background()
 	env, loaded, err := conversation.ResolveTenantVoiceEnv(ctx, cs)
-	if cs == nil || err != nil || !loaded || !env.ReadyForVoicedialogLoopbackLLM() {
+	if cs == nil || err != nil || !loaded || !conversation.ReadyForVoicedialogLoopbackLLM(env) {
 		if cs == nil {
 			logger.Warn("voicedialog loopback: no inbound CallSession — drain WS only",
 				zap.String(KeyCallID, callID),

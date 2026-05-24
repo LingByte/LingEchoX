@@ -15,6 +15,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/config"
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
+	"github.com/LinByte/VoiceServer/pkg/dialog/tenantcfg"
 	"github.com/LinByte/VoiceServer/pkg/llm"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/media"
@@ -83,50 +84,15 @@ func consumeSIPTransferPending(callID string) bool {
 	return v
 }
 
-// VoiceEnv holds SIP voice pipeline settings (tenant JSON or legacy process env for non-SIP helpers).
-type VoiceEnv struct {
-	LLMProvider string
-	LLMBaseURL  string
-	LLMAppID    string
-	LLMAPIKey   string
-	LLMModel    string
-
-	ASRProvider  string
-	ASRAppID     string
-	ASRSecretID  string
-	ASRSecretKey string
-	ASRModelType string
-
-	TTSProvider   string
-	TTSAppID      string
-	TTSSecretID   string
-	TTSSecretKey  string
-	TTSVoiceType  int64
-	TTSSpeed      int64
-	TTSSampleRate int
-	// TTSConfigRaw is the full tenant TTS JSON (provider + per-vendor fields)
-	// passed through to synthesizer.NewStreamingFromCredential. Tenant-stored
-	// config is the source of truth; the typed fields above are kept only for
-	// QCloud-specific tweaks (voiceType/speed) and legacy callers.
-	TTSConfigRaw map[string]any
-
-	// VoiceMode selects which SIP voice attach path runs:
-	//   "pipeline"  — legacy 3-layer ASR → LLM → TTS (default; everything
-	//                 above is consulted)
-	//   "realtime"  — single full-duplex multimodal model wired through
-	//                 pkg/realtime (RealtimeConfigRaw is consulted)
-	// Empty defaults to "pipeline".
-	VoiceMode string
-	// RealtimeProvider is a denormalised copy of RealtimeConfigRaw["provider"]
-	// for cheap readiness checks; all real provisioning reads RealtimeConfigRaw.
-	RealtimeProvider string
-	// RealtimeConfigRaw is the full tenant realtime JSON (provider +
-	// per-vendor fields), passed through to realtime.NewAgentFromCredential.
-	RealtimeConfigRaw map[string]any
-	// TransferConfirmCount: user must express transfer intent this many times
-	// (separate final transcripts) before dial. 0 = use default (2). Clamped 1–10.
-	TransferConfirmCount int
-}
+// VoiceEnv holds SIP voice pipeline settings (tenant JSON or legacy
+// process env for non-SIP helpers).
+//
+// PR-8a: this is now a type alias for tenantcfg.VoiceEnv. The
+// canonical definition (struct fields, doc-comments) lives in
+// pkg/dialog/tenantcfg/voiceenv.go so future engines can consume it
+// without importing pkg/sip/conversation. All existing field access
+// (e.g. env.ASRProvider) continues to work unchanged.
+type VoiceEnv = tenantcfg.VoiceEnv
 
 // sipVoicePCMBridgeRate is the negotiated PCM rate between RTP decode and encode (must match MediaSession).
 func sipVoicePCMBridgeRate(cs *sipSession.CallSession) int {
@@ -229,17 +195,6 @@ func llmAPIURLForProvider(env VoiceEnv) string {
 		return env.LLMAppID
 	}
 	return env.LLMBaseURL
-}
-
-func (e VoiceEnv) readyForVoice() bool {
-	llmReady := e.LLMAPIKey != "" && e.LLMBaseURL != ""
-	if strings.EqualFold(e.LLMProvider, "alibaba") {
-		// Alibaba provider in pkg/llm consumes AppID in apiUrl slot.
-		llmReady = e.LLMAPIKey != "" && e.LLMAppID != ""
-	}
-	return e.ASRAppID != "" && e.ASRSecretID != "" && e.ASRSecretKey != "" &&
-		llmReady &&
-		e.TTSAppID != "" && e.TTSSecretID != "" && e.TTSSecretKey != ""
 }
 
 // AttachVoicePipeline is the historical voice-attach entry point.
