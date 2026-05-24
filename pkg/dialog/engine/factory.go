@@ -152,6 +152,16 @@ func New(cfg Config) (Engine, error) {
 	return f.Build(cfg)
 }
 
+// ResetRegistryForTest clears the global Mode → Factory registry.
+// ONLY for use in tests; calling it from production code voids the
+// warranty. Exists in a regular file (not _test.go) so cross-package
+// tests in pkg/dialog/legacy can reset between cases.
+func ResetRegistryForTest() {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	registry = map[Mode]Factory{}
+}
+
 // RegisteredModes returns the set of currently-registered modes.
 // Order is unspecified. Useful for diagnostics / health checks.
 func RegisteredModes() []Mode {
