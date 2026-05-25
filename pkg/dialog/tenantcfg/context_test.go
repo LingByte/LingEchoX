@@ -27,8 +27,10 @@ func TestVoiceEnvFromContext_AbsentByDefault(t *testing.T) {
 }
 
 func TestVoiceEnvFromContext_NilContextSafe(t *testing.T) {
-	//nolint:staticcheck // testing nil tolerance contract explicitly
-	if _, ok := VoiceEnvFromContext(nil); ok {
+	// Use a variable so `go vet` doesn't flag the nil literal —
+	// we are explicitly contract-testing nil tolerance.
+	var ctx context.Context
+	if _, ok := VoiceEnvFromContext(ctx); ok {
 		t.Error("nil ctx should return ok=false, not panic")
 	}
 }
@@ -39,8 +41,8 @@ func TestWithVoiceEnv_NilContextDoesNotPanic(t *testing.T) {
 			t.Errorf("WithVoiceEnv(nil, ...) panicked: %v", r)
 		}
 	}()
-	//nolint:staticcheck // testing nil tolerance contract explicitly
-	ctx := WithVoiceEnv(nil, VoiceEnv{VoiceMode: "realtime"})
+	var nilCtx context.Context
+	ctx := WithVoiceEnv(nilCtx, VoiceEnv{VoiceMode: "realtime"})
 	if got, ok := VoiceEnvFromContext(ctx); !ok || got.VoiceMode != "realtime" {
 		t.Errorf("WithVoiceEnv(nil) round-trip failed: ok=%v env=%+v", ok, got)
 	}

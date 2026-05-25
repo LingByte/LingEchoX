@@ -35,6 +35,17 @@ type Engine struct {
 	vadDetector    BargeInDetector
 	bargeInHandler func()
 
+	// PR-9c.1 — optional real ASR. When set, replaces the asrStub
+	// in the default stage list. nil → stub remains (test-friendly
+	// default).
+	asrRecognizer ASRRecognizer
+
+	// PR-9c.2 — optional real LLM. When set, replaces the llmStub.
+	llmService LLMService
+
+	// PR-9c.3 — optional real TTS. When set, replaces the ttsStub.
+	ttsService TTSService
+
 	attached   atomic.Bool // single-shot Attach guard
 	detachOnce sync.Once   // idempotent Detach guard
 
@@ -68,6 +79,38 @@ func WithVADDetector(d BargeInDetector) Option {
 // No-op when no detector is configured.
 func WithBargeInHandler(fn func()) Option {
 	return func(e *Engine) { e.bargeInHandler = fn }
+}
+
+// WithASRRecognizer installs a real ASR recogniser. When non-nil the
+// engine swaps the default asrStub for an asrStage wrapping this
+// recogniser. The recogniser's PCM sample rate must match the
+// MediaPort's bridge rate (or upstream resampling must be wired in
+// the adapter — see PR-9d).
+//
+// Pass nil to keep the stub (the default).
+func WithASRRecognizer(asr ASRRecognizer) Option {
+	return func(e *Engine) { e.asrRecognizer = asr }
+}
+
+// WithLLMService installs a real LLM service. When non-nil the engine
+// swaps the default llmStub for an llmStage wrapping this service.
+// The service is responsible for picking the right call shape per
+// provider (streaming vs single-shot) — see pkg/dialog/cascaded/
+// llm_stage.go for the LLMService contract.
+//
+// Pass nil to keep the stub.
+func WithLLMService(svc LLMService) Option {
+	return func(e *Engine) { e.llmService = svc }
+}
+
+// WithTTSService installs a real TTS service. When non-nil the engine
+// swaps the default ttsStub for a ttsStage wrapping this service. The
+// stage drives Speak/Finalize per LLM turn; see pkg/dialog/cascaded/
+// tts_stage.go for the buffering / barge-in contract.
+//
+// Pass nil to keep the stub.
+func WithTTSService(svc TTSService) Option {
+	return func(e *Engine) { e.ttsService = svc }
 }
 
 // New builds an Engine for the supplied Config. Apply Options for
@@ -132,7 +175,35 @@ func (e *Engine) Attach(ctx context.Context, port engine.MediaPort, lg engine.Lo
 	// The bit is read from inside the vadStage's Run loop so it must
 	// be safe to read concurrently — atomic.Bool fits.
 	var ttsPlaying atomic.Bool
-	stages := e.stages
+	// Start from defaults and apply per-provider swaps. Working on a
+	// copy keeps e.stages immutable across multiple (hypothetical)
+	// Attach calls and avoids cross-Engine aliasing if Engines are
+	// ever pooled.
+	stages := append([]pipeline.Stage(nil), e.stages...)
+	// swapByName replaces the first stage whose Name() matches; if
+	// none matches, it prepends — defensive against future edits to
+	// defaultStages() that might remove a slot.
+	swapByName := func(name string, replacement pipeline.Stage) {
+		for i, st := range stages {
+			if st.Name() == name {
+				stages[i] = replacement
+				return
+			}
+		}
+		stages = append([]pipeline.Stage{replacement}, stages...)
+	}
+	if e.asrRecognizer != nil {
+		swapByName("asr", newASRStage(e.asrRecognizer))
+		lg.Info("cascaded engine: asr stage replaced with real recognizer")
+	}
+	if e.llmService != nil {
+		swapByName("llm", newLLMStage(e.llmService))
+		lg.Info("cascaded engine: llm stage replaced with real service")
+	}
+	if e.ttsService != nil {
+		swapByName("tts", newTTSStage(e.ttsService))
+		lg.Info("cascaded engine: tts stage replaced with real service")
+	}
 	if e.vadDetector != nil {
 		vs := newVADStage(
 			e.vadDetector,
@@ -140,7 +211,7 @@ func (e *Engine) Attach(ctx context.Context, port engine.MediaPort, lg engine.Lo
 			e.bargeInHandler,
 		)
 		// Insert at the FRONT so VAD sees PCM before ASR consumes it.
-		stages = append([]pipeline.Stage{vs}, e.stages...)
+		stages = append([]pipeline.Stage{vs}, stages...)
 		lg.Info("cascaded engine: vad stage enabled", engine.F("stages", len(stages)))
 	}
 
