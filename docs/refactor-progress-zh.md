@@ -65,7 +65,8 @@ pkg/sip/conversation/
 | PR-9i | `e3d42b2` | 转人工流水接通 native | tool 注册 + 后turn 触发 + 转接期间 LLM 抑制 |
 | PR-9j | `99878d9` | Native 路径接通延迟直方图（LLM/E2E） | persister 调用 `ObserveLLMFirstByte / E2EFirstByte` |
 | PR-9k | `afad91a` | 补齐 `TTSFirstByte` 直方图 | persistStage 跟踪首帧 PCM 时间 |
-| PR-10a | _本次_ | `pkg/dialog/realtime` 引擎骨架 | agentStage + 复用 cascaded 的 hotword/persist Stage |
+| PR-10a | `cd3ae81` | `pkg/dialog/realtime` 引擎骨架 | agentStage + 复用 cascaded 的 hotword/persist Stage |
+| PR-10b | _本次_ | SIP↔realtime 适配器 + 灰度开关 | `pkg/realtime.Agent` → `dialogrealtime.Agent` 桥；默认 OFF |
 
 ---
 
