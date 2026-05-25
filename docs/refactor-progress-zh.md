@@ -63,7 +63,8 @@ pkg/sip/conversation/
 | PR-9g | `f0c5768` | 全量切到 native + hotword Stage + 录音 | 默认 native，灰度开关翻转成 kill-switch |
 | PR-9h | `bb3d10a` | Turn 持久化 Stage | `RecordDialogTurn` 下沉到 pipeline.Stage |
 | PR-9i | `e3d42b2` | 转人工流水接通 native | tool 注册 + 后turn 触发 + 转接期间 LLM 抑制 |
-| PR-9j | _本次_ | Native 路径接通延迟直方图 | persister 调用 `ObserveLLMFirstByte / E2EFirstByte` |
+| PR-9j | `99878d9` | Native 路径接通延迟直方图（LLM/E2E） | persister 调用 `ObserveLLMFirstByte / E2EFirstByte` |
+| PR-9k | _本次_ | 补齐 `TTSFirstByte` 直方图 | persistStage 跟踪首帧 PCM 时间 |
 
 ---
 

@@ -263,14 +263,14 @@ func buildNativeTurnPersister(env VoiceEnv, callID string, provider llm.LLMProvi
 			// attachVoiceInner so dashboards see new-path turns
 			// in the same series. ObserveX is a no-op for ms<=0.
 			//
-			// NOTE: TTSFirstByte is intentionally NOT observed
-			// here. persistStage measures LLM-side wall time only;
-			// the legacy TTSMs counter ticked from per-Speak
-			// timing inside streamLLMToTTS. Wiring it on native
-			// requires a per-turn TTS-stage hook (next PR); until
-			// then we leave the TTS histogram to the legacy path
-			// rather than report a misleading value.
+			// TTSFirstByteMs is recorded by persistStage from the
+			// first KindPCM frame following KindTextFinal — it is
+			// only an approximation of the legacy TTSMs counter
+			// (the legacy value summed per-Speak wall time, this
+			// one is the first audible byte), but it lives in the
+			// same Prometheus series so dashboards stay coherent.
 			voiceMetrics.ObserveLLMFirstByte(rec.LLMFirstMs)
+			voiceMetrics.ObserveTTSFirstByte(rec.TTSFirstByteMs)
 			voiceMetrics.ObserveE2EFirstByte(rec.PipelineMs)
 		}
 		// Post-turn transfer trigger — same precedence the legacy

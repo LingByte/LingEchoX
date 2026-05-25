@@ -65,6 +65,11 @@ type TurnRecord struct {
 	// both for analytics. Future TTS-aware stages can populate
 	// it from the actual end-of-audio timestamp.
 	PipelineMs int
+	// TTSFirstByteMs is the wall-time from KindTextFinal to the
+	// first KindPCM frame that follows it — i.e. the user-perceived
+	// "first audible AI byte" latency. Zero when no PCM arrived
+	// before KindAITextDone (TTS bypassed or fully cancelled).
+	TTSFirstByteMs int
 	// CompletedAt is the wall-clock time KindAITextDone arrived.
 	CompletedAt time.Time
 }
@@ -102,11 +107,11 @@ func (persistStage) Name() string { return "persist" }
 
 // Run implements pipeline.Stage.
 //
-//   in  → KindTextFinal     → start accumulator
-//   in  → KindAIText        → append to AIText, mark LLMFirstMs
-//   in  → KindAITextDone    → flush TurnRecord
-//   in  → any other frame   → passthrough
-//   in  closed              → flush any in-flight accumulator then exit
+//	in  → KindTextFinal     → start accumulator
+//	in  → KindAIText        → append to AIText, mark LLMFirstMs
+//	in  → KindAITextDone    → flush TurnRecord
+//	in  → any other frame   → passthrough
+//	in  closed              → flush any in-flight accumulator then exit
 //
 // Always passthrough so downstream consumers (TTS, MediaPort) see
 // every frame regardless of persistence wiring.
@@ -119,11 +124,12 @@ func (s *persistStage) Run(
 	defer close(out)
 
 	type acc struct {
-		userText  string
-		aiText    strings.Builder
-		startedAt time.Time
-		firstAIAt time.Time
-		active    bool
+		userText   string
+		aiText     strings.Builder
+		startedAt  time.Time
+		firstAIAt  time.Time
+		firstPCMAt time.Time
+		active     bool
 	}
 	var a acc
 
@@ -139,6 +145,9 @@ func (s *persistStage) Run(
 		}
 		if !a.firstAIAt.IsZero() && !a.startedAt.IsZero() {
 			rec.LLMFirstMs = int(a.firstAIAt.Sub(a.startedAt).Milliseconds())
+		}
+		if !a.firstPCMAt.IsZero() && !a.startedAt.IsZero() {
+			rec.TTSFirstByteMs = int(a.firstPCMAt.Sub(a.startedAt).Milliseconds())
 		}
 		if !completedAt.IsZero() && !a.startedAt.IsZero() {
 			rec.LLMWallMs = int(completedAt.Sub(a.startedAt).Milliseconds())
@@ -194,6 +203,20 @@ func (s *persistStage) Run(
 				a.aiText.WriteString(f.Text)
 			case pipeline.KindAITextDone:
 				flush(s.nowFn())
+			case pipeline.KindPCM:
+				// Track first audible AI byte. The KindPCM frame
+				// stream interleaves caller-side input PCM (from
+				// the MediaPort) with AI-side output PCM (from
+				// ttsStage). For the user-perceived TTS latency
+				// metric we only care about post-turn-start PCM
+				// — both directions count, since the metric
+				// approximates "when does the user hear something
+				// after speaking". An AI-output-only filter would
+				// need a dedicated frame-direction tag which the
+				// pipeline doesn't carry today.
+				if a.active && a.firstPCMAt.IsZero() {
+					a.firstPCMAt = s.nowFn()
+				}
 			}
 			if err := sendOrCancel(ctx, out, f); err != nil {
 				return err

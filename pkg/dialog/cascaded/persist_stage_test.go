@@ -125,6 +125,58 @@ func TestPersistStage_HappyPathOneTurn(t *testing.T) {
 	}
 }
 
+func TestPersistStage_TTSFirstByteRecorded(t *testing.T) {
+	rp := &recordingPersister{}
+	// Now() invoked on:
+	//   call 0: KindTextFinal       startedAt   = base+0ms
+	//   call 1: KindAIText (first)  firstAIAt   = base+100ms
+	//   call 2: KindPCM (first)     firstPCMAt  = base+200ms
+	//   call 3: KindAITextDone      completedAt = base+300ms
+	clk := &stepClock{base: time.Unix(1700000000, 0), step: 100 * time.Millisecond}
+	s := newPersistStage(rp)
+	s.nowFn = clk.Now
+
+	in := make(chan pipeline.Frame, 5)
+	in <- pipeline.Frame{Kind: pipeline.KindTextFinal, Text: "q"}
+	in <- pipeline.Frame{Kind: pipeline.KindAIText, Text: "a"}
+	in <- pipeline.Frame{Kind: pipeline.KindPCM, PCM: engine.PCMFrame{Data: []byte{1}}}
+	in <- pipeline.Frame{Kind: pipeline.KindPCM, PCM: engine.PCMFrame{Data: []byte{2}}}
+	in <- pipeline.Frame{Kind: pipeline.KindAITextDone}
+	close(in)
+
+	_ = runPersistStage(t, s, in)
+	got := rp.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+	if got[0].TTSFirstByteMs != 200 {
+		t.Errorf("TTSFirstByteMs = %d, want 200", got[0].TTSFirstByteMs)
+	}
+}
+
+func TestPersistStage_PCMBeforeTurnIgnored(t *testing.T) {
+	// PCM frames arriving before a turn starts must not seed
+	// firstPCMAt (which would produce negative / nonsensical
+	// TTSFirstByteMs once the turn does begin).
+	rp := &recordingPersister{}
+	s := newPersistStage(rp)
+	in := make(chan pipeline.Frame, 4)
+	in <- pipeline.Frame{Kind: pipeline.KindPCM, PCM: engine.PCMFrame{Data: []byte{1}}}
+	in <- pipeline.Frame{Kind: pipeline.KindTextFinal, Text: "q"}
+	in <- pipeline.Frame{Kind: pipeline.KindAIText, Text: "a"}
+	in <- pipeline.Frame{Kind: pipeline.KindAITextDone}
+	close(in)
+
+	_ = runPersistStage(t, s, in)
+	got := rp.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+	if got[0].TTSFirstByteMs != 0 {
+		t.Errorf("TTSFirstByteMs = %d, want 0 (no PCM in turn)", got[0].TTSFirstByteMs)
+	}
+}
+
 func TestPersistStage_MultipleTurns(t *testing.T) {
 	rp := &recordingPersister{}
 	s := newPersistStage(rp)
