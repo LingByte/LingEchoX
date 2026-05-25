@@ -23,6 +23,7 @@ func TestAttachVoiceViaEngine_NilCallSessionIsNoOp(t *testing.T) {
 // the bridge hasn't been wired (registry empty).
 func TestAttachVoiceViaEngine_BridgeNotWired(t *testing.T) {
 	resetDialogEngineBridgeForTest(t)
+	defer withNativeCascadedRouter(func(string) string { return "ALL" })()
 	cs := &sipSession.CallSession{CallID: "c-bridge-down"}
 	err := AttachVoiceViaEngine(context.Background(), cs, nil)
 	if err == nil {
@@ -42,6 +43,7 @@ func TestAttachVoiceViaEngine_BridgeNotWired(t *testing.T) {
 //   - the attacher's returned (Detach, error) round-trips through Attach
 func TestAttachVoiceViaEngine_HappyPathDelegatesToAttacher(t *testing.T) {
 	resetDialogEngineBridgeForTest(t)
+	defer withNativeCascadedRouter(func(string) string { return "ALL" })()
 
 	type observed struct {
 		cfg     engine.Config
@@ -99,6 +101,7 @@ func TestAttachVoiceViaEngine_HappyPathDelegatesToAttacher(t *testing.T) {
 // the OnACK callback unchanged.
 func TestAttachVoiceViaEngine_AttacherErrorPropagates(t *testing.T) {
 	resetDialogEngineBridgeForTest(t)
+	defer withNativeCascadedRouter(func(string) string { return "ALL" })()
 
 	wantErr := errors.New("tenant config invalid")
 	att := func(context.Context, engine.Config, engine.MediaPort, engine.Logger) (engine.Detach, error) {

@@ -35,6 +35,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -42,11 +44,32 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/dialog/cascaded"
 	"github.com/LinByte/VoiceServer/pkg/llm"
 	"github.com/LinByte/VoiceServer/pkg/recognizer"
+	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	sipasr "github.com/LinByte/VoiceServer/pkg/voice/asr"
+	siprecorder "github.com/LinByte/VoiceServer/pkg/voice/recorder"
 	siptts "github.com/LinByte/VoiceServer/pkg/voice/tts"
 	"go.uber.org/zap"
 )
+
+// enableNativeStereoRecorder mirrors the legacy attachVoiceInner
+// recorder bootstrap. SIP_RECORDER_CHUNK_SECS controls rolling
+// upload cadence; storage bucket is configured by pkg/stores.
+func enableNativeStereoRecorder(cs *sipSession.CallSession, lg *zap.Logger) {
+	if cs == nil {
+		return
+	}
+	cfg := siprecorder.Config{Logger: lg}
+	if secs, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SIP_RECORDER_CHUNK_SECS"))); err == nil && secs > 0 {
+		cfg.ChunkInterval = time.Duration(secs) * time.Second
+	}
+	if cs.EnableRecorder(cfg) && lg != nil {
+		lg.Info("native cascaded: stereo PCM recorder enabled",
+			zap.String("call_id", cs.CallID),
+			zap.Duration("chunk_interval", cfg.ChunkInterval),
+		)
+	}
+}
 
 // --- ASR adapter ----------------------------------------------------
 
@@ -210,7 +233,12 @@ func (a *nativeCascadedTTS) Finalize(ctx context.Context, onPCM func(pcm []byte)
 // bridgeRate is the SIP-side PCM rate the engine's MediaPort
 // expects; siptts will pace at that rate (or resample upstream — the
 // engine's output bridge resamples on the way to the port).
-func buildNativeCascadedTTS(env VoiceEnv, bridgeRate int, lg *zap.Logger) (cascaded.TTSService, error) {
+//
+// recorderTap is invoked synchronously for every PCM frame sent to
+// the caller, BEFORE the per-Speak onPCM. The legacy path uses this
+// hook to feed the stereo recorder via cs.WriteAIPCM. Pass nil to
+// skip recording.
+func buildNativeCascadedTTS(env VoiceEnv, bridgeRate int, recorderTap func(pcm []byte), lg *zap.Logger) (cascaded.TTSService, error) {
 	if env.TTSConfigRaw == nil {
 		return nil, fmt.Errorf("native cascaded TTS: tenant TTSConfig missing")
 	}
@@ -234,10 +262,15 @@ func buildNativeCascadedTTS(env VoiceEnv, bridgeRate int, lg *zap.Logger) (casca
 			if len(frame) == 0 {
 				return nil
 			}
+			// Recorder tap fires unconditionally so stereo
+			// recording captures AI audio even when the engine
+			// hasn't installed a Speak callback yet (siptts may
+			// emit on residual flush at call end).
+			if recorderTap != nil {
+				recorderTap(frame)
+			}
 			cbPtr := adapter.onPCM.Load()
 			if cbPtr == nil || *cbPtr == nil {
-				// Pipeline emitted before Speak installed a
-				// callback (e.g. start-of-call warmup) — drop.
 				return nil
 			}
 			return (*cbPtr)(frame)

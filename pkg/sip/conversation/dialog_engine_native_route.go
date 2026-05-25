@@ -70,14 +70,27 @@ import (
 	"go.uber.org/zap"
 )
 
-// envNativeCascadedAll is the global override env var. Any non-empty
-// value other than "0" / "false" enables native cascaded routing for
-// every tenant.
+// envNativeCascadedAll is the legacy global-override env var. Kept
+// for backwards compatibility with rollout-era playbooks; today the
+// native cascaded engine is the **default** path for ModeCascaded
+// traffic, so this var is effectively a no-op unless the kill-switch
+// (envNativeCascadedDisable) is also set to bring the legacy bridge
+// back temporarily.
 const envNativeCascadedAll = "DIALOG_NATIVE_CASCADED_ALL"
 
-// envNativeCascadedTenants is the per-tenant allow-list env var.
-// Comma-, semicolon- or whitespace-separated tenant IDs.
+// envNativeCascadedTenants is the legacy per-tenant allow-list. Same
+// status as envNativeCascadedAll — preserved so playbooks don't
+// break, but no longer load-bearing now that native is the default.
 const envNativeCascadedTenants = "DIALOG_NATIVE_CASCADED_TENANTS"
+
+// envNativeCascadedDisable is the kill-switch that forces a tenant
+// (or all tenants when its value is truthy "ALL") off the native
+// path and back to the legacy bridge. Intended only for incident
+// recovery.
+//
+//	DIALOG_NATIVE_CASCADED_DISABLE=ALL          → everyone on legacy
+//	DIALOG_NATIVE_CASCADED_DISABLE=tenant-x,y   → those tenants on legacy
+const envNativeCascadedDisable = "DIALOG_NATIVE_CASCADED_DISABLE"
 
 // nativeCascadedRouter is the small struct that owns the env
 // lookups. Pulled out so tests can swap in a deterministic source
@@ -94,16 +107,18 @@ var (
 )
 
 // useNativeCascaded reports whether the cascaded call for tenantID
-// should be routed through the native cascaded.Engine instead of the
-// legacy bridge. The decision is:
+// should be routed through the native cascaded.Engine. As of the
+// post-rollout switch, native is the **default** path:
 //
-//	DIALOG_NATIVE_CASCADED_ALL truthy        → true
-//	tenantID ∈ DIALOG_NATIVE_CASCADED_TENANTS → true
-//	otherwise                                → false
+//	DIALOG_NATIVE_CASCADED_DISABLE=ALL              → false (kill switch)
+//	tenantID ∈ DIALOG_NATIVE_CASCADED_DISABLE list  → false (per-tenant kill)
+//	otherwise                                       → true
 //
-// Empty tenantID matches nothing (defensive — we don't want a
-// missing tenant header to silently route through the experimental
-// path).
+// The legacy DIALOG_NATIVE_CASCADED_ALL / _TENANTS env vars are
+// kept readable for backward compatibility with rollout-era
+// dashboards but are no longer load-bearing. Empty tenantID still
+// routes native — there's no defensive bail-out anymore because the
+// native path IS the production path.
 func useNativeCascaded(tenantID string) bool {
 	nativeRouterMu.RLock()
 	r := defaultNativeRouter
@@ -112,18 +127,37 @@ func useNativeCascaded(tenantID string) bool {
 }
 
 func (r nativeCascadedRouter) useNativeCascaded(tenantID string) bool {
-	if isTruthyEnv(r.getenv(envNativeCascadedAll)) {
-		return true
-	}
-	if tenantID == "" {
-		return false
-	}
-	for _, id := range parseTenantList(r.getenv(envNativeCascadedTenants)) {
-		if id == tenantID {
-			return true
+	disable := strings.TrimSpace(r.getenv(envNativeCascadedDisable))
+	if disable != "" {
+		// Whole-env kill switch — accept "ALL" or any truthy value
+		// that DOESN'T look like a tenant id list (i.e. one of the
+		// "yes/true/on/1" tokens).
+		if strings.EqualFold(disable, "ALL") || isTruthyEnv(disable) {
+			// But if the value is actually a comma-separated list
+			// containing the tenant id, treat it as a per-tenant
+			// kill rather than a global kill (operators tend to
+			// type "tenant-a,tenant-b" without realising "true"
+			// would be truthy too).
+			if !looksLikeTenantList(disable) {
+				return false
+			}
+		}
+		for _, id := range parseTenantList(disable) {
+			if strings.EqualFold(id, "ALL") {
+				return false
+			}
+			if id == tenantID && tenantID != "" {
+				return false
+			}
 		}
 	}
-	return false
+	return true
+}
+
+// looksLikeTenantList returns true when raw contains a separator
+// character — distinguishing "tenant-a,tenant-b" from "true".
+func looksLikeTenantList(raw string) bool {
+	return strings.ContainsAny(raw, ",;")
 }
 
 // withNativeCascadedRouter swaps the singleton router for the
@@ -231,11 +265,12 @@ func attachVoiceViaNativeCascaded(
 		sipMetrics.VoiceAttachNative(false)
 		return fmt.Errorf("native cascaded attach: failed to wrap CallSession (call_id=%q)", cs.CallID)
 	}
+	// Enable stereo recording (parity with the legacy path) — the
+	// recorder is a baseline product capability, not optional.
+	enableNativeStereoRecorder(cs, lg)
 	// Build the three production-side adapters. Each failure path
-	// closes the port + bumps the err metric so dashboards can tell
-	// "feature flag on but tenant misconfigured" from "feature flag
-	// on and engine bug". We do NOT fall back to legacy — the
-	// operator opted this tenant in.
+	// closes the port + bumps the err metric. We do NOT fall back
+	// to legacy — native is the production path now.
 	asrSvc, err := buildNativeCascadedASR(env, lg)
 	if err != nil {
 		_ = port.Close()
@@ -248,12 +283,20 @@ func attachVoiceViaNativeCascaded(
 		sipMetrics.VoiceAttachNative(false)
 		return fmt.Errorf("native cascaded attach: LLM: %w", err)
 	}
-	ttsSvc, err := buildNativeCascadedTTS(env, port.SampleRate(), lg)
+	// Recorder tap: feed every TTS frame into the stereo recorder
+	// so AI audio is captured at the bridge rate. cs.WriteAIPCM is
+	// safe-nil internally; the tap is a thin wrapper for that.
+	recorderTap := func(pcm []byte) { cs.WriteAIPCM(pcm) }
+	ttsSvc, err := buildNativeCascadedTTS(env, port.SampleRate(), recorderTap, lg)
 	if err != nil {
 		_ = port.Close()
 		sipMetrics.VoiceAttachNative(false)
 		return fmt.Errorf("native cascaded attach: TTS: %w", err)
 	}
+	// Hotword corrector — same env-driven config the legacy path
+	// uses (SIP_HOTWORD_CORRECTIONS / _JSON). nil-safe inside the
+	// stage so an unconfigured tenant just passes text through.
+	hotword := NewSIPHotwordCorrector(lg)
 	cfg := engine.Config{
 		Mode:     engine.ModeCascadedNative,
 		CallID:   port.CallID(),
@@ -266,6 +309,7 @@ func attachVoiceViaNativeCascaded(
 		cascaded.WithASRRecognizer(asrSvc),
 		cascaded.WithLLMService(llmSvc),
 		cascaded.WithTTSService(ttsSvc),
+		cascaded.WithTextRewriter(hotword),
 	)
 	lg.Info("native cascaded attach: routing through cascaded.Engine",
 		zap.String("call_id", cs.CallID),

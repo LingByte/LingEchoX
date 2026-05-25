@@ -46,6 +46,12 @@ type Engine struct {
 	// PR-9c.3 — optional real TTS. When set, replaces the ttsStub.
 	ttsService TTSService
 
+	// PR-9g — optional ASR text rewriter (hotword corrector). When
+	// set, a hotwordStage is inserted between asrStage and llmStage
+	// so KindTextInterim/KindTextFinal go through Correct() before
+	// reaching the LLM. nil → no rewriting (default).
+	textRewriter TextRewriter
+
 	attached   atomic.Bool // single-shot Attach guard
 	detachOnce sync.Once   // idempotent Detach guard
 
@@ -111,6 +117,14 @@ func WithLLMService(svc LLMService) Option {
 // Pass nil to keep the stub.
 func WithTTSService(svc TTSService) Option {
 	return func(e *Engine) { e.ttsService = svc }
+}
+
+// WithTextRewriter installs a hotword corrector / generic text
+// rewriter. When non-nil a hotwordStage is inserted right after the
+// asrStage so KindTextInterim / KindTextFinal frames flow through
+// Correct() before reaching the LLM. Pass nil to disable.
+func WithTextRewriter(r TextRewriter) Option {
+	return func(e *Engine) { e.textRewriter = r }
 }
 
 // New builds an Engine for the supplied Config. Apply Options for
@@ -215,6 +229,29 @@ func (e *Engine) Attach(ctx context.Context, port engine.MediaPort, lg engine.Lo
 	if e.ttsService != nil {
 		swapByName("tts", newTTSStage(e.ttsService))
 		lg.Info("cascaded engine: tts stage replaced with real service")
+	}
+	if e.textRewriter != nil {
+		// Insert hotword stage right after ASR. We splice it in so
+		// the stage list stays semantically: VAD? → ASR → hotword
+		// → LLM → TTS.
+		hs := newHotwordStage(e.textRewriter)
+		out := make([]pipeline.Stage, 0, len(stages)+1)
+		inserted := false
+		for _, st := range stages {
+			out = append(out, st)
+			if !inserted && st.Name() == "asr" {
+				out = append(out, hs)
+				inserted = true
+			}
+		}
+		if !inserted {
+			// No asr stage somehow — push hotword to the front so
+			// it still affects any text frames produced by an
+			// alternative source.
+			out = append([]pipeline.Stage{hs}, out...)
+		}
+		stages = out
+		lg.Info("cascaded engine: hotword stage enabled")
 	}
 	if e.vadDetector != nil {
 		vs := newVADStage(

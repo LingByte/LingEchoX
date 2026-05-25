@@ -71,72 +71,67 @@ func TestParseTenantList(t *testing.T) {
 }
 
 // --- useNativeCascaded ----------------------------------------------
+//
+// Post-rollout semantics: native is the default. The kill-switch
+// envNativeCascadedDisable is the only knob; legacy ALL/TENANTS env
+// vars are no longer load-bearing.
 
-func TestUseNativeCascaded_GlobalOverride(t *testing.T) {
+func TestUseNativeCascaded_DefaultOn(t *testing.T) {
+	cleanup := withNativeCascadedRouter(makeFakeEnv(nil))
+	defer cleanup()
+	if !useNativeCascaded("any-tenant") {
+		t.Error("default behaviour must be native (no env set)")
+	}
+	if !useNativeCascaded("") {
+		t.Error("empty tenant id should still route native (no defensive bail-out)")
+	}
+}
+
+func TestUseNativeCascaded_KillSwitchAll(t *testing.T) {
 	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
-		envNativeCascadedAll: "1",
+		envNativeCascadedDisable: "ALL",
+	}))
+	defer cleanup()
+	if useNativeCascaded("any-tenant") {
+		t.Error("DISABLE=ALL should kill native for every tenant")
+	}
+}
+
+func TestUseNativeCascaded_KillSwitchTruthyValueDisablesAll(t *testing.T) {
+	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
+		envNativeCascadedDisable: "true",
+	}))
+	defer cleanup()
+	if useNativeCascaded("any-tenant") {
+		t.Error("DISABLE=true should also kill native globally")
+	}
+}
+
+func TestUseNativeCascaded_KillSwitchPerTenant(t *testing.T) {
+	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
+		envNativeCascadedDisable: "tenant-a, tenant-b",
+	}))
+	defer cleanup()
+	if useNativeCascaded("tenant-a") {
+		t.Error("tenant-a in disable list should fall back to legacy")
+	}
+	if useNativeCascaded("tenant-b") {
+		t.Error("tenant-b in disable list should fall back to legacy")
+	}
+	if !useNativeCascaded("tenant-z") {
+		t.Error("tenant-z NOT in disable list should still route native")
+	}
+}
+
+func TestUseNativeCascaded_LegacyAllEnvIsNoOp(t *testing.T) {
+	// Pre-rollout playbooks set ALL=1; today that's a no-op (the
+	// flag is no longer read). Ensure native still fires regardless.
+	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
+		envNativeCascadedAll: "0", // simulate legacy disable
 	}))
 	defer cleanup()
 	if !useNativeCascaded("any-tenant") {
-		t.Error("ALL=1 should route every tenant through native")
-	}
-	if !useNativeCascaded("") {
-		t.Error("ALL=1 should still take effect for empty tenant id (caller decides)")
-	}
-}
-
-func TestUseNativeCascaded_GlobalDisabled(t *testing.T) {
-	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
-		envNativeCascadedAll: "0",
-	}))
-	defer cleanup()
-	if useNativeCascaded("any-tenant") {
-		t.Error("ALL=0 should NOT route through native")
-	}
-}
-
-func TestUseNativeCascaded_TenantAllowList(t *testing.T) {
-	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
-		envNativeCascadedTenants: "tenant-a, tenant-b",
-	}))
-	defer cleanup()
-	if !useNativeCascaded("tenant-a") {
-		t.Error("tenant-a is in the allow-list; should route native")
-	}
-	if !useNativeCascaded("tenant-b") {
-		t.Error("tenant-b is in the allow-list; should route native")
-	}
-	if useNativeCascaded("tenant-c") {
-		t.Error("tenant-c is NOT in the allow-list; should NOT route native")
-	}
-}
-
-func TestUseNativeCascaded_EmptyTenantNeverMatchesAllowList(t *testing.T) {
-	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
-		envNativeCascadedTenants: "tenant-a",
-	}))
-	defer cleanup()
-	if useNativeCascaded("") {
-		t.Error("empty tenant id must not match the allow-list (defensive)")
-	}
-}
-
-func TestUseNativeCascaded_NoEnvDefaultOff(t *testing.T) {
-	cleanup := withNativeCascadedRouter(makeFakeEnv(nil))
-	defer cleanup()
-	if useNativeCascaded("any-tenant") {
-		t.Error("no env vars set; default behaviour must be legacy bridge")
-	}
-}
-
-func TestUseNativeCascaded_AllOverridesAllowList(t *testing.T) {
-	cleanup := withNativeCascadedRouter(makeFakeEnv(map[string]string{
-		envNativeCascadedAll:     "true",
-		envNativeCascadedTenants: "only-tenant-a",
-	}))
-	defer cleanup()
-	if !useNativeCascaded("tenant-z") {
-		t.Error("ALL=true takes precedence over the allow-list; tenant-z should route native")
+		t.Error("legacy ALL=0 should be ignored; native is the default")
 	}
 }
 
