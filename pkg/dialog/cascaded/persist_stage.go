@@ -102,6 +102,14 @@ func newPersistStage(p TurnPersister) *persistStage {
 	return &persistStage{persister: p, nowFn: time.Now}
 }
 
+// NewPersistStage is the exported entry point for callers outside
+// this package (notably pkg/dialog/realtime). Returns pipeline.Stage
+// so callers don't depend on the concrete type. Pass a nil persister
+// for a no-op observer that still passes frames through unchanged.
+func NewPersistStage(p TurnPersister) pipeline.Stage {
+	return newPersistStage(p)
+}
+
 // Name implements pipeline.Stage.
 func (persistStage) Name() string { return "persist" }
 

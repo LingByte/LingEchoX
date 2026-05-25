@@ -64,7 +64,8 @@ pkg/sip/conversation/
 | PR-9h | `bb3d10a` | Turn 持久化 Stage | `RecordDialogTurn` 下沉到 pipeline.Stage |
 | PR-9i | `e3d42b2` | 转人工流水接通 native | tool 注册 + 后turn 触发 + 转接期间 LLM 抑制 |
 | PR-9j | `99878d9` | Native 路径接通延迟直方图（LLM/E2E） | persister 调用 `ObserveLLMFirstByte / E2EFirstByte` |
-| PR-9k | _本次_ | 补齐 `TTSFirstByte` 直方图 | persistStage 跟踪首帧 PCM 时间 |
+| PR-9k | `afad91a` | 补齐 `TTSFirstByte` 直方图 | persistStage 跟踪首帧 PCM 时间 |
+| PR-10a | _本次_ | `pkg/dialog/realtime` 引擎骨架 | agentStage + 复用 cascaded 的 hotword/persist Stage |
 
 ---
 
@@ -271,5 +272,6 @@ sum by (mode, result) (rate(sip_voice_attach_total[5m]))
 
 ---
 
-_最近更新：PR-9g 之后，cascaded 通路默认走 native engine；只剩
-transfer/intent/persistence 三块还在老路径上等迁移。_
+_最近更新：PR-10a 之后，`pkg/dialog/realtime` 引擎骨架就位
+（agentStage + 复用 cascaded 的 hotword/persist Stage）。SIP 侧
+realtime 仍走 legacy 路径，PR-10b 接入 native realtime route。_

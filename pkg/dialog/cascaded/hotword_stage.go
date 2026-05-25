@@ -64,6 +64,15 @@ func withHotwordObserver(fn func(raw, corrected string, isFinal bool)) hotwordSt
 	return func(s *hotwordStage) { s.onCorrected = fn }
 }
 
+// NewHotwordStage is the exported entry point for callers outside this
+// package (notably pkg/dialog/realtime, which reuses the same stage
+// at the tail of its pipeline). Returns pipeline.Stage so callers
+// don't depend on the concrete type. Pass a nil rewriter for a
+// no-op stage.
+func NewHotwordStage(r TextRewriter) pipeline.Stage {
+	return newHotwordStage(r)
+}
+
 // newHotwordStage builds the stage. Nil rewriter → passthrough.
 func newHotwordStage(r TextRewriter, opts ...hotwordStageOption) *hotwordStage {
 	s := &hotwordStage{rewriter: r}
