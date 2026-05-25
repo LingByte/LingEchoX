@@ -167,6 +167,57 @@ func buildNativeCascadedLLM(ctx context.Context, env VoiceEnv, callID string) (c
 	return &nativeCascadedLLM{provider: provider, model: model}, nil
 }
 
+// --- Turn persister adapter -----------------------------------------
+
+// buildNativeTurnPersister returns a cascaded.TurnPersister that
+// records every completed turn via RecordDialogTurn, populating the
+// DialogTurn shape with provider tags drawn from the tenant
+// VoiceEnv. Persistence runs in a detached goroutine so the
+// pipeline never waits on DB IO.
+//
+// callID is the SIP CallID under which turns are stored; the engine
+// receives only Config.CallID (string) so this MUST be passed in
+// explicitly.
+func buildNativeTurnPersister(env VoiceEnv, callID string) cascaded.TurnPersister {
+	asrProv := "qcloud_asr"
+	if env.ASRModelType != "" {
+		asrProv = env.ASRModelType
+	}
+	ttsProv := strings.TrimSpace(env.TTSProvider)
+	if ttsProv == "" {
+		ttsProv = "qcloud_tts"
+	}
+	llmModel := strings.TrimSpace(env.LLMModel)
+	if llmModel == "" {
+		llmModel = "qwen-plus"
+	}
+	return cascaded.TurnPersisterFunc(func(ctx context.Context, rec cascaded.TurnRecord) {
+		// Drop empty / interrupted turns — no ASR text AND no AI
+		// reply means nothing actionable happened.
+		if strings.TrimSpace(rec.UserText) == "" && strings.TrimSpace(rec.AIText) == "" {
+			return
+		}
+		dt := DialogTurn{
+			ASRText:     rec.UserText,
+			LLMText:     rec.AIText,
+			ASRProvider: asrProv,
+			TTSProvider: ttsProv,
+			LLMModel:    llmModel,
+			Trigger:     "final",
+			LLMFirstMs:  rec.LLMFirstMs,
+			LLMWallMs:   rec.LLMWallMs,
+			PipelineMs:  rec.PipelineMs,
+			At:          rec.CompletedAt,
+		}
+		// RecordDialogTurn writes via the SetSIPTurnPersist
+		// callback; the legacy path also dispatches under a fresh
+		// context so DB hiccups don't propagate to the pipeline.
+		bg := context.Background()
+		_ = ctx // intentionally unused — DB writes outlive the call ctx
+		go RecordDialogTurn(bg, callID, dt)
+	})
+}
+
 // --- TTS adapter ----------------------------------------------------
 
 // nativeCascadedTTS adapts *siptts.Pipeline to cascaded.TTSService.

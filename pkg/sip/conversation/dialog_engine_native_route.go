@@ -297,6 +297,11 @@ func attachVoiceViaNativeCascaded(
 	// uses (SIP_HOTWORD_CORRECTIONS / _JSON). nil-safe inside the
 	// stage so an unconfigured tenant just passes text through.
 	hotword := NewSIPHotwordCorrector(lg)
+	// Turn persister — appends every completed turn to sip_calls.turns
+	// via RecordDialogTurn so the new path matches the legacy
+	// per-turn CDR shape (ASR text, AI reply, provider tags,
+	// latency).
+	persister := buildNativeTurnPersister(env, cs.CallID)
 	cfg := engine.Config{
 		Mode:     engine.ModeCascadedNative,
 		CallID:   port.CallID(),
@@ -310,6 +315,7 @@ func attachVoiceViaNativeCascaded(
 		cascaded.WithLLMService(llmSvc),
 		cascaded.WithTTSService(ttsSvc),
 		cascaded.WithTextRewriter(hotword),
+		cascaded.WithTurnPersister(persister),
 	)
 	lg.Info("native cascaded attach: routing through cascaded.Engine",
 		zap.String("call_id", cs.CallID),

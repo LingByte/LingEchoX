@@ -52,6 +52,13 @@ type Engine struct {
 	// reaching the LLM. nil → no rewriting (default).
 	textRewriter TextRewriter
 
+	// PR-9h — optional turn persister. When set, a persistStage is
+	// appended to the tail of the pipeline so completed turns get
+	// observed end-to-end and handed to the persister
+	// (RecordDialogTurn from the SIP side, typically). nil → no
+	// persistence (test default).
+	turnPersister TurnPersister
+
 	attached   atomic.Bool // single-shot Attach guard
 	detachOnce sync.Once   // idempotent Detach guard
 
@@ -125,6 +132,13 @@ func WithTTSService(svc TTSService) Option {
 // Correct() before reaching the LLM. Pass nil to disable.
 func WithTextRewriter(r TextRewriter) Option {
 	return func(e *Engine) { e.textRewriter = r }
+}
+
+// WithTurnPersister installs a turn observer at the tail of the
+// pipeline. The persister sees one TurnRecord per completed turn
+// (KindTextFinal → ... → KindAITextDone). Pass nil to disable.
+func WithTurnPersister(p TurnPersister) Option {
+	return func(e *Engine) { e.turnPersister = p }
 }
 
 // New builds an Engine for the supplied Config. Apply Options for
@@ -262,6 +276,13 @@ func (e *Engine) Attach(ctx context.Context, port engine.MediaPort, lg engine.Lo
 		// Insert at the FRONT so VAD sees PCM before ASR consumes it.
 		stages = append([]pipeline.Stage{vs}, stages...)
 		lg.Info("cascaded engine: vad stage enabled", engine.F("stages", len(stages)))
+	}
+	if e.turnPersister != nil {
+		// Append at the TAIL — persistStage is a pass-through
+		// observer; placing it last guarantees it sees frames in
+		// their final downstream form.
+		stages = append(stages, newPersistStage(e.turnPersister))
+		lg.Info("cascaded engine: persist stage enabled")
 	}
 
 	pipe, err := pipeline.New("cascaded", stages)
