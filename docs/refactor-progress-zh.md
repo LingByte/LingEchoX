@@ -62,7 +62,8 @@ pkg/sip/conversation/
 | PR-9f | `7a5dc48` | 真 provider 适配器 | native 通话真出声 |
 | PR-9g | `f0c5768` | 全量切到 native + hotword Stage + 录音 | 默认 native，灰度开关翻转成 kill-switch |
 | PR-9h | `bb3d10a` | Turn 持久化 Stage | `RecordDialogTurn` 下沉到 pipeline.Stage |
-| PR-9i | _本次_ | 转人工流水接通 native | tool 注册 + 后turn 触发 + 转接期间 LLM 抑制 |
+| PR-9i | `e3d42b2` | 转人工流水接通 native | tool 注册 + 后turn 触发 + 转接期间 LLM 抑制 |
+| PR-9j | _本次_ | Native 路径接通延迟直方图 | persister 调用 `ObserveLLMFirstByte / E2EFirstByte` |
 
 ---
 
@@ -242,10 +243,9 @@ sum by (mode, result) (rate(sip_voice_attach_total[5m]))
 
 1. ~~**Transfer Tool Stage**~~ — 已在 PR-9i 接通。
 2. ~~**Dialog Turn Persistence Stage**~~ — 已在 PR-9h 接通。
-3. **Native 路径的延迟直方图**：当前 `LLMFirstMs / TTSMs / PipelineMs`
-   只在老路径采集，native 需要补一份 Stage-aware 的实现（`persistStage`
-   已经收集了 `LLMFirstMs / LLMWallMs / PipelineMs`，把这些喂到
-   `voiceMetrics.Observe*` 即可）。
+3. ~~**Native 路径的延迟直方图**~~ — 已在 PR-9j 接通 `LLMFirstByte`
+   和 `E2EFirstByte`；`TTSFirstByte` 暂留给 legacy（需要新增
+   ttsStage 内部"首帧 PCM 时间"事件，下一 PR 处理）。
 4. **Intent Detection Stage**：realtime 路径上的意图识别下沉成
    Stage，cascaded 与 realtime 都能复用。
 5. **Native realtime 引擎**：`pkg/dialog/realtime` 仍是 stub；

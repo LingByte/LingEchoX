@@ -47,6 +47,7 @@ import (
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	sipasr "github.com/LinByte/VoiceServer/pkg/voice/asr"
+	voiceMetrics "github.com/LinByte/VoiceServer/pkg/voice/metrics"
 	siprecorder "github.com/LinByte/VoiceServer/pkg/voice/recorder"
 	siptts "github.com/LinByte/VoiceServer/pkg/voice/tts"
 	"go.uber.org/zap"
@@ -258,6 +259,19 @@ func buildNativeTurnPersister(env VoiceEnv, callID string, provider llm.LLMProvi
 			bg := context.Background()
 			_ = ctx
 			go RecordDialogTurn(bg, callID, dt)
+			// Per-turn latency histograms — parity with legacy
+			// attachVoiceInner so dashboards see new-path turns
+			// in the same series. ObserveX is a no-op for ms<=0.
+			//
+			// NOTE: TTSFirstByte is intentionally NOT observed
+			// here. persistStage measures LLM-side wall time only;
+			// the legacy TTSMs counter ticked from per-Speak
+			// timing inside streamLLMToTTS. Wiring it on native
+			// requires a per-turn TTS-stage hook (next PR); until
+			// then we leave the TTS histogram to the legacy path
+			// rather than report a misleading value.
+			voiceMetrics.ObserveLLMFirstByte(rec.LLMFirstMs)
+			voiceMetrics.ObserveE2EFirstByte(rec.PipelineMs)
 		}
 		// Post-turn transfer trigger — same precedence the legacy
 		// path uses: Alibaba's per-provider pending action wins
