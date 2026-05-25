@@ -30,19 +30,21 @@ func TestWireDialogEngineBridge_RegistersBothModes(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
-	if len(wired) != 2 {
-		t.Fatalf("wired modes = %v, want both cascaded+realtime", wired)
+	// PR-9d added ModeCascadedNative to the wire-set alongside the
+	// two legacy modes; expect all three now.
+	if len(wired) != 3 {
+		t.Fatalf("wired modes = %v, want cascaded+realtime+cascaded-native", wired)
 	}
 	got := map[engine.Mode]bool{}
 	for _, m := range wired {
 		got[m] = true
 	}
-	if !got[engine.ModeCascaded] || !got[engine.ModeRealtime] {
+	if !got[engine.ModeCascaded] || !got[engine.ModeRealtime] || !got[engine.ModeCascadedNative] {
 		t.Errorf("missing mode in %v", wired)
 	}
 	regs := engine.RegisteredModes()
-	if len(regs) < 2 {
-		t.Errorf("engine.RegisteredModes = %v, want >=2", regs)
+	if len(regs) < 3 {
+		t.Errorf("engine.RegisteredModes = %v, want >=3", regs)
 	}
 }
 

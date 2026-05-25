@@ -128,8 +128,20 @@ func New(cfg engine.Config, opts ...Option) *Engine {
 	return e
 }
 
-// Mode reports the static engine mode. Always engine.ModeCascaded.
-func (e *Engine) Mode() engine.Mode { return engine.ModeCascaded }
+// Mode reports the engine mode this instance was built under. Either
+// engine.ModeCascaded (legacy-bridge replacement) or
+// engine.ModeCascadedNative (parallel native path behind a feature
+// flag). Falls back to ModeCascaded when cfg.Mode is unset so older
+// callers that build the engine via cascaded.New(engine.Config{})
+// without a Mode keep working.
+func (e *Engine) Mode() engine.Mode {
+	switch e.cfg.Mode {
+	case engine.ModeCascaded, engine.ModeCascadedNative:
+		return e.cfg.Mode
+	default:
+		return engine.ModeCascaded
+	}
+}
 
 // Attach binds the engine to one MediaPort. Returns quickly; the
 // pipeline runs in goroutines owned by the engine until Detach (or

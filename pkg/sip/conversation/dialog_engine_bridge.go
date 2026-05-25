@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/LinByte/VoiceServer/pkg/dialog/cascaded"
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
 	"github.com/LinByte/VoiceServer/pkg/dialog/legacy"
 	"github.com/LinByte/VoiceServer/pkg/logger"
@@ -68,6 +69,16 @@ func WireDialogEngineBridge() (wired []engine.Mode, errs []error) {
 				continue
 			}
 			wired = append(wired, m)
+		}
+		// PR-9d: register the native cascaded factory under
+		// ModeCascadedNative so the per-tenant feature flag in
+		// dialog_engine_native_route.go can route through
+		// engine.New(ModeCascadedNative). The legacy bridge above
+		// keeps ModeCascaded; the two coexist.
+		if err := cascaded.RegisterNative(); err != nil {
+			errs = append(errs, fmt.Errorf("dialog engine bridge: register native cascaded: %w", err))
+		} else {
+			wired = append(wired, engine.ModeCascadedNative)
 		}
 	})
 	return wired, errs

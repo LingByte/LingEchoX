@@ -14,7 +14,22 @@ const (
 	// quality in latency-tolerant settings (1-3s end-of-turn) and
 	// when you need explicit control over each stage (e.g. content
 	// moderation between LLM and TTS).
+	//
+	// In production this mode is owned by the legacy bridge
+	// (pkg/sip/conversation/dialog_engine_bridge.go) which wraps
+	// AttachCascadedLegacy. The native pipeline implementation
+	// (pkg/dialog/cascaded.Engine) registers under
+	// ModeCascadedNative so the two paths can coexist behind a
+	// per-tenant feature flag.
 	ModeCascaded Mode = "cascaded"
+
+	// ModeCascadedNative selects the native cascaded engine
+	// (pkg/dialog/cascaded.Engine) — same ASR → LLM → TTS contract
+	// as ModeCascaded, but driven by the new pipeline.Stage
+	// runtime instead of the legacy attachVoiceInner code path.
+	// Routed to per-tenant via DIALOG_NATIVE_CASCADED_* feature
+	// flags in pkg/sip/conversation/dialog_engine_native_route.go.
+	ModeCascadedNative Mode = "cascaded-native"
 
 	// ModeRealtime hands the entire turn to a single multimodal
 	// provider (Qwen-Omni / GPT-4o realtime / Doubao realtime). Best
@@ -30,7 +45,7 @@ const (
 // IsValid reports whether m is one of the supported engine modes.
 func (m Mode) IsValid() bool {
 	switch m {
-	case ModeCascaded, ModeRealtime, ModeHybrid:
+	case ModeCascaded, ModeCascadedNative, ModeRealtime, ModeHybrid:
 		return true
 	default:
 		return false
@@ -72,9 +87,9 @@ type Detach func(context.Context) error
 type Initiator string
 
 const (
-	InitiatorUser    Initiator = "user"    // PSTN caller
-	InitiatorAI      Initiator = "ai"      // dialog engine decision
-	InitiatorAgent   Initiator = "agent"   // human seat
-	InitiatorSystem  Initiator = "system"  // platform-side (timeout / error)
+	InitiatorUser     Initiator = "user"     // PSTN caller
+	InitiatorAI       Initiator = "ai"       // dialog engine decision
+	InitiatorAgent    Initiator = "agent"    // human seat
+	InitiatorSystem   Initiator = "system"   // platform-side (timeout / error)
 	InitiatorOperator Initiator = "operator" // ops / admin force
 )

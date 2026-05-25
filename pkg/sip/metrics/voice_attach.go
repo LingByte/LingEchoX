@@ -48,6 +48,17 @@ const (
 	//   from = "pipeline"
 	//   to   = "realtime"
 	MetricVoiceAttachModeFallbackTotal = "sip_voice_attach_mode_fallback_total"
+
+	// MetricVoiceAttachNativeTotal counts decisions made by the
+	// PR-9d feature flag to route a cascaded call through the
+	// native cascaded.Engine (engine.ModeCascadedNative) instead of
+	// the legacy bridge. Independent from MetricVoiceAttachTotal so
+	// dashboards can monitor opt-in rollout without churn-affecting
+	// the existing per-mode chart.
+	//
+	// labels:
+	//   result = "ok" | "err"
+	MetricVoiceAttachNativeTotal = "sip_voice_attach_native_total"
 )
 
 // Voice-attach mode enum. Mirrors engine.Mode but kept as plain
@@ -74,6 +85,8 @@ var (
 	labelsVoiceAttachRealtimeOK    = map[string]string{"mode": VoiceAttachModeRealtime, "result": VoiceAttachResultOK}
 	labelsVoiceAttachRealtimeErr   = map[string]string{"mode": VoiceAttachModeRealtime, "result": VoiceAttachResultConfigError}
 	labelsVoiceAttachFallbackPL2RT = map[string]string{"from": VoiceAttachModeCascaded, "to": VoiceAttachModeRealtime}
+	labelsVoiceAttachNativeOK      = map[string]string{"result": VoiceAttachResultOK}
+	labelsVoiceAttachNativeErr     = map[string]string{"result": "err"}
 )
 
 // init registers the label whitelist for the voice-attach metrics so
@@ -81,6 +94,7 @@ var (
 func init() {
 	metrics.RegisterLabels(MetricVoiceAttachTotal, "mode", "result")
 	metrics.RegisterLabels(MetricVoiceAttachModeFallbackTotal, "from", "to")
+	metrics.RegisterLabels(MetricVoiceAttachNativeTotal, "result")
 }
 
 // VoiceAttach bumps the voice-attach counter for one OnACK dispatch.
@@ -122,4 +136,17 @@ func VoiceAttachModeFallback(from, to string) {
 		return
 	}
 	// Unknown pair — drop silently. Same discipline as VoiceAttach.
+}
+
+// VoiceAttachNative bumps the native-cascaded routing counter. ok
+// reflects whether the native attach succeeded (engine.New + Attach
+// both returned nil). Hot-path: same allocation profile as VoiceAttach.
+func VoiceAttachNative(ok bool) {
+	labels := labelsVoiceAttachNativeErr
+	if ok {
+		labels = labelsVoiceAttachNativeOK
+	}
+	metrics.Default.IncCounter(MetricVoiceAttachNativeTotal,
+		"Native cascaded engine attach decisions (PR-9d feature flag).",
+		labels)
 }

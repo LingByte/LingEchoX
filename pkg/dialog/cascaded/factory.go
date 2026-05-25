@@ -13,22 +13,55 @@ import (
 // call. Stateless; the Build method is safe to call from any goroutine.
 type factory struct{}
 
-// Build constructs a cascaded.Engine. Validates that cfg.Mode is the
-// one this factory is registered under (defensive — engine.New
-// already checks, but a misconfigured custom registry could call us
-// directly with the wrong mode).
+// Build constructs a cascaded.Engine. The factory accepts BOTH
+// ModeCascaded and ModeCascadedNative — same engine implementation
+// either way; the mode label is propagated to Engine.Mode() so
+// metrics / logs distinguish "registered as the legacy-bridge
+// substitute" from "registered as the parallel native path behind a
+// feature flag" without code-shape changes here.
 func (factory) Build(cfg engine.Config) (engine.Engine, error) {
-	if cfg.Mode != engine.ModeCascaded {
-		return nil, fmt.Errorf("dialog/cascaded: factory called with mode %q, want %q",
-			string(cfg.Mode), string(engine.ModeCascaded))
+	switch cfg.Mode {
+	case engine.ModeCascaded, engine.ModeCascadedNative:
+		return New(cfg), nil
+	default:
+		return nil, fmt.Errorf("dialog/cascaded: factory called with mode %q, want %q or %q",
+			string(cfg.Mode), string(engine.ModeCascaded), string(engine.ModeCascadedNative))
 	}
-	return New(cfg), nil
 }
 
 // NewFactory returns the cascaded engine factory. Exposed so callers
 // (test setup, feature-flagged production wiring) can register this
 // engine without depending on package-private types.
 func NewFactory() engine.Factory { return factory{} }
+
+// RegisterNative installs the cascaded factory under
+// engine.ModeCascadedNative. This is the production-safe entry
+// point: the legacy bridge already owns engine.ModeCascaded, but
+// nothing claims ModeCascadedNative, so this Register call is
+// idempotent across boots. Re-calling it is a no-op rather than a
+// panic — engine.Register panics on duplicate, so we recover and
+// surface a sentinel error instead.
+//
+// Typical bootstrap shape (from
+// pkg/sip/conversation/dialog_engine_bridge.go):
+//
+//	if err := cascaded.RegisterNative(); err != nil { … }
+//
+// Pair with the per-tenant feature flag in
+// dialog_engine_native_route.go to actually route traffic through
+// this factory; otherwise it sits dormant in the registry.
+func RegisterNative() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// engine.Register panics on duplicate — squash to a
+			// sentinel so callers can shrug it off on second
+			// bootstrap (hot reload, repeated tests, etc.).
+			err = fmt.Errorf("dialog/cascaded: RegisterNative: %v", r)
+		}
+	}()
+	engine.Register(engine.ModeCascadedNative, factory{})
+	return nil
+}
 
 // RegisterForTesting installs the cascaded factory under
 // engine.ModeCascaded. Intended for tests and feature-flagged

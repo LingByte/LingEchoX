@@ -75,6 +75,14 @@ func AttachVoiceViaEngine(ctx context.Context, cs *sipSession.CallSession, lg *z
 	if !mode.IsValid() {
 		mode = EngineAttachFallbackMode
 	}
+	// PR-9d feature-flag gate: per-tenant routing of cascaded mode
+	// to the native cascaded.Engine. Realtime is untouched. The
+	// native path owns its own metrics + Streaming MediaPort + does
+	// NOT fall back to legacy on engine error (operators flip the
+	// flag off to recover).
+	if mode == engine.ModeCascaded && useNativeCascaded(port.TenantID()) {
+		return attachVoiceViaNativeCascaded(ctx, cs, lg)
+	}
 	cfg := engine.Config{
 		Mode:     mode,
 		CallID:   port.CallID(),
