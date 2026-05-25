@@ -60,7 +60,9 @@ pkg/sip/conversation/
 | PR-9d | `12cf556` | 租户级特性开关（已弃用，见 PR-9g） | 灰度铺设 |
 | PR-9e | `37cc39e` | tenant env 去重加载 | 每通电话一次 DB 命中 |
 | PR-9f | `7a5dc48` | 真 provider 适配器 | native 通话真出声 |
-| PR-9g | _本次_ | 全量切到 native + hotword Stage + 录音 | 默认 native，灰度开关翻转成 kill-switch |
+| PR-9g | `f0c5768` | 全量切到 native + hotword Stage + 录音 | 默认 native，灰度开关翻转成 kill-switch |
+| PR-9h | `bb3d10a` | Turn 持久化 Stage | `RecordDialogTurn` 下沉到 pipeline.Stage |
+| PR-9i | _本次_ | 转人工流水接通 native | tool 注册 + 后turn 触发 + 转接期间 LLM 抑制 |
 
 ---
 
@@ -207,12 +209,22 @@ DIALOG_NATIVE_CASCADED_DISABLE=tenant-a,tenant-b
 
 下一通通话即刻生效，不需要重启 SIP 服务。事故恢复后把变量删掉即可。
 
-### 6.3 还没搬过来的能力
+### 6.3 已搬过来 / 还没搬过来
 
-- **Transfer-to-agent 工具调用**：legacy 路径里的 `registerSIPTransferTool`
-  和"AI 决策转人工"现在 native 路径**不会触发**。在搬完之前，需要这一
-  功能的租户要么继续用 legacy（kill-switch 回退），要么人工转接。
-- **Realtime intent detection 联动**：realtime 模式不受影响。
+**已经搬过来（PR-9g/h/i）**
+
+- ASR/LLM/TTS 真 provider、立体声录音、hotword 修正、Turn 持久化
+- 转人工：`transfer_to_agent` function tool 在 LLM 上注册；turn
+  结束时检查 pending 标志并触发 `TriggerTransferToAgent`；
+  `IsTransferInProgress` 期间 LLM 调用直接短路（避免转接中 AI
+  抢话）。
+
+**还没搬过来（仍走 legacy 路径）**
+
+- Realtime 多模态（`env.VoiceMode=realtime`）整条链路。
+- Welcome / Auto-prompt 路径上由 realtime 提供的意图识别联动。
+- Native 路径的延迟直方图（`LLMFirstByte / TTSFirstByte / E2EFirstByte`
+  当前只在 legacy cascaded 内采集）。
 
 ### 6.4 监控健康
 
@@ -228,19 +240,19 @@ sum by (mode, result) (rate(sip_voice_attach_total[5m]))
 
 ## 7. 待办（下一阶段路线图）
 
-1. **Transfer Tool Stage**：把 `registerSIPTransferTool` 的工具调用
-   流移到独立 Stage，native 引擎里也能"AI 决策转人工"。
-2. **Intent Detection Stage**：realtime 路径上的意图识别下沉成
+1. ~~**Transfer Tool Stage**~~ — 已在 PR-9i 接通。
+2. ~~**Dialog Turn Persistence Stage**~~ — 已在 PR-9h 接通。
+3. **Native 路径的延迟直方图**：当前 `LLMFirstMs / TTSMs / PipelineMs`
+   只在老路径采集，native 需要补一份 Stage-aware 的实现（`persistStage`
+   已经收集了 `LLMFirstMs / LLMWallMs / PipelineMs`，把这些喂到
+   `voiceMetrics.Observe*` 即可）。
+4. **Intent Detection Stage**：realtime 路径上的意图识别下沉成
    Stage，cascaded 与 realtime 都能复用。
-3. **Dialog Turn Persistence Stage**：把 `RecordDialogTurn` 的写库
-   也变成下游 Stage，与 LLM/TTS 解耦。
-4. **Native 路径的延迟直方图**：当前 `LLMFirstMs / TTSMs / PipelineMs`
-   只在老路径采集，native 需要补一份 Stage-aware 的实现。
 5. **Native realtime 引擎**：`pkg/dialog/realtime` 仍是 stub；
    阶段三末把 realtime 多模态也搬过来，cascaded ⇄ realtime 切换变成
    纯注册表选择。
-6. **删除老 `attachVoiceInner` 主体**：上面 1-4 做完、native 稳定一段
-   时间后，`voice.go` 里 1200 行可以缩成几十行的兼容包装，最后整体删除
+6. **删除老 `attachVoiceInner` 主体**：native 稳定一段时间后，
+   `voice.go` 里 1200 行可以缩成几十行的兼容包装，最后整体删除
    `dialog_engine_legacy.go` 的 cascaded 分支。
 
 ---

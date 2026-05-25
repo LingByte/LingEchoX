@@ -113,6 +113,12 @@ func buildNativeCascadedASR(env VoiceEnv, lg *zap.Logger) (cascaded.ASRRecognize
 type nativeCascadedLLM struct {
 	provider llm.LLMProvider
 	model    string
+	// callID is the SIP CallID used by the transfer-suppression
+	// gate: while a transfer is in progress IsTransferInProgress
+	// returns true and StreamReply short-circuits with an empty
+	// reply so the caller side hears the agent, not the AI talking
+	// over hold music.
+	callID string
 }
 
 // StreamReply implements cascaded.LLMService. Delegates to
@@ -120,6 +126,11 @@ type nativeCascadedLLM struct {
 // short-circuiting onDelta when ctx fires (the provider itself reads
 // its construction-time ctx, so we additionally race on the
 // per-call ctx here to avoid a stuck stage during teardown).
+//
+// Pre-flight gate: if a transfer is already in progress for this
+// call we return early with an empty reply (the LLM stage still
+// emits the obligatory isComplete=true terminal so downstream
+// stages close out the turn cleanly).
 func (s *nativeCascadedLLM) StreamReply(
 	ctx context.Context,
 	userText string,
@@ -127,6 +138,17 @@ func (s *nativeCascadedLLM) StreamReply(
 ) (string, error) {
 	if s == nil || s.provider == nil {
 		return "", errors.New("native cascaded LLM: nil provider")
+	}
+	if s.callID != "" && IsTransferInProgress(s.callID) {
+		// Suppress LLM during transfer — same gate the legacy
+		// triggerTurn closure applies.
+		_ = onDelta("", true)
+		return "", nil
+	}
+	// Record transfer-intent occurrence for the heuristic
+	// confirm-count machinery (legacy parity).
+	if s.callID != "" {
+		_ = recordSIPTransferIntent(s.callID, userText)
 	}
 	options := llm.QueryOptions{Model: s.model, Stream: true}
 	cancelled := false
@@ -145,14 +167,27 @@ func (s *nativeCascadedLLM) StreamReply(
 	return s.provider.QueryStream(userText, options, guarded)
 }
 
-// buildNativeCascadedLLM constructs an llm.LLMProvider and wraps it
-// into a cascaded.LLMService.
-func buildNativeCascadedLLM(ctx context.Context, env VoiceEnv, callID string) (cascaded.LLMService, error) {
+// buildNativeCascadedLLM constructs an llm.LLMProvider, registers
+// the transfer-to-agent function tool, and wraps it into a
+// cascaded.LLMService.
+//
+// The tool registration is the same one the legacy attachVoiceInner
+// installs: the LLM gets a `transfer_to_agent` function it can call
+// when the user asks to be transferred. Tool invocation flips an
+// in-memory "transfer pending" bit (markSIPTransferPending); the
+// post-turn transfer trigger inside buildNativeTurnPersister
+// consumes that bit and fires TriggerTransferToAgent.
+//
+// Returns the wrapped service AND the underlying provider so
+// callers can interrogate provider-specific state (Alibaba carries
+// its own pending-action queue separate from the function-tool
+// machinery).
+func buildNativeCascadedLLM(ctx context.Context, env VoiceEnv, callID string, lg *zap.Logger) (cascaded.LLMService, llm.LLMProvider, error) {
 	if strings.TrimSpace(env.LLMProvider) == "" {
-		return nil, fmt.Errorf("native cascaded LLM: env.LLMProvider unset")
+		return nil, nil, fmt.Errorf("native cascaded LLM: env.LLMProvider unset")
 	}
 	if strings.TrimSpace(env.LLMAPIKey) == "" && !strings.EqualFold(env.LLMProvider, "ollama") {
-		return nil, fmt.Errorf("native cascaded LLM: missing API key for provider %q", env.LLMProvider)
+		return nil, nil, fmt.Errorf("native cascaded LLM: missing API key for provider %q", env.LLMProvider)
 	}
 	model := env.LLMModel
 	if model == "" {
@@ -162,23 +197,35 @@ func buildNativeCascadedLLM(ctx context.Context, env VoiceEnv, callID string) (c
 	endpointOrAppID := llmAPIURLForProvider(env)
 	provider, err := llm.NewLLMProvider(ctx, env.LLMProvider, env.LLMAPIKey, endpointOrAppID, systemPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("native cascaded LLM: provider init: %w", err)
+		return nil, nil, fmt.Errorf("native cascaded LLM: provider init: %w", err)
 	}
-	return &nativeCascadedLLM{provider: provider, model: model}, nil
+	// Mirror legacy attachVoiceInner: install the transfer function
+	// tool. nil-safe under the hood when callID is empty.
+	registerSIPTransferTool(provider, callID, TransferConfirmRequired(env), lg)
+	return &nativeCascadedLLM{provider: provider, model: model, callID: callID}, provider, nil
 }
 
 // --- Turn persister adapter -----------------------------------------
 
 // buildNativeTurnPersister returns a cascaded.TurnPersister that
-// records every completed turn via RecordDialogTurn, populating the
-// DialogTurn shape with provider tags drawn from the tenant
-// VoiceEnv. Persistence runs in a detached goroutine so the
-// pipeline never waits on DB IO.
 //
-// callID is the SIP CallID under which turns are stored; the engine
-// receives only Config.CallID (string) so this MUST be passed in
-// explicitly.
-func buildNativeTurnPersister(env VoiceEnv, callID string) cascaded.TurnPersister {
+//  1. records every completed turn via RecordDialogTurn (CDR row),
+//  2. fires post-turn transfer-to-agent if the LLM either invoked
+//     the transfer_to_agent function tool (sets the in-memory
+//     pending bit via markSIPTransferPending) OR — for Alibaba —
+//     left a transfer_to_agent action in its pending-action queue.
+//
+// Both behaviours match the legacy attachVoiceInner post-stream
+// block. The transfer trigger fires AFTER the AI's confirmation
+// reply was synthesised (we observe end-of-LLM, which the engine
+// emits AFTER all KindAIText deltas, AFTER the TTS stage finished
+// flushing) so the user actually hears the AI's "好的，我马上为您
+// 转人工" before the leg gets retargeted.
+//
+// callID is the SIP CallID under which turns are stored. provider
+// is the underlying llm.LLMProvider so we can interrogate
+// Alibaba-specific pending actions; pass nil for non-Alibaba paths.
+func buildNativeTurnPersister(env VoiceEnv, callID string, provider llm.LLMProvider, lg *zap.Logger) cascaded.TurnPersister {
 	asrProv := "qcloud_asr"
 	if env.ASRModelType != "" {
 		asrProv = env.ASRModelType
@@ -194,27 +241,42 @@ func buildNativeTurnPersister(env VoiceEnv, callID string) cascaded.TurnPersiste
 	return cascaded.TurnPersisterFunc(func(ctx context.Context, rec cascaded.TurnRecord) {
 		// Drop empty / interrupted turns — no ASR text AND no AI
 		// reply means nothing actionable happened.
-		if strings.TrimSpace(rec.UserText) == "" && strings.TrimSpace(rec.AIText) == "" {
-			return
+		hasContent := strings.TrimSpace(rec.UserText) != "" || strings.TrimSpace(rec.AIText) != ""
+		if hasContent {
+			dt := DialogTurn{
+				ASRText:     rec.UserText,
+				LLMText:     rec.AIText,
+				ASRProvider: asrProv,
+				TTSProvider: ttsProv,
+				LLMModel:    llmModel,
+				Trigger:     "final",
+				LLMFirstMs:  rec.LLMFirstMs,
+				LLMWallMs:   rec.LLMWallMs,
+				PipelineMs:  rec.PipelineMs,
+				At:          rec.CompletedAt,
+			}
+			bg := context.Background()
+			_ = ctx
+			go RecordDialogTurn(bg, callID, dt)
 		}
-		dt := DialogTurn{
-			ASRText:     rec.UserText,
-			LLMText:     rec.AIText,
-			ASRProvider: asrProv,
-			TTSProvider: ttsProv,
-			LLMModel:    llmModel,
-			Trigger:     "final",
-			LLMFirstMs:  rec.LLMFirstMs,
-			LLMWallMs:   rec.LLMWallMs,
-			PipelineMs:  rec.PipelineMs,
-			At:          rec.CompletedAt,
+		// Post-turn transfer trigger — same precedence the legacy
+		// path uses: Alibaba's per-provider pending action wins
+		// over the generic function-tool pending bit.
+		transferNow := false
+		if ap, ok := provider.(*llm.AlibabaProvider); ok && ap != nil {
+			if action := ap.ConsumePendingAction(); action == "transfer_to_agent" {
+				transferNow = true
+			}
+		} else if consumeSIPTransferPending(callID) {
+			transferNow = true
 		}
-		// RecordDialogTurn writes via the SetSIPTurnPersist
-		// callback; the legacy path also dispatches under a fresh
-		// context so DB hiccups don't propagate to the pipeline.
-		bg := context.Background()
-		_ = ctx // intentionally unused — DB writes outlive the call ctx
-		go RecordDialogTurn(bg, callID, dt)
+		if transferNow {
+			if lg != nil {
+				lg.Info("native cascaded: transfer trigger after AI confirmation",
+					zap.String("call_id", callID))
+			}
+			TriggerTransferToAgent(context.Background(), callID, lg)
+		}
 	})
 }
 

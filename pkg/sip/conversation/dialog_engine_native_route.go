@@ -277,7 +277,7 @@ func attachVoiceViaNativeCascaded(
 		sipMetrics.VoiceAttachNative(false)
 		return fmt.Errorf("native cascaded attach: ASR: %w", err)
 	}
-	llmSvc, err := buildNativeCascadedLLM(ctx, env, cs.CallID)
+	llmSvc, llmProv, err := buildNativeCascadedLLM(ctx, env, cs.CallID, lg)
 	if err != nil {
 		_ = port.Close()
 		sipMetrics.VoiceAttachNative(false)
@@ -301,7 +301,7 @@ func attachVoiceViaNativeCascaded(
 	// via RecordDialogTurn so the new path matches the legacy
 	// per-turn CDR shape (ASR text, AI reply, provider tags,
 	// latency).
-	persister := buildNativeTurnPersister(env, cs.CallID)
+	persister := buildNativeTurnPersister(env, cs.CallID, llmProv, lg)
 	cfg := engine.Config{
 		Mode:     engine.ModeCascadedNative,
 		CallID:   port.CallID(),
