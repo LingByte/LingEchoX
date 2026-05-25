@@ -66,7 +66,8 @@ pkg/sip/conversation/
 | PR-9j | `99878d9` | Native 路径接通延迟直方图（LLM/E2E） | persister 调用 `ObserveLLMFirstByte / E2EFirstByte` |
 | PR-9k | `afad91a` | 补齐 `TTSFirstByte` 直方图 | persistStage 跟踪首帧 PCM 时间 |
 | PR-10a | `cd3ae81` | `pkg/dialog/realtime` 引擎骨架 | agentStage + 复用 cascaded 的 hotword/persist Stage |
-| PR-10b | _本次_ | SIP↔realtime 适配器 + 灰度开关 | `pkg/realtime.Agent` → `dialogrealtime.Agent` 桥；默认 OFF |
+| PR-10b | `703ee61` | SIP↔realtime 适配器 + 灰度开关 | `pkg/realtime.Agent` → `dialogrealtime.Agent` 桥；默认 OFF |
+| PR-10c | _本次_ | PCM pacer Stage | 把 Agent 的不规则 PCM 块重整成 20 ms/帧恒速流 |
 
 ---
 
@@ -273,6 +274,7 @@ sum by (mode, result) (rate(sip_voice_attach_total[5m]))
 
 ---
 
-_最近更新：PR-10a 之后，`pkg/dialog/realtime` 引擎骨架就位
-（agentStage + 复用 cascaded 的 hotword/persist Stage）。SIP 侧
-realtime 仍走 legacy 路径，PR-10b 接入 native realtime route。_
+_最近更新：PR-10c 之后，realtime 引擎具备 PCM pacer Stage，解决了
+Agent 端 PCM 突发输出导致的「电话端语音突然蹦字」问题。SIP 侧
+realtime 仍走 legacy 路径，等录音/欢迎语/转人工 Stage 化后
+（PR-10d/e）再翻转 `DIALOG_NATIVE_REALTIME_TENANTS` 灰度开关。_

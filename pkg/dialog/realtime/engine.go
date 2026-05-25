@@ -49,6 +49,13 @@ type Engine struct {
 	textRewriter TextRewriter
 	persister    TurnPersister
 
+	// pacerCfg drives the optional PCM pacer stage. Zero-value
+	// PacerConfig{} is treated as "disabled"; callers opt in via
+	// WithPacer. The legacy realtime path always paces, so most
+	// SIP wiring will pass a populated config here.
+	pacerCfg    PacerConfig
+	pacerActive bool
+
 	attached   atomic.Bool
 	detachOnce sync.Once
 
@@ -71,6 +78,19 @@ func WithTextRewriter(r TextRewriter) Option {
 // pipeline. The persister sees one TurnRecord per completed turn.
 func WithTurnPersister(p TurnPersister) Option {
 	return func(e *Engine) { e.persister = p }
+}
+
+// WithPacer enables the PCM pacer stage between agentStage and the
+// tail stages. SIP attaches MUST pass a populated config (typically
+// SampleRate=bridgeRate, FrameMillis=20, PrebufferFrames=3) so the
+// SIP RTP transport sees a steady 20 ms cadence; without pacing,
+// realtime providers' burst output produces "compressed playback"
+// for the caller.
+func WithPacer(cfg PacerConfig) Option {
+	return func(e *Engine) {
+		e.pacerCfg = cfg
+		e.pacerActive = true
+	}
 }
 
 // New builds an Engine bound to the supplied AgentBuilder. The
@@ -126,6 +146,20 @@ func (e *Engine) Attach(ctx context.Context, port engine.MediaPort, lg engine.Lo
 	// turns, and KindPCM for synthesised audio — exactly the frame
 	// vocabulary the cascaded tail stages already consume.
 	stages := []pipeline.Stage{newAgentStage(e.builder)}
+	if e.pacerActive {
+		// Pacer sits right after agentStage so it smooths the
+		// AI-side PCM bursts before any downstream observer
+		// (recorder tap, transfer audio gate, MediaPort) sees
+		// the stream. Hotword / persist tail stages don't
+		// consume KindPCM so their position relative to the
+		// pacer doesn't matter.
+		stages = append(stages, newPacerStage(e.pacerCfg))
+		lg.Info("realtime engine: pacer stage enabled",
+			engine.F("sample_rate", e.pacerCfg.SampleRate),
+			engine.F("frame_ms", e.pacerCfg.FrameMillis),
+			engine.F("prebuffer_frames", e.pacerCfg.PrebufferFrames),
+		)
+	}
 	if e.textRewriter != nil {
 		stages = append(stages, cascaded.NewHotwordStage(e.textRewriter))
 		lg.Info("realtime engine: hotword stage enabled")
