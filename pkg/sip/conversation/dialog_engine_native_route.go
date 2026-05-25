@@ -36,19 +36,25 @@ package conversation
 //     sip_voice_attach_native_total{result} so we can monitor opt-in
 //     rollout from Grafana.
 //
+// PR-9e adds production-side provider adapters (see
+// dialog_engine_native_providers.go) so opted-in tenants actually
+// produce audio. ASR/LLM/TTS are loaded from the tenant's VoiceEnv
+// (cached on ctx by ResolveAttachModeWithEnv) and passed as
+// cascaded.With{ASRRecognizer,LLMService,TTSService} options. The
+// registry-based engine.New(ModeCascadedNative) path is preserved
+// for any caller that doesn't need provider injection; the
+// feature-flag attach below uses cascaded.New directly to leverage
+// the option pattern.
+//
 // What this PR does NOT do:
 //
-//   - Wire real ASR / LLM / TTS providers into cascaded.Engine. The
-//     engine still uses stub stages today (PR-9c shipped the real
-//     stage implementations behind options; the production-side
-//     adapters that satisfy ASRRecognizer / LLMService / TTSService
-//     land in PR-9e). Until then, native-routed traffic produces
-//     silence — which is exactly why the feature flag defaults off
-//     and ships in a separate PR from the provider wiring.
-//
 //   - Fall back from native to legacy on engine error. If the
-//     feature flag is on for a tenant and engine.New / Attach fails,
-//     the call ends. Operators flip the flag off to recover.
+//     feature flag is on for a tenant and provider/engine init
+//     fails, the call ends. Operators flip the flag off to recover.
+//
+//   - Wire intent detection / transfer tool / hotword corrector
+//     into the native pipeline. Those are next on the roadmap as
+//     dedicated pipeline.Stages.
 
 import (
 	"context"
@@ -57,6 +63,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/LinByte/VoiceServer/pkg/dialog/cascaded"
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
 	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
@@ -205,28 +212,68 @@ func attachVoiceViaNativeCascaded(
 	if cs == nil {
 		return nil
 	}
+	lg = ensureVoiceLogger(lg)
+	env, ok := loadVoiceEnvOrConfigError(ctx, cs, lg)
+	if !ok {
+		sipMetrics.VoiceAttachNative(false)
+		return attachTenantConfigErrorPlayback(cs, lg)
+	}
+	if !pipelineCredsUsable(env) {
+		sipMetrics.VoiceAttachNative(false)
+		lg.Warn("native cascaded attach: tenant pipeline creds unusable; playing config error",
+			zap.String("call_id", cs.CallID),
+			zap.Uint("tenant_id", cs.TenantID()),
+		)
+		return attachTenantConfigErrorPlayback(cs, lg)
+	}
 	port := NewStreamingCallSessionPort(cs)
 	if port == nil {
 		sipMetrics.VoiceAttachNative(false)
-		return fmt.Errorf("dialog engine native attach: failed to wrap CallSession into StreamingCallSessionPort (call_id=%q)",
-			cs.CallID)
+		return fmt.Errorf("native cascaded attach: failed to wrap CallSession (call_id=%q)", cs.CallID)
+	}
+	// Build the three production-side adapters. Each failure path
+	// closes the port + bumps the err metric so dashboards can tell
+	// "feature flag on but tenant misconfigured" from "feature flag
+	// on and engine bug". We do NOT fall back to legacy — the
+	// operator opted this tenant in.
+	asrSvc, err := buildNativeCascadedASR(env, lg)
+	if err != nil {
+		_ = port.Close()
+		sipMetrics.VoiceAttachNative(false)
+		return fmt.Errorf("native cascaded attach: ASR: %w", err)
+	}
+	llmSvc, err := buildNativeCascadedLLM(ctx, env, cs.CallID)
+	if err != nil {
+		_ = port.Close()
+		sipMetrics.VoiceAttachNative(false)
+		return fmt.Errorf("native cascaded attach: LLM: %w", err)
+	}
+	ttsSvc, err := buildNativeCascadedTTS(env, port.SampleRate(), lg)
+	if err != nil {
+		_ = port.Close()
+		sipMetrics.VoiceAttachNative(false)
+		return fmt.Errorf("native cascaded attach: TTS: %w", err)
 	}
 	cfg := engine.Config{
 		Mode:     engine.ModeCascadedNative,
 		CallID:   port.CallID(),
 		TenantID: port.TenantID(),
 	}
-	eng, err := engine.New(cfg)
-	if err != nil {
-		_ = port.Close()
-		sipMetrics.VoiceAttachNative(false)
-		return fmt.Errorf("dialog engine native attach: build engine for mode=%q: %w",
-			string(cfg.Mode), err)
-	}
-	lg.Info("dialog engine native attach: routing through cascaded.Engine",
+	// cascaded.New (rather than engine.New) so we can pass the
+	// per-call provider Options. The registry-registered factory
+	// stays in place for callers that don't need injection.
+	eng := cascaded.New(cfg,
+		cascaded.WithASRRecognizer(asrSvc),
+		cascaded.WithLLMService(llmSvc),
+		cascaded.WithTTSService(ttsSvc),
+	)
+	lg.Info("native cascaded attach: routing through cascaded.Engine",
 		zap.String("call_id", cs.CallID),
 		zap.String("tenant_id", port.TenantID()),
 		zap.String("mode", string(cfg.Mode)),
+		zap.String("asr_provider", env.ASRProvider),
+		zap.String("llm_provider", env.LLMProvider),
+		zap.String("tts_provider", env.TTSProvider),
 	)
 	attachErr := cs.AttachVoiceConversation(func() error {
 		_, e := eng.Attach(ctx, port, NewZapEngineLogger(lg))
@@ -235,7 +282,7 @@ func attachVoiceViaNativeCascaded(
 	if attachErr != nil {
 		_ = port.Close()
 		sipMetrics.VoiceAttachNative(false)
-		return fmt.Errorf("dialog engine native attach: %w", attachErr)
+		return fmt.Errorf("native cascaded attach: %w", attachErr)
 	}
 	sipMetrics.VoiceAttachNative(true)
 	return nil
