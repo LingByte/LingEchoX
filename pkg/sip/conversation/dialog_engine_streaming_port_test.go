@@ -99,9 +99,9 @@ func TestStreamingPort_NilReceiverDegradesGracefully(t *testing.T) {
 	if err := p.Close(); err != nil {
 		t.Errorf("nil port Close = %v, want nil", err)
 	}
-	// OnBargeIn / fireBargeIn on nil port: no panic.
+	// OnBargeIn / TriggerBargeIn on nil port: no panic.
 	p.OnBargeIn(func() {})
-	p.fireBargeIn()
+	p.TriggerBargeIn()
 }
 
 // --- SendOutputPCM behaviour ---------------------------------------
@@ -230,11 +230,11 @@ func TestStreamingPort_OnBargeIn_StoresAndFires(t *testing.T) {
 
 	var hits atomic.Int32
 	p.OnBargeIn(func() { hits.Add(1) })
-	p.fireBargeIn()
+	p.TriggerBargeIn()
 	if got := hits.Load(); got != 1 {
 		t.Errorf("hits after one fire = %d, want 1", got)
 	}
-	p.fireBargeIn()
+	p.TriggerBargeIn()
 	if got := hits.Load(); got != 2 {
 		t.Errorf("hits after two fires = %d, want 2", got)
 	}
@@ -249,7 +249,7 @@ func TestStreamingPort_OnBargeIn_NilClearsRegistration(t *testing.T) {
 	var hits atomic.Int32
 	p.OnBargeIn(func() { hits.Add(1) })
 	p.OnBargeIn(nil)
-	p.fireBargeIn() // should NOT increment
+	p.TriggerBargeIn() // should NOT increment
 	if got := hits.Load(); got != 0 {
 		t.Errorf("hits after clear+fire = %d, want 0", got)
 	}
@@ -260,8 +260,8 @@ func TestStreamingPort_OnBargeIn_NoCallbackFireIsSafe(t *testing.T) {
 	defer cancel()
 	p := newStreamingPort(nil, ms, 16000)
 	defer func() { _ = p.Close() }()
-	// No OnBargeIn registered yet; fireBargeIn must not panic.
-	p.fireBargeIn()
+	// No OnBargeIn registered yet; TriggerBargeIn must not panic.
+	p.TriggerBargeIn()
 }
 
 // --- engine.MediaPort compliance ------------------------------------

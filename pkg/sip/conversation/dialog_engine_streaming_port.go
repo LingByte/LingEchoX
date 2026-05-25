@@ -286,11 +286,15 @@ func (p *StreamingCallSessionPort) OnBargeIn(fn func()) {
 	p.bargeMu.Unlock()
 }
 
-// fireBargeIn is the package-internal hook that invokes the
-// registered barge-in callback (if any). Reserved for the future
-// VAD-pipeline stage; not yet wired but exposed at package scope so
-// the upcoming PR can call it without exporting OnBargeIn's storage.
-func (p *StreamingCallSessionPort) fireBargeIn() {
+// TriggerBargeIn is the public entry the cascaded engine's vadStage
+// invokes when it detects user speech during TTS playback. It runs
+// the registered OnBargeIn callback (if any) AND drains queued AI
+// output on the underlying media session — the latter is the only
+// way the caller stops hearing the cancelled AI utterance before
+// the cancel round-trip completes.
+//
+// Idempotent / nil-safe / safe from any goroutine.
+func (p *StreamingCallSessionPort) TriggerBargeIn() {
 	if p == nil {
 		return
 	}

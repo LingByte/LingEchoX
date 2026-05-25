@@ -29,23 +29,60 @@ type Engine struct {
 	cfg    engine.Config
 	stages []pipeline.Stage
 
-	attached  atomic.Bool // single-shot Attach guard
-	detachOnce sync.Once  // idempotent Detach guard
+	// PR-9b — optional VAD wiring. When detector is non-nil we
+	// prepend a vadStage to the chain at Attach time and the engine
+	// maintains the ttsPlaying bit observed by that stage.
+	vadDetector    BargeInDetector
+	bargeInHandler func()
+
+	attached   atomic.Bool // single-shot Attach guard
+	detachOnce sync.Once   // idempotent Detach guard
 
 	// State filled in by Attach for Detach to consume.
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel  context.CancelFunc
+	done    chan struct{}
 	pipeErr error
 }
 
-// New builds an Engine for the supplied Config using the default
-// stage list. Stage swapping happens in factory.go via Build() once
-// real providers are wired in.
-func New(cfg engine.Config) *Engine {
-	return &Engine{
+// Option mutates an Engine during construction. Variadic options keep
+// the common-case `cascaded.New(cfg)` call site clean while letting
+// production wiring inject VAD / providers without growing the
+// constructor signature.
+type Option func(*Engine)
+
+// WithVADDetector installs a barge-in detector. When non-nil a vadStage
+// is prepended to the pipeline and the engine maintains the
+// "tts playing" bit the stage queries.
+//
+// Pass nil to explicitly disable (default).
+func WithVADDetector(d BargeInDetector) Option {
+	return func(e *Engine) { e.vadDetector = d }
+}
+
+// WithBargeInHandler registers the callback invoked when vadStage
+// fires positive. Typically: drain the MediaPort's queued AI PCM and
+// abort in-flight TTS. The cascaded engine doesn't know how to do
+// either action itself (the port owns the queue; future TTS stages
+// own their own ctx) so the SIP-side wiring supplies the closure.
+//
+// No-op when no detector is configured.
+func WithBargeInHandler(fn func()) Option {
+	return func(e *Engine) { e.bargeInHandler = fn }
+}
+
+// New builds an Engine for the supplied Config. Apply Options for
+// VAD / providers / future hooks.
+func New(cfg engine.Config, opts ...Option) *Engine {
+	e := &Engine{
 		cfg:    cfg,
 		stages: defaultStages(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(e)
+		}
+	}
+	return e
 }
 
 // Mode reports the static engine mode. Always engine.ModeCascaded.
@@ -80,16 +117,37 @@ func (e *Engine) Attach(ctx context.Context, port engine.MediaPort, lg engine.Lo
 	lg.Info("cascaded engine: attaching",
 		engine.F("stages", len(e.stages)))
 
-	pipe, err := pipeline.New("cascaded", e.stages)
-	if err != nil {
-		return nil, fmt.Errorf("dialog/cascaded: build pipeline: %w", err)
-	}
-
 	// Engine-owned context. ctx-cancel from the caller AND Detach
 	// both trip this; whichever fires first wins.
 	engCtx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
 	e.done = make(chan struct{})
+
+	// PR-9b — assemble the active stage list. When a VAD detector is
+	// configured we prepend vadStage and maintain the "tts playing"
+	// bit downstream-of-engine. ttsPlaying flips:
+	//   - true  on the first KindPCM frame of an AI turn (the engine
+	//           sees AI-PCM in the output stream).
+	//   - false on KindAITextDone (the LLM/TTS turn boundary).
+	// The bit is read from inside the vadStage's Run loop so it must
+	// be safe to read concurrently — atomic.Bool fits.
+	var ttsPlaying atomic.Bool
+	stages := e.stages
+	if e.vadDetector != nil {
+		vs := newVADStage(
+			e.vadDetector,
+			ttsPlaying.Load,
+			e.bargeInHandler,
+		)
+		// Insert at the FRONT so VAD sees PCM before ASR consumes it.
+		stages = append([]pipeline.Stage{vs}, e.stages...)
+		lg.Info("cascaded engine: vad stage enabled", engine.F("stages", len(stages)))
+	}
+
+	pipe, err := pipeline.New("cascaded", stages)
+	if err != nil {
+		return nil, fmt.Errorf("dialog/cascaded: build pipeline: %w", err)
+	}
 
 	// PCM-in bridge: MediaPort.InputPCM() emits engine.PCMFrame; the
 	// pipeline expects pipeline.Frame{Kind: KindPCM, PCM: ...}. We
@@ -135,6 +193,20 @@ func (e *Engine) Attach(ctx context.Context, port engine.MediaPort, lg engine.Lo
 					stageErr = pipeline.Wait(errs)
 					e.pipeErr = stageErr
 					return
+				}
+				// Maintain the TTS-playing bit consumed by vadStage:
+				//   - any synthesized PCM frame implies a turn is in
+				//     progress.
+				//   - KindAITextDone closes the turn so VAD stops
+				//     gating speech as barge-in.
+				// We track these BEFORE the kind filter so the bit
+				// stays accurate even if non-PCM frames are passed
+				// through to a future post-pipeline observer.
+				switch f.Kind {
+				case pipeline.KindPCM:
+					ttsPlaying.Store(true)
+				case pipeline.KindAITextDone:
+					ttsPlaying.Store(false)
 				}
 				if f.Kind != pipeline.KindPCM {
 					continue
