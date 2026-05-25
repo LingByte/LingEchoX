@@ -66,7 +66,12 @@ func AttachVoiceViaEngine(ctx context.Context, cs *sipSession.CallSession, lg *z
 		// can't silently break this path.
 		return fmt.Errorf("dialog engine attach: failed to wrap CallSession (call_id=%q)", cs.CallID)
 	}
-	mode := ResolveAttachMode(ctx, cs, lg)
+	// Resolve mode AND prime the context with the loaded VoiceEnv so
+	// the per-mode attacher re-uses the load instead of hitting the
+	// DB a second time for the same call. Falls back transparently
+	// when env load fails (ResolveAttachModeWithEnv leaves ctx
+	// unchanged in that case).
+	mode, ctx := ResolveAttachModeWithEnv(ctx, cs, lg)
 	if !mode.IsValid() {
 		mode = EngineAttachFallbackMode
 	}

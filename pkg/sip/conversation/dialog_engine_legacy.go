@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/pkg/dialog/engine"
+	"github.com/LinByte/VoiceServer/pkg/dialog/tenantcfg"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
@@ -52,6 +53,13 @@ func ensureVoiceLogger(lg *zap.Logger) *zap.Logger {
 // failure path emits the same lg.Info / lg.Warn line as the original
 // AttachVoicePipeline so SRE log alerts keep working unchanged.
 func loadVoiceEnvOrConfigError(ctx context.Context, cs *sipSession.CallSession, lg *zap.Logger) (VoiceEnv, bool) {
+	// Fast path: a previous step in this OnACK call chain may have
+	// already loaded the VoiceEnv (typically ResolveAttachMode does
+	// this so it can pick cascaded vs realtime). Reusing that load
+	// saves one DB hit per call (~10ms behind the loader cache).
+	if env, ok := tenantcfg.VoiceEnvFromContext(ctx); ok {
+		return env, true
+	}
 	tid := cs.TenantID()
 	if tid == 0 {
 		lg.Info("sip voice pipeline skipped (no tenant_id on call; play config_error)",
@@ -77,6 +85,39 @@ func loadVoiceEnvOrConfigError(ctx context.Context, cs *sipSession.CallSession, 
 	return env, true
 }
 
+// ResolveAttachModeWithEnv is like ResolveAttachMode but also publishes
+// the loaded VoiceEnv onto the returned context. Per-mode attachers
+// called later in the same OnACK call chain skip a redundant tenant
+// row lookup by reading the cached env via tenantcfg.VoiceEnvFromContext
+// inside loadVoiceEnvOrConfigError. Returns the original ctx unchanged
+// when the env could not be loaded (tenant gate / DB error) — the
+// per-mode attacher will then re-attempt and surface the same
+// config_error.wav fallback it always did.
+func ResolveAttachModeWithEnv(ctx context.Context, cs *sipSession.CallSession, lg *zap.Logger) (engine.Mode, context.Context) {
+	if cs == nil {
+		return engine.ModeCascaded, ctx
+	}
+	lg = ensureVoiceLogger(lg)
+	env, ok := loadVoiceEnvOrConfigError(ctx, cs, lg)
+	if !ok {
+		return engine.ModeCascaded, ctx
+	}
+	// Stash for downstream per-mode attachers BEFORE returning.
+	ctx = tenantcfg.WithVoiceEnv(ctx, env)
+	if strings.EqualFold(env.VoiceMode, "realtime") {
+		return engine.ModeRealtime, ctx
+	}
+	if strings.EqualFold(env.VoiceMode, "pipeline") && !pipelineCredsUsable(env) && TenantRealtimeReady(env) {
+		lg.Info("sip voice: auto-resolving to realtime (pipeline creds unusable, realtime ready)",
+			zap.String("call_id", cs.CallID),
+			zap.Uint("tenant_id", cs.TenantID()),
+		)
+		sipMetrics.VoiceAttachModeFallback(sipMetrics.VoiceAttachModeCascaded, sipMetrics.VoiceAttachModeRealtime)
+		return engine.ModeRealtime, ctx
+	}
+	return engine.ModeCascaded, ctx
+}
+
 // ResolveAttachMode picks the engine.Mode that best matches the tenant's
 // configuration. The decision tree mirrors AttachVoicePipeline's
 // "last-mile mode normalisation" so the on-ACK seam preserves the
@@ -92,33 +133,13 @@ func loadVoiceEnvOrConfigError(ctx context.Context, cs *sipSession.CallSession, 
 //
 // The lg argument is optional; nil falls back to logger.Lg.
 //
-// IMPORTANT: this function deliberately re-loads tenant config; the
-// per-mode attacher re-loads again when it actually attaches. The
-// duplicate DB lookup (typically <10ms behind a cache) is the price
-// of splitting attach into per-mode helpers without yet extracting
-// env into engine.Config. Phase 3 will dedupe this by stashing the
-// resolved spec on engine.Config.
+// Callers that don't need the publishing behaviour of
+// ResolveAttachModeWithEnv use this thin wrapper. The OnACK path
+// (AttachVoiceViaEngine) prefers ResolveAttachModeWithEnv so the
+// per-mode attacher re-uses the load.
 func ResolveAttachMode(ctx context.Context, cs *sipSession.CallSession, lg *zap.Logger) engine.Mode {
-	if cs == nil {
-		return engine.ModeCascaded
-	}
-	lg = ensureVoiceLogger(lg)
-	env, ok := loadVoiceEnvOrConfigError(ctx, cs, lg)
-	if !ok {
-		return engine.ModeCascaded
-	}
-	if strings.EqualFold(env.VoiceMode, "realtime") {
-		return engine.ModeRealtime
-	}
-	if strings.EqualFold(env.VoiceMode, "pipeline") && !pipelineCredsUsable(env) && TenantRealtimeReady(env) {
-		lg.Info("sip voice: auto-resolving to realtime (pipeline creds unusable, realtime ready)",
-			zap.String("call_id", cs.CallID),
-			zap.Uint("tenant_id", cs.TenantID()),
-		)
-		sipMetrics.VoiceAttachModeFallback(sipMetrics.VoiceAttachModeCascaded, sipMetrics.VoiceAttachModeRealtime)
-		return engine.ModeRealtime
-	}
-	return engine.ModeCascaded
+	mode, _ := ResolveAttachModeWithEnv(ctx, cs, lg)
+	return mode
 }
 
 // AttachCascadedLegacy forces the cascaded (3-step ASR + LLM + TTS)

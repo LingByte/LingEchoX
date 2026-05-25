@@ -238,3 +238,97 @@ func TestAttachVoicePipeline_DelegatesToPerModeAttacher(t *testing.T) {
 		_ = AttachVoicePipeline(context.Background(), cs, nil)
 	})
 }
+
+// --- ResolveAttachModeWithEnv + loadVoiceEnvOrConfigError ctx fast path
+
+// countingLoader wraps a real loader so tests can assert how many DB
+// hits the legacy attach path performs end-to-end.
+type countingLoader struct {
+	inner TenantVoiceJSONLoader
+	hits  int
+}
+
+func (c *countingLoader) load(ctx context.Context, tid uint) ([]byte, []byte, []byte, []byte, string, bool) {
+	c.hits++
+	return c.inner(ctx, tid)
+}
+
+func TestResolveAttachModeWithEnv_StashesEnvOnContext(t *testing.T) {
+	installFakeVoiceLoader(t, fakeVoiceEnvLoader(
+		mustJSON(t, map[string]any{"provider": "qcloud", "appId": "1", "secretId": "s", "secretKey": "k"}),
+		mustJSON(t, map[string]any{"provider": "qcloud", "appId": "1", "secretId": "s", "secretKey": "k"}),
+		mustJSON(t, map[string]any{"provider": "openai", "apiKey": "k"}),
+		nil,
+		"pipeline",
+		true,
+	))
+	cs := newTenantCS("c-stash", 30)
+	mode, newCtx := ResolveAttachModeWithEnv(context.Background(), cs, nil)
+	if mode != engine.ModeCascaded {
+		t.Errorf("mode = %q, want cascaded", mode)
+	}
+	if _, ok := tenantcfg.VoiceEnvFromContext(newCtx); !ok {
+		t.Fatal("ResolveAttachModeWithEnv did not publish env on returned ctx")
+	}
+}
+
+func TestResolveAttachModeWithEnv_NilCSReturnsOriginalCtx(t *testing.T) {
+	orig := context.Background()
+	mode, got := ResolveAttachModeWithEnv(orig, nil, nil)
+	if mode != engine.ModeCascaded {
+		t.Errorf("mode = %q, want cascaded", mode)
+	}
+	if got != orig {
+		t.Error("nil cs should return ctx unchanged")
+	}
+	if _, ok := tenantcfg.VoiceEnvFromContext(got); ok {
+		t.Error("nil cs should NOT publish env")
+	}
+}
+
+func TestResolveAttachModeWithEnv_LoaderFailReturnsOriginalCtx(t *testing.T) {
+	installFakeVoiceLoader(t, fakeVoiceEnvLoader(nil, nil, nil, nil, "", false))
+	orig := context.Background()
+	cs := newTenantCS("c-fail", 31)
+	mode, got := ResolveAttachModeWithEnv(orig, cs, nil)
+	if mode != engine.ModeCascaded {
+		t.Errorf("mode = %q, want cascaded", mode)
+	}
+	if _, ok := tenantcfg.VoiceEnvFromContext(got); ok {
+		t.Error("loader-fail should NOT publish env")
+	}
+}
+
+func TestLoadVoiceEnvOrConfigError_CtxFastPathAvoidsLoader(t *testing.T) {
+	// Counting loader returns valid pipeline JSON the FIRST time
+	// only; subsequent calls return not-ok. The fast path must mean
+	// we never make the second call.
+	inner := fakeVoiceEnvLoader(
+		mustJSON(t, map[string]any{"provider": "qcloud", "appId": "1", "secretId": "s", "secretKey": "k"}),
+		mustJSON(t, map[string]any{"provider": "qcloud", "appId": "1", "secretId": "s", "secretKey": "k"}),
+		mustJSON(t, map[string]any{"provider": "openai", "apiKey": "k"}),
+		nil,
+		"pipeline",
+		true,
+	)
+	cl := &countingLoader{inner: inner}
+	installFakeVoiceLoader(t, cl.load)
+
+	cs := newTenantCS("c-fp", 40)
+	// First call: cold ctx → must hit loader once.
+	_, newCtx := ResolveAttachModeWithEnv(context.Background(), cs, nil)
+	if cl.hits != 1 {
+		t.Fatalf("after Resolve: hits = %d, want 1", cl.hits)
+	}
+	// Second call with the priming ctx: must NOT hit the loader.
+	env, ok := loadVoiceEnvOrConfigError(newCtx, cs, ensureVoiceLogger(nil))
+	if !ok {
+		t.Fatal("fast path should report ok=true")
+	}
+	if env.VoiceMode != "pipeline" {
+		t.Errorf("fast-path env.VoiceMode = %q, want pipeline", env.VoiceMode)
+	}
+	if cl.hits != 1 {
+		t.Errorf("hits = %d after fast-path read, want still 1", cl.hits)
+	}
+}
