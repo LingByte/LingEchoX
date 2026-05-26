@@ -92,6 +92,30 @@ function serializeShiftSchedule(segments: ShiftSegment[]): string {
   )
 }
 
+function formatMetaDataForForm(raw?: string): string {
+  const t = raw?.trim()
+  if (!t) return ''
+  try {
+    const parsed = JSON.parse(t) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return JSON.stringify(parsed, null, 2)
+    }
+  } catch {
+    return raw ?? ''
+  }
+  return raw ?? ''
+}
+
+function parseMetaDataForSave(text: string): Record<string, unknown> | undefined {
+  const t = text.trim()
+  if (!t) return undefined
+  const parsed = JSON.parse(t) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('扩展字段须为 JSON 对象，例如 {"FactoryNumber":"F-1001"}')
+  }
+  return parsed as Record<string, unknown>
+}
+
 type FormState = {
   trunkNumberId: number
   name: string
@@ -100,6 +124,8 @@ type FormState = {
   weight: number
   workState: string
   shiftSegments: ShiftSegment[]
+  remark: string
+  metaDataText: string
 }
 const defaultForm = (): FormState => ({
   trunkNumberId: 0,
@@ -109,6 +135,8 @@ const defaultForm = (): FormState => ({
   weight: 10,
   workState: 'offline',
   shiftSegments: [],
+  remark: '',
+  metaDataText: '',
 })
 
 const defaultShiftSegment = (): ShiftSegment => ({
@@ -206,6 +234,8 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
       weight: r.weight ?? 0,
       workState: r.workState || 'offline',
       shiftSegments: parseShiftScheduleJSON(r.shiftSchedule ?? ''),
+      remark: r.remark || '',
+      metaDataText: formatMetaDataForForm(r.metaData),
     })
     setModalOpen(true)
   }
@@ -236,6 +266,17 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         }
       }
       const shiftTrim = serializeShiftSchedule(segs)
+      let metaData: Record<string, unknown> | undefined
+      try {
+        metaData = parseMetaDataForSave(form.metaDataText)
+      } catch (e: unknown) {
+        showAlert(e instanceof Error ? e.message : '扩展字段 JSON 格式错误', 'error')
+        return
+      }
+      if (form.remark.trim().length > 128) {
+        showAlert('备注最多 128 个字符', 'error')
+        return
+      }
       const body = {
         name: form.name.trim(),
         trunkNumberId: form.trunkNumberId,
@@ -250,6 +291,8 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         weight: Number(form.weight) || 0,
         workState: form.workState,
         shiftSchedule: shiftTrim,
+        remark: form.remark.trim(),
+        metaData,
       }
       const res = editingId == null ? await createACDPoolTarget(body) : await updateACDPoolTarget(editingId, body)
       if (res.code === 200) {
@@ -461,6 +504,28 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
               onChange={(v) => setForm((f) => ({ ...f, workState: v as string }))}
               options={ACD_WORK_STATES.filter((ws) => ws === 'offline' || ws === 'available' || ws === 'break').map((ws) => ({ label: workStateLabel(ws), value: ws }))}
             />
+          </div>
+          <div>
+            <Typography.Text style={{ fontSize: 12 }}>备注（可选）</Typography.Text>
+            <Input
+              maxLength={128}
+              showWordLimit
+              placeholder="管理员备注，模板占位符 {{Note}}"
+              value={form.remark}
+              onChange={(v) => setForm((f) => ({ ...f, remark: v }))}
+            />
+          </div>
+          <div>
+            <Typography.Text style={{ fontSize: 12 }}>扩展字段 MetaData（可选）</Typography.Text>
+            <Input.TextArea
+              autoSize={{ minRows: 3, maxRows: 8 }}
+              placeholder={'JSON 对象，例如：\n{\n  "FactoryNumber": "F-1001",\n  "Dept": "售后"\n}'}
+              value={form.metaDataText}
+              onChange={(v) => setForm((f) => ({ ...f, metaDataText: v }))}
+            />
+            <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 11 }}>
+              用于「坐席接听前播报」模板占位符，如 {'{{MetaData.FactoryNumber}}'}（在中继号码设置中配置播报文案）。
+            </Typography.Paragraph>
           </div>
           <div>
             <Typography.Text style={{ fontSize: 12 }}>接线班次（可选）</Typography.Text>

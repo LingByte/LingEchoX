@@ -22,6 +22,10 @@ export interface ACDPoolTargetRow {
   webSeatLastSeenAt?: string
   /** JSON: [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}]; weekdays 0=Sun..6=Sat; empty = 24/7 */
   shiftSchedule?: string
+  /** JSON object for transfer_agent_brief placeholders, e.g. {"FactoryNumber":"F-1001"} */
+  metaData?: string
+  /** Plain-text admin note (max 128 chars); template placeholder {{Note}} */
+  remark?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -74,6 +78,8 @@ export async function createACDPoolTarget(body: {
   weight?: number
   workState?: string
   shiftSchedule?: string
+  remark?: string
+  metaData?: string | Record<string, unknown>
 }): Promise<ApiResponse<ACDPoolTargetRow>> {
   return post('/sip-center/acd-pool', body)
 }
@@ -92,6 +98,8 @@ export async function updateACDPoolTarget(id: number, body: {
   weight?: number
   workState?: string
   shiftSchedule?: string
+  remark?: string
+  metaData?: string | Record<string, unknown>
 }): Promise<ApiResponse<ACDPoolTargetRow>> {
   return put(`/sip-center/acd-pool/${id}`, body)
 }

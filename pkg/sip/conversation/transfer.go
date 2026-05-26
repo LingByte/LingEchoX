@@ -414,6 +414,11 @@ func stopTransferRinging(inboundCallID string) {
 	}
 }
 
+// StopTransferRingingForCall cancels transfer hold/ring playback on the inbound leg (e.g. before WebSeat bridge).
+func StopTransferRingingForCall(inboundCallID string) {
+	stopTransferRinging(inboundCallID)
+}
+
 func lookupInboundSession(callID string) *sipSession.CallSession {
 	if lookupInbound == nil {
 		return nil

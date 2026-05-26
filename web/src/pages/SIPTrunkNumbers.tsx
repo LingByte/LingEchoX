@@ -656,7 +656,7 @@ const SIPTrunkNumbers = () => {
                 maxLength={MAX_TRANSFER_AGENT_BRIEF_LEN}
                 showWordLimit
                 autoSize={{ minRows: 2, maxRows: 4 }}
-                placeholder="例：您好{{Name}}，尾号{{NTail4}}的来电，请接听。"
+                placeholder="例：您好{{Name}}，工厂{{MetaData.FactoryNumber}}，尾号{{NTail4}}的来电，请接听。"
                 value={form.transferAgentBriefText}
                 onChange={(v) =>
                   setForm((f) => ({
@@ -666,10 +666,14 @@ const SIPTrunkNumbers = () => {
                 }
               />
               <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                坐席接通后、与客户通话前，向坐席侧 TTS 播报一句（主叫仍听转接音乐）。占位符：{' '}
-                <Typography.Text code>{'{{N}}'}</Typography.Text> 主叫号码、{' '}
-                <Typography.Text code>{'{{NTail4}}'}</Typography.Text> 尾号四位、{' '}
-                <Typography.Text code>{'{{Name}}'}</Typography.Text> 坐席名称（ACD 名称）。最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字；留空则直接通话。
+                坐席接通后、与客户通话前，向坐席侧 TTS 播报一句（主叫仍听转接音乐）。占位符：
+                <Typography.Text code>{'{{N}}'}</Typography.Text> 主叫号码、
+                <Typography.Text code>{'{{NTail4}}'}</Typography.Text> 尾号四位、
+                <Typography.Text code>{'{{Name}}'}</Typography.Text> 坐席名称、
+                <Typography.Text code>{'{{TargetValue}}'}</Typography.Text> 呼叫号码、
+                <Typography.Text code>{'{{Note}}'}</Typography.Text> 坐席备注、
+                <Typography.Text code>{'{{MetaData.FactoryNumber}}'}</Typography.Text> 坐席 MetaData JSON 字段（在号码池坐席中配置）。
+                最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字；留空则直接通话。
               </Typography.Paragraph>
             </div>
             <div>

@@ -34,11 +34,7 @@ func NormalizeACDDispatchMode(raw string) string {
 // Web rows: TargetValue usually empty; WebSeat handoff when this row wins over SIP rows by Weight.
 type ACDPoolTarget struct {
 	BaseModel
-	TenantID uint `json:"tenantId" gorm:"index;not null;default:0"` // SaaS isolation
-	// TrunkNumberID 把这条 ACD 目标绑定到「某个具体的中继号码」（即被叫号码）。
-	// 0 表示「兜底/任意号码」——历史行为保留。
-	// 当一通来电的被叫号码命中某个 TrunkNumber 时，调度优先选择 trunk_number_id = 该号码 的行；
-	// 没有则回退到 trunk_number_id = 0 的全局兜底行。
+	TenantID              uint       `json:"tenantId" gorm:"index;not null;default:0"`                             // SaaS isolation
 	TrunkNumberID         uint       `json:"trunkNumberId" gorm:"column:trunk_number_id;not null;default:0;index"` // per-number routing
 	Name                  string     `json:"name" gorm:"size:128"`                                                 // optional admin label
 	RouteType             string     `json:"routeType" gorm:"size:16;not null;index"`                              // RouteType is constants.ACDPoolRouteTypeSIP or constants.ACDPoolRouteTypeWeb.
@@ -55,6 +51,9 @@ type ACDPoolTarget struct {
 	WebSeatLastSeenAt     *time.Time `json:"webSeatLastSeenAt" gorm:"column:web_seat_last_seen_at"`   // WebSeatLastSeenAt: route_type=web only; last heartbeat from browser (keepalive). Used for pick + admin "链路在线".
 	// ShiftScheduleJSON optional weekly windows, e.g. [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}] (weekdays: 0=Sun .. 6=Sat). Empty = no restriction.
 	ShiftScheduleJSON string `json:"shiftSchedule" gorm:"column:shift_schedule_json;type:text"`
+	// MetaData optional JSON object for template vars (e.g. transfer_agent_brief {{MetaData.FactoryNumber}}).
+	// Use this for structured fields; BaseModel.Remark remains a short plain-text admin note.
+	MetaData string `json:"metaData" gorm:"column:meta_data;type:text"`
 }
 
 // WebSeatLastSeenFresh reports whether a web seat heartbeat is recent enough to treat the row as reachable.
@@ -271,10 +270,12 @@ func NewACDPoolTargetForCreate(
 	webSeatLastSeen *time.Time,
 	shiftScheduleJSON string,
 	trunkNumberID uint,
+	remark string,
+	metaDataJSON string,
 ) ACDPoolTarget {
 	th, tp, ts := ACDTrunkStorageFields(routeType, sipSource, trunkHost, trunkPort, trunkSig)
 	cid, cdn := ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName)
-	return ACDPoolTarget{
+	row := ACDPoolTarget{
 		TrunkNumberID:         trunkNumberID,
 		Name:                  strings.TrimSpace(name),
 		RouteType:             routeType,
@@ -290,7 +291,10 @@ func NewACDPoolTargetForCreate(
 		WorkStateAt:           &now,
 		WebSeatLastSeenAt:     webSeatLastSeen,
 		ShiftScheduleJSON:     strings.TrimSpace(shiftScheduleJSON),
+		MetaData:              strings.TrimSpace(metaDataJSON),
 	}
+	row.Remark = strings.TrimSpace(remark)
+	return row
 }
 
 // BuildACDPoolTargetUpdateMap builds GORM Updates for admin PUT.
@@ -304,6 +308,8 @@ func BuildACDPoolTargetUpdateMap(
 	updateBy string,
 	shiftScheduleJSON string,
 	trunkNumberID uint,
+	remark string,
+	metaDataJSON string,
 ) map[string]any {
 	th, tp, ts := ACDTrunkStorageFields(routeType, sipSource, trunkHost, trunkPort, trunkSig)
 	cid, cdn := ACDCallerStorageFields(routeType, sipCallerID, sipCallerDisplayName)
@@ -322,6 +328,8 @@ func BuildACDPoolTargetUpdateMap(
 		"work_state":               workState,
 		"updated_at":               now,
 		"shift_schedule_json":      strings.TrimSpace(shiftScheduleJSON),
+		"meta_data":                strings.TrimSpace(metaDataJSON),
+		"remark":                   strings.TrimSpace(remark),
 	}
 	if existing.WorkState != workState {
 		u["work_state_at"] = now

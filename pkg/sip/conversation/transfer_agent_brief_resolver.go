@@ -9,8 +9,8 @@ var (
 	transferAgentBriefTemplateMu sync.RWMutex
 	transferAgentBriefTemplate   func(callID string) string
 
-	transferACDAgentNameMu sync.RWMutex
-	transferACDAgentName     func(callID string) string
+	transferAgentBriefVarsMu sync.RWMutex
+	transferAgentBriefVarsFn func(callID string) TransferAgentBriefVars
 )
 
 // SetTransferAgentBriefTemplateResolver returns the per-DID template from
@@ -21,12 +21,23 @@ func SetTransferAgentBriefTemplateResolver(fn func(callID string) string) {
 	transferAgentBriefTemplateMu.Unlock()
 }
 
-// SetTransferACDAgentNameResolver returns the connected agent display name
-// (acd_pool_targets.name, else target_value) for template {{Name}}.
+// SetTransferAgentBriefVarsResolver supplies caller + ACD seat fields for template rendering.
+func SetTransferAgentBriefVarsResolver(fn func(callID string) TransferAgentBriefVars) {
+	transferAgentBriefVarsMu.Lock()
+	transferAgentBriefVarsFn = fn
+	transferAgentBriefVarsMu.Unlock()
+}
+
+// SetTransferACDAgentNameResolver is kept for compatibility; prefer SetTransferAgentBriefVarsResolver.
 func SetTransferACDAgentNameResolver(fn func(callID string) string) {
-	transferACDAgentNameMu.Lock()
-	transferACDAgentName = fn
-	transferACDAgentNameMu.Unlock()
+	SetTransferAgentBriefVarsResolver(func(callID string) TransferAgentBriefVars {
+		return TransferAgentBriefVars{
+			CallerNumber: extractInboundCallerNumber(callID),
+			Agent: TransferAgentBriefAgent{
+				Name: fn(callID),
+			},
+		}
+	})
 }
 
 func resolveTransferAgentBriefTemplate(callID string) string {
@@ -39,14 +50,22 @@ func resolveTransferAgentBriefTemplate(callID string) string {
 	return strings.TrimSpace(fn(callID))
 }
 
-func resolveTransferACDAgentName(callID string) string {
-	transferACDAgentNameMu.RLock()
-	fn := transferACDAgentName
-	transferACDAgentNameMu.RUnlock()
-	if fn == nil {
-		return ""
+func buildTransferAgentBriefVars(inboundCallID string) TransferAgentBriefVars {
+	transferAgentBriefVarsMu.RLock()
+	fn := transferAgentBriefVarsFn
+	transferAgentBriefVarsMu.RUnlock()
+	if fn != nil {
+		v := fn(inboundCallID)
+		if strings.TrimSpace(v.CallerNumber) == "" {
+			v.CallerNumber = extractInboundCallerNumber(inboundCallID)
+		}
+		return v
 	}
-	return strings.TrimSpace(fn(callID))
+	return TransferAgentBriefVars{
+		CallerNumber: extractInboundCallerNumber(inboundCallID),
+		Agent:        TransferAgentBriefAgent{},
+		Meta:         map[string]any{},
+	}
 }
 
 // PeekInboundTransferACDTargetID returns the last routed acd_pool_targets.id without clearing.
@@ -61,11 +80,4 @@ func PeekInboundTransferACDTargetID(callID string) (uint, bool) {
 		}
 	}
 	return 0, false
-}
-
-func buildTransferAgentBriefVars(inboundCallID string) TransferAgentBriefVars {
-	return TransferAgentBriefVars{
-		CallerNumber: extractInboundCallerNumber(inboundCallID),
-		AgentName:    resolveTransferACDAgentName(inboundCallID),
-	}
 }

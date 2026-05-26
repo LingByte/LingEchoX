@@ -4,6 +4,7 @@ package handlers
 // SPDX-License-Identifier: AGPL-3.0
 
 import (
+	"encoding/json"
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"net/http"
 	"strconv"
@@ -33,12 +34,34 @@ type acdPoolTargetWriteReq struct {
 	WorkState            string `json:"workState"`
 	// ShiftSchedule JSON: e.g. [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}] (weekdays 0=Sun .. 6=Sat). Empty = 24/7.
 	ShiftSchedule string `json:"shiftSchedule"`
+	// Remark plain-text admin note (BaseModel.Remark, max 128 chars).
+	Remark string `json:"remark"`
+	// MetaData optional JSON object for template vars (e.g. {{MetaData.FactoryNumber}} in transfer_agent_brief).
+	MetaData json.RawMessage `json:"metaData"`
 }
 
 // acdPoolTargetListItem adds live SIP registration hint for admin list (not stored in acd_pool_targets).
 type acdPoolTargetListItem struct {
 	models.ACDPoolTarget
 	LiveLineOnline bool `json:"liveLineOnline"`
+}
+
+func normalizeACDPoolTargetWriteMeta(remark string, metaRaw json.RawMessage) (string, string, error) {
+	nRemark, err := models.NormalizeACDRemark(remark)
+	if err != nil {
+		return "", "", err
+	}
+	var metaIn any
+	if len(metaRaw) > 0 {
+		if err := json.Unmarshal(metaRaw, &metaIn); err != nil {
+			return "", "", err
+		}
+	}
+	nMeta, err := models.NormalizeACDMetaDataJSON(metaIn)
+	if err != nil {
+		return "", "", err
+	}
+	return nRemark, nMeta, nil
 }
 
 func (h *Handlers) listACDPoolTargets(c *gin.Context) {
@@ -167,6 +190,11 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		response.Fail(c, "workState 仅允许 available/offline/break", nil)
 		return
 	}
+	nRemark, nMeta, err := normalizeACDPoolTargetWriteMeta(req.Remark, req.MetaData)
+	if err != nil {
+		response.Fail(c, err.Error(), nil)
+		return
+	}
 	now := time.Now()
 	sipSrc := ""
 	if rt == constants.ACDPoolRouteTypeSIP {
@@ -184,6 +212,8 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		req.Weight, ws, now, webSeen,
 		req.ShiftSchedule,
 		req.TrunkNumberID,
+		nRemark,
+		nMeta,
 	)
 	row.TenantID = tid
 	op := middleware.AuditOperator(c)
@@ -208,6 +238,8 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 				req.Weight, ws, now, op,
 				req.ShiftSchedule,
 				req.TrunkNumberID,
+				nRemark,
+				nMeta,
 			)
 			if err := h.db.WithContext(ctx).Model(&models.ACDPoolTarget{}).Where("id = ?", keep.ID).Updates(updates).Error; err != nil {
 				response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
@@ -268,6 +300,11 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		response.Fail(c, "workState 仅允许 available/offline/break", nil)
 		return
 	}
+	nRemark, nMeta, err := normalizeACDPoolTargetWriteMeta(req.Remark, req.MetaData)
+	if err != nil {
+		response.Fail(c, err.Error(), nil)
+		return
+	}
 	now := time.Now()
 	sipSrc := ""
 	if rt == constants.ACDPoolRouteTypeSIP {
@@ -282,6 +319,8 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		req.Weight, ws, now, op,
 		req.ShiftSchedule,
 		req.TrunkNumberID,
+		nRemark,
+		nMeta,
 	)
 	if err := h.db.Model(&row).Updates(updates).Error; err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)

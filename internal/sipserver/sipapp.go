@@ -11,6 +11,7 @@ import (
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/config"
 	"github.com/LinByte/VoiceServer/pkg/logger"
+	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
 	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
 	"github.com/LinByte/VoiceServer/pkg/sip/persist"
@@ -429,23 +430,34 @@ func Start(cfg Config) (*Embedded, error) {
 		}
 		return ""
 	})
-	conversation.SetTransferACDAgentNameResolver(func(callID string) string {
+	conversation.SetTransferAgentBriefVarsResolver(func(callID string) conversation.TransferAgentBriefVars {
 		cid := strings.TrimSpace(callID)
+		vars := conversation.TransferAgentBriefVars{
+			Meta: map[string]any{},
+		}
 		if cid == "" || acdDB == nil {
-			return ""
+			return vars
 		}
 		id, ok := conversation.PeekInboundTransferACDTargetID(cid)
 		if !ok || id == 0 {
-			return ""
+			return vars
 		}
 		row, err := models.GetActiveACDPoolTargetByID(acdDB, id)
 		if err != nil {
-			return ""
+			return vars
 		}
-		if n := strings.TrimSpace(row.Name); n != "" {
-			return n
+		return conversation.TransferAgentBriefVars{
+			Agent: conversation.TransferAgentBriefAgent{
+				Name:                 row.Name,
+				TargetValue:          row.TargetValue,
+				RouteType:            row.RouteType,
+				WorkState:            row.WorkState,
+				SipCallerID:          row.SipCallerID,
+				SipCallerDisplayName: row.SipCallerDisplayName,
+				Remark:               row.Remark,
+			},
+			Meta: models.ParseACDMetaDataMap(row.MetaData),
 		}
-		return strings.TrimSpace(row.TargetValue)
 	})
 	conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
 		sipCallPersist.SaveConversationTurn(ctx, callID, turn)
@@ -562,6 +574,10 @@ func Start(cfg Config) (*Embedded, error) {
 		ForgetUASDialog:       sipServerPtr.ForgetUASDialog,
 		SendUASBye:            sipServerPtr.SendUASBye,
 		ReleaseTransferDedupe: conversation.ReleaseTransferStartDedupe,
+		PlayTransferAgentBrief: func(ctx context.Context, callID string, agentDownlink media.MediaTransport) (bool, error) {
+			return conversation.PlayTransferAgentBriefForWebSeat(ctx, callID, agentDownlink, nil)
+		},
+		StopTransferRinging: conversation.StopTransferRingingForCall,
 		OnWebSeatBridgeEstablished: func(callID string) {
 			conversation.ResetTransferRoutingState(callID)
 		},

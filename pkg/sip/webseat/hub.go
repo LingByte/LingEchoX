@@ -57,6 +57,11 @@ type Config struct {
 	OnWebSeatBridgeEstablished func(callID string)
 	// OnWebSeatJoinTimeout runs when no browser join arrives within SIP_WEBSEAT_JOIN_TIMEOUT (after dedupe release).
 	OnWebSeatJoinTimeout func(callID string, acdPoolTargetID uint)
+	// PlayTransferAgentBrief plays optional trunk transfer_agent_brief_text TTS on browser downlink
+	// before PSTN↔WebRTC bridge (caller keeps transfer ringing until bridge starts).
+	PlayTransferAgentBrief func(ctx context.Context, inboundCallID string, agentDownlink media.MediaTransport) (played bool, err error)
+	// StopTransferRinging cancels inbound hold/ring loop before web bridge (mirrors SIP StartTransferBridge).
+	StopTransferRinging func(inboundCallID string)
 }
 
 // Hub tracks pending joins and active bridges.
@@ -907,6 +912,37 @@ func (h *Hub) waitRemoteTrackAndBridge(
 
 	webRxCodec := mediaFromRemoteTrack(remoteTrack)
 	wt := NewTransport(remoteTrack, txLocal, webRxCodec, webTxCodec)
+
+	if h.cfg.PlayTransferAgentBrief != nil {
+		playCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		played, err := h.cfg.PlayTransferAgentBrief(playCtx, callID, wt)
+		cancel()
+		if err != nil && lg != nil {
+			lg.Warn("webseat: agent brief TTS failed, bridging anyway",
+				zap.String("call_id", callID),
+				zap.Error(err),
+			)
+		}
+		if played && lg != nil {
+			lg.Info("webseat: agent brief finished", zap.String("call_id", callID))
+		}
+	}
+	if h.cfg.StopTransferRinging != nil {
+		h.cfg.StopTransferRinging(callID)
+	}
+
+	h.mu.Lock()
+	ab, ok = h.active[callID]
+	if !ok || ab == nil || ab.pc != pc {
+		h.mu.Unlock()
+		if h.cfg.ReleaseTransferDedupe != nil {
+			h.cfg.ReleaseTransferDedupe(callID)
+		}
+		_ = teardownWebSeat(callID, true)
+		_ = pc.Close()
+		return
+	}
+	h.mu.Unlock()
 
 	// Keep caller media alive during "awaiting join" so transfer ringing can be played.
 	// Stop MediaSession right before building bridge transports to avoid dual RTP readers.
