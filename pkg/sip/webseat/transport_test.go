@@ -10,7 +10,8 @@ import (
 )
 
 func TestTransport_StringAndNilTracks(t *testing.T) {
-	tr := NewTransport(nil, nil, media.CodecConfig{Codec: "opus", SampleRate: 48000})
+	rx := media.CodecConfig{Codec: "opus", SampleRate: 48000}
+	tr := NewTransport(nil, nil, rx, rx)
 	if !strings.Contains(tr.String(), "opus") {
 		t.Fatal(tr.String())
 	}
@@ -34,7 +35,7 @@ func TestTransport_StringAndNilTracks(t *testing.T) {
 }
 
 func TestTransport_NextCancelledContext(t *testing.T) {
-	tr := NewTransport(nil, nil, media.CodecConfig{})
+	tr := NewTransport(nil, nil, media.CodecConfig{}, media.CodecConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	mp, err := tr.Next(ctx)
@@ -44,7 +45,7 @@ func TestTransport_NextCancelledContext(t *testing.T) {
 }
 
 func TestTransport_SendCancelledContext_NoTxShortCircuit(t *testing.T) {
-	tr := NewTransport(nil, nil, media.CodecConfig{})
+	tr := NewTransport(nil, nil, media.CodecConfig{}, media.CodecConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	n, err := tr.Send(ctx, &media.AudioPacket{Payload: []byte{1}})
@@ -54,7 +55,7 @@ func TestTransport_SendCancelledContext_NoTxShortCircuit(t *testing.T) {
 }
 
 func TestTransport_SendNonAudioIgnored(t *testing.T) {
-	tr := NewTransport(nil, nil, media.CodecConfig{})
+	tr := NewTransport(nil, nil, media.CodecConfig{}, media.CodecConfig{})
 	n, err := tr.Send(context.Background(), &media.TextPacket{Text: "x"})
 	if err != nil || n != 0 {
 		t.Fatal()
@@ -62,12 +63,13 @@ func TestTransport_SendNonAudioIgnored(t *testing.T) {
 }
 
 func TestTransport_DurationFromCodecFrameDuration(t *testing.T) {
-	tr := NewTransport(nil, nil, media.CodecConfig{
+	tx := media.CodecConfig{
 		Codec:         "opus",
 		SampleRate:    48000,
 		FrameDuration: "40ms",
-	})
-	if fd := strings.TrimSpace(tr.codec.FrameDuration); fd != "40ms" {
+	}
+	tr := NewTransport(nil, nil, media.CodecConfig{}, tx)
+	if fd := strings.TrimSpace(tr.TxCodec().FrameDuration); fd != "40ms" {
 		t.Fatal(fd)
 	}
 	_ = time.Millisecond // silence unused in older Go linters

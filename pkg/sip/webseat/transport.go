@@ -19,19 +19,23 @@ import (
 type Transport struct {
 	rxTrack *webrtc.TrackRemote
 	txTrack *webrtc.TrackLocalStaticSample
-	codec   media.CodecConfig
+	rxCodec media.CodecConfig
+	txCodec media.CodecConfig
 }
 
-func NewTransport(rx *webrtc.TrackRemote, tx *webrtc.TrackLocalStaticSample, codec media.CodecConfig) *Transport {
+// NewTransport bridges browser uplink (rxCodec) and downlink (txCodec). They may differ
+// when SDP picks PCMA for browser→server and PCMU for server→browser.
+func NewTransport(rx *webrtc.TrackRemote, tx *webrtc.TrackLocalStaticSample, rxCodec, txCodec media.CodecConfig) *Transport {
 	return &Transport{
 		rxTrack: rx,
 		txTrack: tx,
-		codec:   codec,
+		rxCodec: rxCodec,
+		txCodec: txCodec,
 	}
 }
 
 func (t *Transport) String() string {
-	return fmt.Sprintf("SipWebRTCTransport{codec=%s, rx=%v, tx=%v}", t.codec.String(), t.rxTrack != nil, t.txTrack != nil)
+	return fmt.Sprintf("SipWebRTCTransport{rx=%s tx=%s, rxTr=%v, txTr=%v}", t.rxCodec.String(), t.txCodec.String(), t.rxTrack != nil, t.txTrack != nil)
 }
 
 func (t *Transport) Attach(s *media.MediaSession) {
@@ -39,7 +43,11 @@ func (t *Transport) Attach(s *media.MediaSession) {
 }
 
 func (t *Transport) Codec() media.CodecConfig {
-	return t.codec
+	return t.rxCodec
+}
+
+func (t *Transport) TxCodec() media.CodecConfig {
+	return t.txCodec
 }
 
 func (t *Transport) Next(ctx context.Context) (media.MediaPacket, error) {
@@ -80,18 +88,18 @@ func (t *Transport) Send(ctx context.Context, packet media.MediaPacket) (int, er
 	}
 
 	dur := 20 * time.Millisecond
-	if fd := strings.TrimSpace(t.codec.FrameDuration); fd != "" {
+	if fd := strings.TrimSpace(t.txCodec.FrameDuration); fd != "" {
 		if d, err := time.ParseDuration(fd); err == nil && d > 0 {
 			dur = d
 		}
 	}
-	encName := strings.ToLower(strings.TrimSpace(t.codec.Codec))
-	if encName != "opus" && t.codec.SampleRate > 0 {
-		bytesPerSample := (t.codec.BitDepth / 8) * t.codec.Channels
+	encName := strings.ToLower(strings.TrimSpace(t.txCodec.Codec))
+	if encName != "opus" && t.txCodec.SampleRate > 0 {
+		bytesPerSample := (t.txCodec.BitDepth / 8) * t.txCodec.Channels
 		if bytesPerSample > 0 {
 			samples := len(audio.Payload) / bytesPerSample
 			if samples > 0 {
-				dur = time.Duration(float64(samples) / float64(t.codec.SampleRate) * float64(time.Second))
+				dur = time.Duration(float64(samples) / float64(t.txCodec.SampleRate) * float64(time.Second))
 			}
 		}
 	}

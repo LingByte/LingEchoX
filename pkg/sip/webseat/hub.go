@@ -803,8 +803,9 @@ func (h *Hub) completeJoin(ctx context.Context, callID string, inbound *sipSessi
 
 	// Must match codecs registered in newMediaEngine() (PCMA/PCMU only). Using Opus here
 	// causes AddTrack to fail: "codec is not supported by remote" and join returns 500.
+	// Prefer PCMA on the downlink track to align with browser setCodecPreferences (PCMA first).
 	txCap := webrtc.RTPCodecCapability{
-		MimeType:  webrtc.MimeTypePCMU,
+		MimeType:  webrtc.MimeTypePCMA,
 		ClockRate: 8000,
 	}
 	txLocal, err := webrtc.NewTrackLocalStaticSample(txCap, "audio", "soulnexus")
@@ -851,8 +852,9 @@ func (h *Hub) completeJoin(ctx context.Context, callID string, inbound *sipSessi
 		h.cfg.OnWebSeatBridgeEstablished(callID)
 	}
 
+	webTxCodec := mediaFromRTPCapability(txCap)
 	logger.SafeGo("webseat-bridge-wait-track", func() {
-		h.waitRemoteTrackAndBridge(callID, inbound, pc, txLocal, trackCh, lg)
+		h.waitRemoteTrackAndBridge(callID, inbound, pc, txLocal, webTxCodec, trackCh, lg)
 	})
 
 	ld := pc.LocalDescription()
@@ -865,6 +867,7 @@ func (h *Hub) waitRemoteTrackAndBridge(
 	inbound *sipSession.CallSession,
 	pc *webrtc.PeerConnection,
 	txLocal *webrtc.TrackLocalStaticSample,
+	webTxCodec media.CodecConfig,
 	trackCh <-chan *webrtc.TrackRemote,
 	lg *zap.Logger,
 ) {
@@ -902,8 +905,8 @@ func (h *Hub) waitRemoteTrackAndBridge(
 	}
 	h.mu.Unlock()
 
-	webCodec := mediaFromRemoteTrack(remoteTrack)
-	wt := NewTransport(remoteTrack, txLocal, webCodec)
+	webRxCodec := mediaFromRemoteTrack(remoteTrack)
+	wt := NewTransport(remoteTrack, txLocal, webRxCodec, webTxCodec)
 
 	// Keep caller media alive during "awaiting join" so transfer ringing can be played.
 	// Stop MediaSession right before building bridge transports to avoid dual RTP readers.
@@ -960,7 +963,26 @@ func (h *Hub) waitRemoteTrackAndBridge(
 	br.Start()
 	h.acdSetStateForCall(callID, "busy")
 	if lg != nil {
-		lg.Info("webseat: bridge started", zap.String("call_id", callID), zap.String("web_codec", webCodec.Codec))
+		lg.Info("webseat: bridge started",
+			zap.String("call_id", callID),
+			zap.String("in_codec", ccIn.Codec),
+			zap.Int("in_sr", ccIn.SampleRate),
+			zap.String("web_rx_codec", webRxCodec.Codec),
+			zap.String("web_tx_codec", webTxCodec.Codec),
+			zap.Int("mid_sr", br.MidSampleRate()),
+		)
+	}
+}
+
+func mediaFromRTPCapability(cap webrtc.RTPCodecCapability) media.CodecConfig {
+	mime := strings.ToLower(cap.MimeType)
+	switch {
+	case strings.Contains(mime, "pcmu") || strings.Contains(mime, "g711u"):
+		return media.CodecConfig{Codec: "pcmu", SampleRate: 8000, Channels: 1, BitDepth: 8, FrameDuration: "20ms"}
+	case strings.Contains(mime, "pcma") || strings.Contains(mime, "g711a"):
+		return media.CodecConfig{Codec: "pcma", SampleRate: 8000, Channels: 1, BitDepth: 8, FrameDuration: "20ms"}
+	default:
+		return media.CodecConfig{Codec: "pcma", SampleRate: 8000, Channels: 1, BitDepth: 8, FrameDuration: "20ms"}
 	}
 }
 

@@ -21,6 +21,28 @@ type pcmBridgeLeg interface {
 	WakeupRead()
 }
 
+// pcmBridgeTxCodec is optional on a leg whose Rx/Tx codecs differ (browser WebRTC:
+// uplink codec on TrackRemote vs downlink on TrackLocalStaticSample).
+type pcmBridgeTxCodec interface {
+	TxCodec() media.CodecConfig
+}
+
+func agentLegDecodeCodec(rx pcmBridgeLeg) media.CodecConfig {
+	if rx == nil {
+		return media.CodecConfig{}
+	}
+	return rx.Codec()
+}
+
+func agentLegEncodeCodec(rx, tx pcmBridgeLeg) media.CodecConfig {
+	if tx != nil {
+		if tc, ok := tx.(pcmBridgeTxCodec); ok {
+			return tc.TxCodec()
+		}
+	}
+	return agentLegDecodeCodec(rx)
+}
+
 // BridgeDirection indicates which half of a two-leg bridge a tap observes.
 type BridgeDirection int
 
@@ -62,22 +84,23 @@ func NewTwoLegPCMBridge(
 	}
 
 	codecCaller := callerRx.Codec()
-	codecAgent := agentRx.Codec()
+	codecAgentRx := agentLegDecodeCodec(agentRx)
+	codecAgentTx := agentLegEncodeCodec(agentRx, agentTx)
 	codecCaller = opusBridgeDecodeConfig(codecCaller)
-	codecAgent = opusBridgeDecodeConfig(codecAgent)
+	codecAgentRx = opusBridgeDecodeConfig(codecAgentRx)
 
-	pcm := bridgeMidPCM(codecCaller, codecAgent)
+	pcm := bridgeMidPCM(codecCaller, codecAgentRx)
 
 	decCaller, err := encoder.CreateDecode(codecCaller, pcm)
 	if err != nil {
 		return nil, fmt.Errorf("bridge: decode caller: %w", err)
 	}
-	encAgent, err := encoder.CreateEncode(codecAgent, pcm)
+	encAgent, err := encoder.CreateEncode(codecAgentTx, pcm)
 	if err != nil {
 		return nil, fmt.Errorf("bridge: encode agent: %w", err)
 	}
 
-	decAgent, err := encoder.CreateDecode(codecAgent, pcm)
+	decAgent, err := encoder.CreateDecode(codecAgentRx, pcm)
 	if err != nil {
 		return nil, fmt.Errorf("bridge: decode agent: %w", err)
 	}
@@ -217,8 +240,13 @@ func narrowbandG711(c media.CodecConfig) bool {
 	return (n == "pcmu" || n == "pcma") && c.SampleRate == 8000
 }
 
-// bridgeMidPCM: dual narrowband G.711 uses 8 kHz PCM; all other pairs (e.g. Opus + PCMU) use 16 kHz mono.
+// bridgeMidPCM picks the mono PCM rate between legs.
+// WebSeat/browser agents are always narrowband G.711: keep 8 kHz mid even when the PSTN
+// leg is G.722/Opus so agent speech is not upsampled to 16 kHz before encode (sounds dull).
 func bridgeMidPCM(caller, agent media.CodecConfig) media.CodecConfig {
+	if narrowbandG711(agent) {
+		return media.CodecConfig{Codec: "pcm", SampleRate: 8000, Channels: 1, BitDepth: 16}
+	}
 	if narrowbandG711(caller) && narrowbandG711(agent) {
 		return media.CodecConfig{Codec: "pcm", SampleRate: 8000, Channels: 1, BitDepth: 16}
 	}
