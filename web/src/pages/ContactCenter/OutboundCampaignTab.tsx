@@ -268,7 +268,7 @@ export default function OutboundCampaignTab() {
         {campaignsLoading ? <div className="p-4 text-sm text-muted-foreground">加载中...</div> : (
           <div className="max-h-[520px] overflow-auto rounded border border-border">
             <table className="w-full text-xs">
-              <thead className="bg-muted/50"><tr><th className="text-left p-2">ID</th><th className="text-left p-2">任务名称</th><th className="text-left p-2">脚本ID</th><th className="text-left p-2">状态</th><th className="text-left p-2">更新时间</th><th className="text-left p-2">操作</th></tr></thead>
+              <thead className="bg-muted/50"><tr><th className="text-left p-2">任务名称</th><th className="text-left p-2">脚本ID</th><th className="text-left p-2">状态</th><th className="text-left p-2">更新时间</th><th className="text-left p-2">操作</th></tr></thead>
               <tbody>
                 {campaigns.map((c) => {
                   const flags = outboundCampaignActionFlags(c.status)
@@ -276,12 +276,12 @@ export default function OutboundCampaignTab() {
                   const isPaused = normCampaignStatus(c.status) === 'paused'
                   return (
                     <tr key={c.id} className="border-t">
-                      <td className="p-2">{c.id}</td><td className="p-2">{c.name}</td><td className="p-2 font-mono">{c.scriptId || '—'}</td><td className="p-2">{campaignStatusLabel(c.status)}</td><td className="p-2">{c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '—'}</td>
+                      <td className="p-2">{c.name}</td><td className="p-2 font-mono">{c.scriptId || '—'}</td><td className="p-2">{campaignStatusLabel(c.status)}</td><td className="p-2">{c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '—'}</td>
                       <td className="p-2"><div className="flex flex-wrap gap-1"><Button size="small" type="outline" disabled={busy} onClick={() => { setDetailCampaignId(c.id); setDetailModalOpen(true) }}>详情</Button><Button size="small" type="primary" disabled={busy || !flags.canStartOrResume} onClick={() => void doCampaignOp(c.id, isPaused ? 'resume' : 'start')}>{isPaused ? '继续' : '启动'}</Button><Button size="small" type="outline" disabled={busy || !flags.canPause} onClick={() => void doCampaignOp(c.id, 'pause')}>暂停</Button><Button size="small" type="outline" disabled={busy || !flags.canStop} onClick={() => void doCampaignOp(c.id, 'stop')}>停止</Button><Button size="small" type="outline" disabled={deletingId === c.id || !flags.canDelete} onClick={() => void removeCampaign(c)}>删除</Button></div></td>
                     </tr>
                   )
                 })}
-                {campaigns.length === 0 && <tr><td colSpan={6} className="p-3 text-center text-muted-foreground">暂无数据</td></tr>}
+                {campaigns.length === 0 && <tr><td colSpan={5} className="p-3 text-center text-muted-foreground">暂无数据</td></tr>}
               </tbody>
             </table>
           </div>

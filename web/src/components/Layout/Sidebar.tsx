@@ -41,6 +41,7 @@ const navigation: NavDef[] = [
   { name: '中继线路', href: '/sip-trunks', icon: RadioTower },
   { name: '中继号码', href: '/sip-trunk-numbers', icon: ListOrdered },
   { name: '租户管理', href: '/tenant-management', icon: Briefcase },
+  { name: '平台管理员', href: '/platform-admins', icon: Shield },
   { name: '外呼任务', href: '/outbound-tasks', icon: PhoneCall, tenantMenuCode: 'menu.res.outbound' },
   { name: '脚本管理', href: '/script-manager', icon: FileText, tenantMenuCode: 'menu.res.script' },
   { name: 'Web 坐席', href: '/web-agents', icon: Headphones, tenantMenuCode: 'menu.tel.webseat' },
@@ -63,6 +64,7 @@ const platformAdminMenuHrefs = new Set([
   '/sip-trunks',
   '/sip-trunk-numbers',
   '/tenant-management',
+  '/platform-admins',
 ])
 
 const tenantHiddenHrefs = new Set([

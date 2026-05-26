@@ -295,7 +295,6 @@ const AccessKeys = () => {
                 <table style={{ minWidth: 960, width: '100%', fontSize: 13 }}>
                   <thead style={{ background: 'var(--color-fill-2)' }}>
                     <tr>
-                      <th style={{ textAlign: 'left', padding: 12 }}>ID</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>名称</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>Access Key</th>
                       <th style={{ textAlign: 'left', padding: 12 }}>状态</th>
@@ -308,14 +307,13 @@ const AccessKeys = () => {
                   <tbody>
                     {rows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-3)' }}>
+                        <td colSpan={7} style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-3)' }}>
                           暂无数据
                         </td>
                       </tr>
                     ) : (
                       rows.map((r) => (
                         <tr key={r.id} style={{ borderTop: '1px solid var(--color-border)' }}>
-                          <td style={{ padding: 12 }}>{r.id}</td>
                           <td style={{ padding: 12, maxWidth: 200 }}>
                             <div style={{ fontWeight: 500 }}>{r.name || '—'}</div>
                             {r.createBy && (

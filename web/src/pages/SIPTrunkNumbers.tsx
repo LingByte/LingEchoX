@@ -11,6 +11,7 @@ import {
 } from '@arco-design/web-react'
 import { IconDelete } from '@arco-design/web-react/icon'
 import BaseLayout from '@/components/Layout/BaseLayout.tsx'
+import { TableIdCell } from '@/components/TableIdCell'
 import {
   createTrunkNumber,
   deleteTrunkNumber,
@@ -433,7 +434,7 @@ const SIPTrunkNumbers = () => {
                       <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center' }}>暂无数据</td></tr>
                     ) : rows.map((r) => (
                       <tr key={r.id} style={{ borderTop: '1px solid var(--color-border)' }}>
-                        <td style={{ padding: 12 }}>{r.id}</td>
+                        <td style={{ padding: 12 }}><TableIdCell id={r.id} /></td>
                         <td style={{ padding: 12, fontSize: 12, maxWidth: 200 }}>{tenantLabel(r.tenantId)}</td>
                         <td style={{ padding: 12, maxWidth: 140 }}>{trunkLabel(r.trunkId)}</td>
                         <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12 }}>{r.number}</td>

@@ -12,6 +12,7 @@ const (
 	SIPCampaignEventTableName     = "sip_campaign_events"
 	SIPScriptTemplateTableName    = "sip_script_templates"
 	ACDPoolTargetTableName        = "acd_pool_targets"
+	SIPACDTransferOfferTableName  = "sip_acd_transfer_offers"
 	SIPTrunkTableName             = "sip_trunks"
 	SIPTrunkNumberTableName       = "sip_trunk_numbers"
 	TenantTableName               = "tenants"
@@ -37,6 +38,7 @@ const (
 	SIP_CAMPAIGN_EVENT_TABLE_NAME     = SIPCampaignEventTableName
 	SIP_SCRIPT_TEMPLATE_TABLE_NAME    = SIPScriptTemplateTableName
 	ACD_POOL_TARGET_TABLE_NAME        = ACDPoolTargetTableName
+	SIP_ACD_TRANSFER_OFFER_TABLE_NAME = SIPACDTransferOfferTableName
 	SIP_TRUNK_TABLE_NAME              = SIPTrunkTableName
 	SIP_TRUNK_NUMBER_TABLE_NAME       = SIPTrunkNumberTableName
 	TENANT_TABLE_NAME                 = TenantTableName

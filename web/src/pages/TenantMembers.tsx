@@ -202,7 +202,6 @@ export default function TenantMembers() {
               onChange: (p) => setPage(p),
             }}
             columns={[
-              { title: 'ID', dataIndex: 'id', width: 72 },
               { title: '邮箱', dataIndex: 'email' },
               { title: '显示名', dataIndex: 'displayName' },
               { title: '手机', dataIndex: 'phone' },

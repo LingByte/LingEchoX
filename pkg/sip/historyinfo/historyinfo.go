@@ -30,7 +30,6 @@
 package historyinfo
 
 import (
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -519,7 +518,3 @@ func ExtractURIFromToHeader(toHeader string) string {
 	}
 	return strings.TrimSpace(s)
 }
-
-// Sanity check that the URI parser stays in sync with net/url's
-// expectations; not exported.
-var _ = fmt.Sprintf

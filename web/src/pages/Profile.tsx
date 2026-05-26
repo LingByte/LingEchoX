@@ -13,7 +13,7 @@ import {
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
 import { UserCircle } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import BaseLayout from '@/components/Layout/BaseLayout'
 import {
   disableTotp,
@@ -304,6 +304,9 @@ export default function Profile() {
                     )}
                     <div style={detailLabelStyle}>状态</div>
                     <div style={detailValueStyle}>{fmtStatus(me?.platformAdmin?.status)}</div>
+                    <div style={{ gridColumn: '1 / -1', fontSize: 12 }}>
+                      <Link to="/platform-admins">管理平台管理员账号</Link>
+                    </div>
                     {editingProfile && (
                       <div style={{ gridColumn: '1 / -1' }}>
                         <Button type="primary" htmlType="submit" size="small">

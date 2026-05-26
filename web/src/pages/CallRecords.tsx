@@ -128,6 +128,18 @@ const CallRecords = () => {
     return p.length ? p.join(' · ') : ''
   }
 
+  const fmtQoSNum = (v?: number, digits = 1) => {
+    if (v == null || !Number.isFinite(v) || v < 0) return '—'
+    if (v === 0) return '0'
+    return digits > 0 ? v.toFixed(digits) : String(Math.round(v))
+  }
+
+  const hasCallQoS = (d: SIPCallRow) =>
+    (d.qosRttMs ?? 0) > 0 ||
+    (d.qosJitterMs ?? 0) > 0 ||
+    (d.qosPacketLossPct ?? 0) > 0 ||
+    (d.qosMosEstimate ?? 0) > 0
+
   return (
     <BaseLayout title="通话记录" description="云联络中心 / 通话记录">
       <div className="mb-3 flex flex-wrap gap-2 items-center">
@@ -162,7 +174,6 @@ const CallRecords = () => {
           <table className="min-w-[1280px] w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
-                <th className="text-left p-3 whitespace-nowrap">ID</th>
                 <th className="text-left p-3 whitespace-nowrap min-w-[180px]">Call-ID</th>
                 <th className="text-left p-3 whitespace-nowrap">状态</th>
                 <th className="text-left p-3 whitespace-nowrap">Dir</th>
@@ -178,15 +189,14 @@ const CallRecords = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="p-6 text-center" colSpan={13}>加载中...</td></tr>
+                <tr><td className="p-6 text-center" colSpan={12}>加载中...</td></tr>
               ) : calls.length === 0 ? (
-                <tr><td className="p-6 text-center" colSpan={13}>暂无数据</td></tr>
+                <tr><td className="p-6 text-center" colSpan={12}>暂无数据</td></tr>
               ) : (
                 calls.map((c) => {
                   const hasRec = Boolean(c.recordingUrl && c.recordingUrl.trim())
                   return (
                     <tr key={c.id} className="border-t border-border align-top">
-                      <td className="p-3 whitespace-nowrap">{c.id}</td>
                       <td className="p-3 max-w-[240px] align-top"><EllipsisHoverCell text={c.callId} lines={2} mono /></td>
                       <td className="p-3 whitespace-nowrap">{mapCallState(c.state)}</td>
                       <td className="p-3 whitespace-nowrap">{mapDirection(c.direction)}</td>
@@ -248,7 +258,6 @@ const CallRecords = () => {
                   <div className="space-y-5">
                     <div className="min-h-0 overflow-y-auto space-y-5">
                       <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
-                        {detailField('ID', d.id)}
                         {detailField('状态', d.state || '—')}
                         {detailField('Dir', d.direction || '—')}
                         {detailField('Dur(s)', d.durationSec ?? '—')}
@@ -265,7 +274,24 @@ const CallRecords = () => {
                         {detailField('录音原始字节', d.recordingRawBytes != null && d.recordingRawBytes > 0 ? d.recordingRawBytes : '—')}
                         {detailField('录音 WAV 字节', d.recordingWavBytes != null && d.recordingWavBytes > 0 ? d.recordingWavBytes : '—')}
                         {detailField('转接', d.transferTo?.trim() || (d.hadSipTransfer || d.hadWebSeat ? '未知坐席' : '—'))}
+                        {detailField('媒体编码', d.codec || '—')}
                         <div className="col-span-2">{detailField('失败原因', d.failureReason || '—')}</div>
+                      </div>
+
+                      <div className="rounded-lg border border-border bg-muted/20 p-3">
+                        <p className="mb-2 text-sm font-medium text-foreground">通话质量（挂断时 RTCP 快照）</p>
+                        {hasCallQoS(d) ? (
+                          <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
+                            {detailField('RTT (ms)', fmtQoSNum(d.qosRttMs, 0))}
+                            {detailField('抖动 (ms)', fmtQoSNum(d.qosJitterMs))}
+                            {detailField('丢包率 (%)', fmtQoSNum(d.qosPacketLossPct))}
+                            {detailField('MOS 估算', fmtQoSNum(d.qosMosEstimate, 2))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground mb-0">
+                            暂无质量数据（通话过短、未建立媒体，或对端未回 RTCP 时常见）
+                          </p>
+                        )}
                       </div>
 
                       <div className="rounded-lg border border-border bg-muted/20 p-3">

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	"github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 )
@@ -266,7 +267,9 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 	var codec string
 	var recSR, recOpusCh int
 	var wavRec gateway.RecordingInfo
+	var rtcpSnap rtp.RTCPStats
 	if cs != nil {
+		rtcpSnap = cs.RTCPStats()
 		raw = cs.TakeRecording()
 		codec = cs.NegotiatedCodec().Name
 		src := cs.SourceCodec()
@@ -290,6 +293,7 @@ func (s *SIPServer) HangupInboundCall(callID string) {
 			RecordSampleRate:   recSR,
 			RecordOpusChannels: recOpusCh,
 			WAVRecording:       wavRec,
+			RTCP:               rtcpSnap,
 		})
 	}
 }

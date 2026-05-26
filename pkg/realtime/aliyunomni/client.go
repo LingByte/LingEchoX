@@ -554,11 +554,18 @@ func (a *agent) dispatch(raw []byte) {
 				text = msg.Error.Code
 			}
 		}
+		// Benign: we may call response.cancel after the turn already ended
+		// (forced TTS confirm path + late assistant.final from Omni).
+		fatal := true
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "none active response") || strings.Contains(lower, "no active response") {
+			fatal = false
+		}
 		a.emit(realtime.Event{
 			Type:   realtime.EventError,
 			Vendor: ProviderSlug,
 			Err:    fmt.Errorf("aliyunomni: server error: %s", text),
-			Fatal:  true,
+			Fatal:  fatal,
 			Raw:    raw,
 		})
 	default:

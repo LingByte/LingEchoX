@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
   Checkbox,
@@ -10,7 +10,7 @@ import {
   TimePicker,
   Typography,
 } from '@arco-design/web-react'
-import { IconDelete, IconPlus } from '@arco-design/web-react/icon'
+import { IconDelete, IconPhone, IconPlus } from '@arco-design/web-react/icon'
 import dayjs, { type Dayjs } from 'dayjs'
 import { showAlert } from '@/utils/notification'
 import {
@@ -22,6 +22,8 @@ import {
   updateACDPoolTarget,
   type ACDPoolTargetRow,
 } from '@/api/acdPool'
+import { seatIdKey, useSIPAgentIncomingPoll } from '@/hooks/useSIPAgentIncomingPoll'
+import { callerDisplay, SIP_INCOMING_POLL_MS } from '@/utils/sipAgentIncoming'
 import { listTrunkNumbers } from '@/api/trunks'
 
 /** Matches backend acd_shift_schedule: weekdays 0=Sun..6=Sat; empty weekdays = all days */
@@ -130,6 +132,8 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   const [acdDeleteOpen, setAcdDeleteOpen] = useState(false)
   const [acdDeleteId, setAcdDeleteId] = useState<number | null>(null)
   const [acdDeleteLoading, setAcdDeleteLoading] = useState(false)
+  const sipRowsOnPage = useMemo(() => rows.filter((r) => r.routeType === 'sip'), [rows])
+  const { incomingBySeatId, incomingSeats } = useSIPAgentIncomingPoll(sipRowsOnPage, active)
   const pageSize = 20
 
   const load = useCallback(async () => {
@@ -177,6 +181,8 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
     if (!active) return
     void reloadTrunkNums()
   }, [active, reloadTrunkNums])
+
+  const incomingSipRows = incomingSeats
 
   const trunkNumLabel = (id?: number) => {
     if (!id) return '—'
@@ -295,7 +301,24 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
     <div className="mt-4 space-y-3">
       <Typography.Paragraph style={{ margin: 0, fontSize: 12 }} className="rounded-lg border px-3 py-2.5">
         每条坐席目标必须绑定本平台已分配给当前租户的中继号码（被叫号码）；来电命中该号码时优先路由到对应坐席。
+        SIP 坐席每 {SIP_INCOMING_POLL_MS / 1000} 秒自动查询是否有转接振铃（不含 Web 坐席）。
       </Typography.Paragraph>
+      {incomingSipRows.length > 0 && (
+        <div className="rounded-lg border border-orange-500/40 bg-orange-500/10 px-3 py-2.5 text-sm">
+          <Space wrap>
+            <Tag color="orangered" icon={<IconPhone />}>转接振铃</Tag>
+            {incomingSipRows.map((r) => {
+              const inc = incomingBySeatId[seatIdKey(r.id)]
+              return (
+                <span key={seatIdKey(r.id)}>
+                  <Typography.Text bold>{r.name || r.targetValue || '坐席'}</Typography.Text>
+                  <Typography.Text type="secondary"> · 主叫 {callerDisplay(inc)}</Typography.Text>
+                </span>
+              )
+            })}
+          </Space>
+        </div>
+      )}
       <Space wrap align="end">
         <Space direction="vertical" size={4}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>中继号码</Typography.Text>
@@ -330,12 +353,12 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
           <table className="min-w-[860px] w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
-                <th className="text-left p-3 whitespace-nowrap">ID</th>
                 <th className="text-left p-3 whitespace-nowrap">中继号码</th>
                 <th className="text-left p-3 whitespace-nowrap">名称</th>
                 <th className="text-left p-3 min-w-[180px]">呼叫号码</th>
                 <th className="text-left p-3 whitespace-nowrap">权重</th>
                 <th className="text-left p-3 whitespace-nowrap">班次</th>
+                <th className="text-left p-3 min-w-[140px]">转接来电</th>
                 <th className="text-left p-3 min-w-[200px]">状态</th>
                 <th className="text-left p-3 whitespace-nowrap text-xs">状态时间</th>
                 <th className="text-right p-3 whitespace-nowrap">操作</th>
@@ -344,14 +367,29 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
             <tbody>
               {rows.length === 0 ? (
                 <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">暂无数据</td></tr>
-              ) : rows.map((r) => (
-                <tr key={r.id} className="border-t border-border align-top">
-                  <td className="p-3 whitespace-nowrap">{r.id}</td>
+              ) : rows.map((r) => {
+                const inc = r.routeType === 'sip' ? incomingBySeatId[seatIdKey(r.id)] : undefined
+                return (
+                <tr key={seatIdKey(r.id)} className="border-t border-border align-top">
                   <td className="p-3 text-xs text-muted-foreground max-w-[200px]">{trunkNumLabel(r.trunkNumberId)}</td>
                   <td className="p-3 max-w-[200px] truncate">{r.name || '—'}</td>
                   <td className="p-3 font-mono text-xs max-w-[260px] break-all text-muted-foreground">{r.routeType === 'sip' ? r.targetValue || '—' : '—'}</td>
                   <td className="p-3 whitespace-nowrap">{r.weight}</td>
                   <td className="p-3 whitespace-nowrap text-xs text-muted-foreground">{shiftScheduleSummary(r.shiftSchedule)}</td>
+                  <td className="p-3 align-top">
+                    {r.routeType === 'sip' ? (
+                      inc?.incoming ? (
+                        <Space direction="vertical" size={2}>
+                          <Tag size="small" color="orangered" icon={<IconPhone />}>振铃中</Tag>
+                          <span className="font-mono text-xs text-muted-foreground">{callerDisplay(inc)}</span>
+                        </Space>
+                      ) : (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
+                      )
+                    ) : (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>Web</Typography.Text>
+                    )}
+                  </td>
                   <td className="p-3 align-top"><Tag size="small">{workStateLabel(r.workState)}</Tag></td>
                   <td className="p-3 whitespace-nowrap text-xs text-muted-foreground">{r.workStateAt ? new Date(r.workStateAt).toLocaleString() : '—'}</td>
                   <td className="p-3 text-right">
@@ -361,7 +399,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
                     </Space>
                   </td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
           <div className="flex items-center justify-between p-3 border-t border-border text-sm">

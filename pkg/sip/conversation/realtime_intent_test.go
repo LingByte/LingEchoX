@@ -30,7 +30,7 @@ func TestRealtimeAugmentSystemPrompt_TransferTool(t *testing.T) {
 	if !strings.Contains(out, "后台累计用户 2 次") {
 		t.Fatalf("confirm count rule missing: %q", out)
 	}
-	if !strings.Contains(out, "请问有什么可以帮您的") {
+	if !strings.Contains(out, transferConfirmNormalReplyZH) {
 		t.Fatalf("normal reply guidance missing: %q", out)
 	}
 	if !strings.Contains(out, "禁止主动提及") {
@@ -96,6 +96,9 @@ func TestRealtimeMatchTransferIntent_UserKeywords(t *testing.T) {
 		"请帮我接人工客服",
 		"找客服",
 		"接线员可以吗",
+		"可以转接人工吗",
+		"我这边要人工",
+		"人工",
 	}
 	for _, p := range pos {
 		if !realtimeMatchTransferIntent("user", p, nil) {

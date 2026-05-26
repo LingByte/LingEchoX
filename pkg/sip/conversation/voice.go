@@ -527,12 +527,56 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 				zap.Bool("asr_isFinal", asrIsFinal),
 				zap.String("trigger", trigger),
 			)
+			confirmRequired := TransferConfirmRequired(env)
 			if c := recordSIPTransferIntent(cs.CallID, userText); c > 0 && realtimeMatchTransferIntent("user", userText, nil) {
 				lg.Info("sip voice: transfer intent recorded",
 					zap.String("call_id", cs.CallID),
 					zap.Int("count", c),
-					zap.Int("required", TransferConfirmRequired(env)),
+					zap.Int("required", confirmRequired),
 				)
+			}
+			if realtimeMatchTransferIntent("user", userText, nil) {
+				count := sipTransferConfirmCount(cs.CallID)
+				if count > 0 {
+					allowed, _ := sipTransferMayExecute(cs.CallID, confirmRequired)
+					if confirmRequired > 1 || allowed {
+						cancelWelcomeIfPlaying("transfer_confirm")
+						ttsPipe.Start(ms.GetContext())
+						defer func() {
+							ttsPlaying.Store(false)
+							ttsStartedAtNS.Store(0)
+							ttsPipe.Stop()
+						}()
+						ttsPlaying.Store(true)
+						ttsStartedAtNS.Store(time.Now().UnixNano())
+						pipelineT0 := time.Now()
+						executeReply := allowed
+						if perr := PlayTransferConfirmReply(ms.GetContext(), cs, executeReply, lg); perr != nil {
+							lg.Warn("sip voice: fixed transfer-confirm reply failed",
+								zap.String("call_id", cs.CallID),
+								zap.Error(perr),
+							)
+						}
+						reply := transferConfirmReplyText(executeReply)
+						if executeReply {
+							lg.Info("sip voice: transfer after fixed confirm reply",
+								zap.String("call_id", cs.CallID),
+								zap.Int("count", count),
+							)
+							TriggerTransferToAgent(context.Background(), cs.CallID, lg)
+						}
+						asrProv := "qcloud_asr"
+						if env.ASRModelType != "" {
+							asrProv = env.ASRModelType
+						}
+						go RecordDialogTurn(context.Background(), cs.CallID, DialogTurn{
+							ASRText: userText, LLMText: reply, ASRProvider: asrProv,
+							LLMModel: llmModel, TTSProvider: "qcloud_tts", Trigger: trigger,
+							PipelineMs: int(time.Since(pipelineT0).Milliseconds()),
+						})
+						return
+					}
+				}
 			}
 
 			var reply string

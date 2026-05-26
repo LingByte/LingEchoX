@@ -116,7 +116,6 @@ export default function ScriptManagerTab() {
           <table className="min-w-[920px] w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
-                <th className="text-left p-3">ID</th>
                 <th className="text-left p-3">名称</th>
                 <th className="text-left p-3">脚本ID</th>
                 <th className="text-left p-3">启用</th>
@@ -126,10 +125,9 @@ export default function ScriptManagerTab() {
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">暂无数据</td></tr>
+                <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">暂无数据</td></tr>
               ) : rows.map((r) => (
                 <tr key={r.id} className="border-t border-border">
-                  <td className="p-3">{r.id}</td>
                   <td className="p-3">{r.name}</td>
                   <td className="p-3 font-mono text-xs">{r.scriptId}</td>
                   <td className="p-3">{r.enabled ? '已启用' : '已停用'}</td>

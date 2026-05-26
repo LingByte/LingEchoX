@@ -185,6 +185,45 @@ func GetActiveACDPoolTargetByID(db *gorm.DB, id uint) (ACDPoolTarget, error) {
 	return row, err
 }
 
+// FindSIPACDPoolTargetForIncomingPoll resolves a SIP pool row for the agent incoming poll API.
+// Exactly one of id, name, or targetValue should be set (id wins when > 0).
+func FindSIPACDPoolTargetForIncomingPoll(db *gorm.DB, tenantID, id uint, name, targetValue string) (ACDPoolTarget, bool, error) {
+	if db == nil || tenantID == 0 {
+		return ACDPoolTarget{}, false, nil
+	}
+	if id > 0 {
+		row, err := GetActiveACDPoolTargetByID(db, id)
+		if err != nil {
+			return ACDPoolTarget{}, false, err
+		}
+		if row.TenantID != tenantID || row.RouteType != constants.ACDPoolRouteTypeSIP {
+			return ACDPoolTarget{}, false, nil
+		}
+		return row, true, nil
+	}
+	q := ActiveACDPoolTargets(db).
+		Where("tenant_id = ?", tenantID).
+		Where("route_type = ?", constants.ACDPoolRouteTypeSIP)
+	name = strings.TrimSpace(name)
+	targetValue = strings.TrimSpace(targetValue)
+	switch {
+	case name != "":
+		q = q.Where("name = ?", name)
+	case targetValue != "":
+		q = q.Where("target_value = ?", targetValue)
+	default:
+		return ACDPoolTarget{}, false, nil
+	}
+	var row ACDPoolTarget
+	if err := q.First(&row).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ACDPoolTarget{}, false, nil
+		}
+		return ACDPoolTarget{}, false, err
+	}
+	return row, true, nil
+}
+
 // ReloadACDPoolTargetByID refetches by primary key (any delete state).
 func ReloadACDPoolTargetByID(db *gorm.DB, id uint) (ACDPoolTarget, error) {
 	var row ACDPoolTarget

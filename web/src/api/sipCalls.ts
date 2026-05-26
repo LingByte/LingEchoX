@@ -30,6 +30,11 @@ export interface SIPCallRow {
   codec?: string
   payloadType?: number
   clockRate?: number
+  /** RTCP snapshot at BYE (may be absent on very short calls). */
+  qosRttMs?: number
+  qosJitterMs?: number
+  qosPacketLossPct?: number
+  qosMosEstimate?: number
   recordingUrl?: string
   recordingRawBytes?: number
   recordingWavBytes?: number

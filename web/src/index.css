@@ -5,6 +5,16 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes sip-incoming-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.65;
+  }
+}
+
 /* Modern Professional UI Base Styles */
 @layer base {
   * {

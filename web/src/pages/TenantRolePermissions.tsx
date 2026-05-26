@@ -185,7 +185,6 @@ export default function TenantRolePermissions() {
             data={roles}
             pagination={false}
             columns={[
-              { title: 'ID', dataIndex: 'id', width: 72 },
               { title: '名称', dataIndex: 'name' },
               { title: '说明', dataIndex: 'description', ellipsis: true },
               {

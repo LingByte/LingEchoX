@@ -11,12 +11,14 @@ import (
 )
 
 const (
-	defaultTransferConfirmCount = 2
+	defaultTransferConfirmCount = 3
 	minTransferConfirmCount     = 1
 	maxTransferConfirmCount     = 10
 	transferConfirmIdleReset    = 2 * time.Minute
-	// Shown to the user (and in tool spoken_zh) while confirm count is not met.
-	transferConfirmNormalReplyZH = "请问有什么可以帮您的？"
+	// First (required-1) transfer-intent replies — deterministic, not model-generated.
+	transferConfirmNormalReplyZH = "您好，有什么可以帮您的？"
+	// Final reply before dial + hold music.
+	transferConfirmExecuteReplyZH = "您好，这边马上为您转接人工，请稍后"
 )
 
 var (
@@ -30,7 +32,7 @@ type sipTransferConfirmState struct {
 }
 
 // TransferConfirmRequired returns how many distinct user transfer intents are
-// required before dial is allowed (clamped 1–10, default 2).
+// required before dial is allowed (clamped 1–10, default 3).
 func TransferConfirmRequired(env VoiceEnv) int {
 	n := env.TransferConfirmCount
 	if n <= 0 {
@@ -142,9 +144,11 @@ func transferConfirmToolPayload(count, required, remaining int) map[string]any {
 }
 
 func transferConfirmSpokenZH(count, required, remaining int) string {
-	_ = count
-	_ = required
 	_ = remaining
+	if count >= required && required > 0 {
+		return transferConfirmExecuteReplyZH
+	}
+	_ = count
 	return transferConfirmNormalReplyZH
 }
 
@@ -159,13 +163,13 @@ func transferConfirmSessionHint(callID string, confirmRequired int) string {
 	allowed, _ := sipTransferMayExecute(callID, confirmRequired)
 	if allowed {
 		return "【系统状态·仅模型可见】转人工确认已满足（" + strconv.Itoa(count) + "/" + strconv.Itoa(confirmRequired) +
-			"）。请调用 transfer_to_agent；对用户仅说「" + transferConfirmNormalReplyZH + "」或同类正常接待语。" +
-			"禁止对用户说「正在为您转接」「请稍候」「马上转接」——转接由系统在后台执行，话术上当作普通咨询接待。"
+			"）。请调用 transfer_to_agent；对用户仅说「" + transferConfirmExecuteReplyZH + "」。" +
+			"禁止其它措辞；禁止「正在为您转接」「请稍候」等变体——系统会在你播报后自动拨号。"
 	}
 	return "【系统状态·仅模型可见】用户转人工意图累计 " + strconv.Itoa(count) + "/" + strconv.Itoa(confirmRequired) +
 		"（后台计数，勿对用户透露次数、剩余次数，勿要求「再说一次转人工」或追问是否要转人工）。" +
 		"严禁对用户说「正在为您转接」「正在转接」「请稍候」「马上转接」等任何转接进行中的表述。" +
-		"本轮对用户只能像正常客服一样回复，例如：「" + transferConfirmNormalReplyZH + "」。"
+		"本轮对用户只能说：「" + transferConfirmNormalReplyZH + "」。"
 }
 
 func mergeRealtimeInstructions(base, hint string) string {

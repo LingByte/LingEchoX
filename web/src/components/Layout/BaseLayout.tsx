@@ -2,6 +2,7 @@ import { ReactNode, useEffect, useState } from 'react'
 import { Button, Select } from '@arco-design/web-react'
 import { IconMoon, IconSun, IconMenuFold, IconMenuUnfold } from '@arco-design/web-react/icon'
 import Sidebar from './Sidebar.tsx'
+import SIPAgentIncomingBell from '@/components/SIPAgentIncomingBell'
 import { useThemeStore } from '@/stores/themeStore'
 import { useSidebar } from '@/contexts/SidebarContext'
 import { useLocaleStore } from '@/stores/localeStore'
@@ -70,6 +71,7 @@ const BaseLayout = ({ children, title, description, actions, hideHeader }: Admin
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                <SIPAgentIncomingBell />
                 <Select
                   size="small"
                   value={locale}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/scriptlisten"
 	"github.com/LinByte/VoiceServer/pkg/sip/conversation"
+	sipMetrics "github.com/LinByte/VoiceServer/pkg/sip/metrics"
 	sipServer "github.com/LinByte/VoiceServer/pkg/sip/server"
 	"github.com/LinByte/VoiceServer/pkg/stores"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -101,6 +102,30 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	}
 	if bi := strings.ToLower(strings.TrimSpace(initiator)); bi != "" {
 		updates["bye_initiator"] = bi
+	}
+	clockRate := p.RecordSampleRate
+	if clockRate <= 0 && call.ClockRate > 0 {
+		clockRate = call.ClockRate
+	}
+	if qosUp := QoSDBUpdatesFromRTCP(codecName, clockRate, p.RTCP); len(qosUp) > 0 {
+		for k, v := range qosUp {
+			updates[k] = v
+		}
+		if rtt, ok := qosUp["qos_rtt_ms"].(uint32); ok && rtt > 0 {
+			jitterMs := float64(0)
+			if j, ok := qosUp["qos_jitter_ms"].(float32); ok {
+				jitterMs = float64(j)
+			}
+			lossPct := float64(0)
+			if l, ok := qosUp["qos_packet_loss_pct"].(float32); ok {
+				lossPct = float64(l) / 100.0
+			}
+			mos := float64(0)
+			if m, ok := qosUp["qos_mos_estimate"].(float32); ok {
+				mos = float64(m)
+			}
+			sipMetrics.ObserveCallQoS(rtt, jitterMs, lossPct, mos)
+		}
 	}
 	if len(raw) > 0 {
 		updates["recording_raw_bytes"] = len(raw)

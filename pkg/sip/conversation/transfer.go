@@ -14,6 +14,7 @@ import (
 	sipdtmf "github.com/LinByte/VoiceServer/pkg/sip/dtmf"
 	"github.com/LinByte/VoiceServer/pkg/sip/historyinfo"
 	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
+	"github.com/LinByte/VoiceServer/pkg/sip/sipagentpoll"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -158,6 +159,9 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	notifyTransferPhase(inboundCallID, "loading", nil)
 	startTransferRinging(ctx, inboundCallID, lg)
 	notifyTransferPhase(inboundCallID, "ringing", nil)
+	if tgt.ACDPoolTargetID != 0 {
+		sipagentpoll.SetSIPAgentRinging(tgt.ACDPoolTargetID, inboundCallID, extractInboundCallerNumber(inboundCallID))
+	}
 
 	// 转接坐席时，From 的 SIP URI user 部分仍走中继配置的主叫号（避免运营商
 	// ANI 校验拒接），但把 display-name 改成真实主叫（PSTN 用户）的手机号
@@ -207,6 +211,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 			lg.Info("sip transfer: inbound gone before agent dial — abort",
 				zap.String("inbound_call_id", inboundCallID))
 			stopTransferRinging(inboundCallID)
+			sipagentpoll.ClearByInbound(inboundCallID)
 			transferStarted.Delete(inboundCallID)
 			notifyTransferPhase(inboundCallID, "aborted", map[string]any{"reason": "inbound_gone"})
 			return
@@ -247,6 +252,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		cid, err := d.Dial(ctx, req)
 		if err != nil {
 			stopTransferRinging(inboundCallID)
+			sipagentpoll.ClearByInbound(inboundCallID)
 			transferStarted.Delete(inboundCallID)
 			notifyTransferPhase(inboundCallID, "failed", map[string]any{"error": err.Error()})
 			lg.Warn("sip transfer: outbound dial failed", zap.String("inbound_call_id", inboundCallID), zap.Error(err))
@@ -272,6 +278,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 						zap.String("outbound_call_id", cid), zap.Error(err))
 				}
 			}
+			sipagentpoll.ClearByInbound(inboundCallID)
 			transferStarted.Delete(inboundCallID)
 		}
 	})
@@ -599,6 +606,7 @@ func CleanupCallState(callID string) {
 	// 已建立桥接的 leg 走 HangupTransferBridgeFull → bridgeSendOutboundBYE
 	// 路径，这里 LoadAndDelete 取不到东西就 no-op，互不冲突。
 	CancelPendingTransferLeg(callID)
+	sipagentpoll.ClearByInbound(callID)
 	transferStarted.Delete(callID)
 	stopTransferRinging(callID)
 	stopNoAgentRetryLoop(callID)

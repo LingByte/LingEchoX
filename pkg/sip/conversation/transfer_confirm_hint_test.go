@@ -24,9 +24,16 @@ func TestTransferConfirmSessionHint_NotReady(t *testing.T) {
 }
 
 func TestTransferConfirmSpokenZH_NotReady(t *testing.T) {
-	got := transferConfirmSpokenZH(1, 2, 1)
+	got := transferConfirmSpokenZH(1, 3, 2)
 	if got != transferConfirmNormalReplyZH {
 		t.Fatalf("want %q got %q", transferConfirmNormalReplyZH, got)
+	}
+}
+
+func TestTransferConfirmSpokenZH_Ready(t *testing.T) {
+	got := transferConfirmSpokenZH(3, 3, 0)
+	if got != transferConfirmExecuteReplyZH {
+		t.Fatalf("want %q got %q", transferConfirmExecuteReplyZH, got)
 	}
 }
 

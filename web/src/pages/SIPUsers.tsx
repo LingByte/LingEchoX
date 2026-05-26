@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Card, Modal, Space, Typography } from '@arco-design/web-react'
 import { IconEye, IconDelete } from '@arco-design/web-react/icon'
 import BaseLayout from '@/components/Layout/BaseLayout.tsx'
+import { TableIdCell } from '@/components/TableIdCell'
 import { listSIPUsers, deleteSIPUser, type SIPUserRow } from '@/api/sipUsers'
 import { showAlert } from '@/utils/notification'
 
@@ -95,7 +96,7 @@ const SIPUsers = () => {
                 <tr><td style={{ padding: 24, textAlign: 'center' }} colSpan={6}>暂无数据</td></tr>
               ) : rows.map((u) => (
                 <tr key={u.id} style={{ borderTop: '1px solid var(--color-border)' }}>
-                  <td style={{ padding: 12 }}>{u.id}</td>
+                  <td style={{ padding: 12 }}><TableIdCell id={u.id} /></td>
                   <td style={{ padding: 12, wordBreak: 'break-all' }}>{u.username}@{u.domain}</td>
                   <td style={{ padding: 12 }}>{onlineLabel(u.online)}</td>
                   <td style={{ padding: 12 }}>{fmt(u.expiresAt)}</td>
@@ -131,7 +132,7 @@ const SIPUsers = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 13 }}>
             <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
               <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>ID</div>
-              <div style={{ fontWeight: 500 }}>{current.id}</div>
+              <div style={{ fontWeight: 500, maxWidth: '100%' }}><TableIdCell id={current.id} /></div>
             </div>
             <div style={{ border: '1px solid var(--color-border)', borderRadius: 4, padding: 12 }}>
               <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 4 }}>状态</div>

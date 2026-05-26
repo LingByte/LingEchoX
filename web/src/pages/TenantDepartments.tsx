@@ -83,7 +83,6 @@ export default function TenantDepartments() {
             data={groups}
             pagination={false}
             columns={[
-              { title: 'ID', dataIndex: 'id', width: 72 },
               { title: '名称', dataIndex: 'name' },
               {
                 title: '默认部门',

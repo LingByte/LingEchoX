@@ -9,6 +9,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
+	"github.com/LinByte/VoiceServer/pkg/sip/sipagentpoll"
 	"github.com/LinByte/VoiceServer/pkg/sip/webseat"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"go.uber.org/zap"
@@ -296,6 +297,7 @@ func HandleTransferAgentDialEvent(evt outbound.DialEvent) {
 		scheduleTransferInviteWatch(inbound, evt.CallID)
 	case outbound.DialEventEstablished:
 		transferPendingOutbound.Delete(inbound)
+		sipagentpoll.MarkInboundConnected(inbound)
 		cancelTransferInviteWatch(evt.CallID)
 		// RFC 5589 §6: REFER 触发的外呼现在真正接通，给 transferor 发
 		// "SIP/2.0 200 OK" sipfrag NOTIFY（如有挂载回调）。非 REFER 路径
@@ -348,6 +350,7 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 		transferExcludeAdd(inbound, rowID)
 	}
 	webseat.ReleaseInboundWebACDOffer(inbound)
+	sipagentpoll.MarkInboundFailed(inbound)
 	transferStarted.Delete(inbound)
 	transferLastACDRowByInbound.Delete(inbound)
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Drawer, Input, Space, Typography } from '@arco-design/web-react'
 import { IconDelete } from '@arco-design/web-react/icon'
 import BaseLayout from '@/components/Layout/BaseLayout.tsx'
+import { TableIdCell } from '@/components/TableIdCell'
 import { createTrunk, deleteTrunk, listTrunks, updateTrunk, type TrunkRow } from '@/api/trunks'
 import { showAlert } from '@/utils/notification'
 
@@ -146,7 +147,7 @@ const SIPTrunks = () => {
                       <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-3)' }}>暂无数据</td></tr>
                     ) : rows.map((r) => (
                       <tr key={r.id} style={{ borderTop: '1px solid var(--color-border)' }}>
-                        <td style={{ padding: 12 }}>{r.id}</td>
+                        <td style={{ padding: 12 }}><TableIdCell id={r.id} /></td>
                         <td style={{ padding: 12, maxWidth: 200 }}>
                           <div style={{ fontWeight: 500 }}>{r.name || '—'}</div>
                           {r.description ? <div style={{ fontSize: 12, color: 'var(--color-text-3)' }}>{r.description}</div> : null}

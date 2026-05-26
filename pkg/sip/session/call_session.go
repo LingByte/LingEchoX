@@ -486,6 +486,14 @@ func (cs *CallSession) NegotiatedCodec() sdp.Codec {
 	return cs.neg
 }
 
+// RTCPStats returns a one-shot RTCP counter snapshot (safe at BYE; O(1)).
+func (cs *CallSession) RTCPStats() rtp.RTCPStats {
+	if cs == nil || cs.rtpSess == nil {
+		return rtp.RTCPStats{}
+	}
+	return cs.rtpSess.RTCPSnapshot()
+}
+
 // RTPSession returns the underlying RTP/UDP session (for building a transfer bridge).
 func (cs *CallSession) RTPSession() *rtp.Session {
 	if cs == nil {

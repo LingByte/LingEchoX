@@ -2,7 +2,8 @@ import { get, post, put, del, type ApiResponse } from '@/utils/request'
 import type { Paginated } from '@/api/types'
 
 export interface ACDPoolTargetRow {
-  id: number
+  /** Snowflake id — API returns string (json:",string") */
+  id: number | string
   trunkNumberId?: number
   name?: string
   createBy?: string

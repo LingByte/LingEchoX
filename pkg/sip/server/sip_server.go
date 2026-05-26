@@ -1354,7 +1354,9 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	var codec string
 	var recSR, recOpusCh int
 	var wavRec gateway.RecordingInfo
+	var rtcpSnap rtp.RTCPStats
 	if cs != nil {
+		rtcpSnap = cs.RTCPStats()
 		raw = cs.TakeRecording()
 		codec = cs.NegotiatedCodec().Name
 		src := cs.SourceCodec()
@@ -1381,6 +1383,7 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 			RecordSampleRate:   recSR,
 			RecordOpusChannels: recOpusCh,
 			WAVRecording:       wavRec,
+			RTCP:               rtcpSnap,
 		})
 	}
 	s.forgetUASDialog(callID)

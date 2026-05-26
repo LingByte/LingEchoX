@@ -28,7 +28,6 @@ import (
 const maxWelcomeWAVBytes = 16 << 20
 
 // trunkWriteReq 没有 providerCode 字段：供应商编码由后端在 BeforeCreate 钩子中生成，
-// 前端即便提交也会被丢弃，更新接口不支持修改 provider_code。
 type trunkWriteReq struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`

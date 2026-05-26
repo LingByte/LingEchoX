@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	siprtp "github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 )
 
@@ -63,6 +64,10 @@ type ByePersistParams struct {
 	// URL/Bytes/DurationMs onto the call_recording row instead of
 	// re-decoding RawPayload. Zero-valued (non-pointer? — Bucket=="" check) means SN3 fallback.
 	WAVRecording gateway.RecordingInfo
+
+	// RTCP is a one-shot snapshot from Session.RTCPSnapshot() at BYE (before Close).
+	// Zero value means no QoS columns are written.
+	RTCP siprtp.RTCPStats
 }
 
 // SIPCallPersistStore defines persistence hooks used by SIP server.

@@ -186,6 +186,7 @@ func RunMigrations(db *gorm.DB) error {
 		&sipPersist.SIPUser{},
 		&sipPersist.SIPCall{},
 		&models.ACDPoolTarget{},
+		&models.SIPACDTransferOffer{},
 		&models.SIPCampaign{},
 		&models.SIPCampaignContact{},
 		&models.SIPCallAttempt{},

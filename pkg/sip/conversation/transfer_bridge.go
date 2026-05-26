@@ -8,6 +8,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/media/encoder"
 	"github.com/LinByte/VoiceServer/pkg/sip/bridge"
+	"github.com/LinByte/VoiceServer/pkg/sip/sipagentpoll"
 	siprtp "github.com/LinByte/VoiceServer/pkg/sip/rtp"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"go.uber.org/zap"
@@ -448,6 +449,7 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 		logFields = append(logFields, zap.String("pcm_reason", pcmReason))
 	}
 	lg.Info("sip transfer bridge started", logFields...)
+	sipagentpoll.MarkInboundConnected(inboundCallID)
 	MarkInboundHadSIPAgentTransfer(inboundCallID)
 	notifyTransferPhase(inboundCallID, TransferPhaseConnected, map[string]any{
 		"outbound_call_id": outboundCallID,

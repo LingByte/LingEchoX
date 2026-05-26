@@ -15,6 +15,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/sip/outbound"
 	"github.com/LinByte/VoiceServer/pkg/sip/persist"
 	"github.com/LinByte/VoiceServer/pkg/sip/server"
+	"github.com/LinByte/VoiceServer/pkg/sip/sipagentpoll"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	"github.com/LinByte/VoiceServer/pkg/sip/stack"
 	"github.com/LinByte/VoiceServer/pkg/sip/voicedialog"
@@ -416,6 +417,7 @@ func Start(cfg Config) (*Embedded, error) {
 	conversation.SetTransferDialTargetResolver(func(ctx context.Context, inboundCallID string, exclude []uint) (outbound.DialTarget, bool) {
 		return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID, exclude)
 	})
+	sipagentpoll.SetDatabase(acdDB)
 	conversation.SetTransferLegAbandoner(outMgr.AbandonEarlyTransferInvite)
 	conversation.SetTransferLegCanceller(outMgr.SendCANCEL)
 	// Phase 1 PR-4: register the legacy attach path under the new

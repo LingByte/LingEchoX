@@ -127,9 +127,9 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 		aiBufMu    sync.Mutex
 		aiBuf      []byte
 		playerOnce sync.Once
-		// Set when we cancel an assistant reply for forbidden transfer
-		// promise wording; cleared on each new final user transcript.
-		transferAckBlocked atomic.Bool
+		// While true, drop Omni assistant audio/text handling — fixed TTS
+		// confirm reply is playing instead (avoids double Cancel + wrong wording).
+		suppressOmniAssistant atomic.Bool
 	)
 	const (
 		bargeInGrace    = 200 * time.Millisecond
@@ -161,6 +161,7 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 	// executeTransfer runs the dial leg after the caller has heard the AI
 	// transfer acknowledgement (FC path) or immediately (legacy keyword/marker).
 	transferStartedLocal := atomic.Bool{}
+	confirmReplyBusy := atomic.Bool{}
 	executeTransfer := func(reason string) {
 		if !transferStartedLocal.CompareAndSwap(false, true) {
 			return
@@ -200,33 +201,42 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 			ms.DrainOutputs()
 		}
 		ttsPlaying.Store(false)
-		// Run prompt + transfer in a goroutine: onEvent must NOT
-		// block (it's the realtime WS read loop's dispatch path —
-		// blocking here stalls all other events). The prompt is a
-		// short fixed WAV (~2-3 seconds) so the dial leg fires only
-		// a few seconds later; the user-perceived UX is "AI
-		// acknowledges → ringing", matching pipeline mode.
+		// Dial in a goroutine: onEvent must NOT block (realtime WS read loop).
+		// The transfer-confirm phrase is already spoken via tenant TTS
+		// (PlayTransferConfirmReply) before this runs.
 		go func() {
-			pcm, perr := loadTransferPromptPCM(ms.GetContext(), pcmBridgeSR, lg)
-			if perr != nil {
-				lg.Warn("sip voice (realtime): transfer prompt load failed, transferring without announcement",
-					zap.String("call_id", cs.CallID),
-					zap.Error(perr),
-				)
-			} else if len(pcm) > 0 {
-				lg.Info("sip voice (realtime): playing transfer announcement before dial",
-					zap.String("call_id", cs.CallID),
-					zap.Int("bytes", len(pcm)),
-				)
-				if err := playWelcomePCM(ms.GetContext(), pcm, ms, lg, pcmBridgeSR, cs.WriteAIPCM); err != nil {
-					lg.Warn("sip voice (realtime): transfer announcement playback failed, transferring anyway",
-						zap.String("call_id", cs.CallID),
-						zap.Error(err),
-					)
-				}
-			}
 			TriggerTransferToAgent(context.Background(), cs.CallID, lg)
 		}()
+	}
+
+	runForcedTransferConfirm := func(execute, triggerDial bool) {
+		if !confirmReplyBusy.CompareAndSwap(false, true) {
+			return
+		}
+		defer func() {
+			confirmReplyBusy.Store(false)
+			suppressOmniAssistant.Store(false)
+		}()
+		if ms == nil || ms.GetContext().Err() != nil {
+			return
+		}
+		lg.Info("sip voice (realtime): playing fixed transfer-confirm reply",
+			zap.String("call_id", cs.CallID),
+			zap.Bool("execute", execute),
+			zap.String("text", transferConfirmReplyText(execute)),
+		)
+		if err := PlayTransferConfirmReply(ms.GetContext(), cs, execute, lg); err != nil {
+			lg.Warn("sip voice (realtime): fixed transfer-confirm reply failed",
+				zap.String("call_id", cs.CallID),
+				zap.Error(err),
+			)
+		}
+		if triggerDial {
+			if useTransferTool {
+				markSIPTransferPending(cs.CallID)
+			}
+			executeTransfer("forced_confirm")
+		}
 	}
 
 	waitRealtimePlaybackDrain := func(ctx context.Context, maxWait time.Duration) {
@@ -314,7 +324,9 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 			if !ev.Final {
 				return
 			}
-			transferAckBlocked.Store(false)
+			if gateTransferOrShutdown() {
+				return
+			}
 			assistantMu.Lock()
 			assistantBuf.Reset()
 			assistantMu.Unlock()
@@ -332,20 +344,20 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 			}
 			syncRealtimeTransferInstructions(agent, baseSystemPrompt, cs.CallID, transferConfirmRequired)
 			if realtimeMatchTransferIntent("user", ev.Text, nil) {
-				if allowed, cnt := sipTransferMayExecute(cs.CallID, transferConfirmRequired); allowed {
-					if useTransferTool {
-						// Confirm gate satisfied: arm dial on the next assistant
-						// final (tool or ack phrase). Do not wait for the model
-						// to call transfer_to_agent — it often only speaks.
-						markSIPTransferPending(cs.CallID)
-						lg.Info("sip voice (realtime): transfer confirm satisfied, dial armed after assistant reply",
-							zap.String("call_id", cs.CallID),
-							zap.Int("count", cnt),
-							zap.Int("required", transferConfirmRequired),
-						)
-					} else {
-						executeTransfer("user_keyword")
-					}
+				allowed, cnt := sipTransferMayExecute(cs.CallID, transferConfirmRequired)
+				if transferConfirmRequired > 1 || allowed {
+					suppressOmniAssistant.Store(true)
+					sipRealtimeFlushAssistantOutput(ms, &aiBufMu, &aiBuf, &aiMutedUntilNs, &ttsPlaying, 60*time.Second)
+					sipRealtimeSafeCancel(agent)
+					go runForcedTransferConfirm(allowed, allowed)
+					lg.Info("sip voice (realtime): transfer intent — fixed confirm reply scheduled",
+						zap.String("call_id", cs.CallID),
+						zap.Int("count", cnt),
+						zap.Int("required", transferConfirmRequired),
+						zap.Bool("execute", allowed),
+					)
+				} else if allowed {
+					executeTransfer("user_keyword")
 				}
 			}
 
@@ -372,31 +384,11 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 						executeTransfer("assistant_marker")
 					}
 				}
-				// FC path: dial when confirm gate satisfied (pending set on
-				// user transcript or tool). Do not require transfer-ack wording.
-				if useTransferTool && !transferStartedLocal.Load() {
+				// FC path: dial when confirm gate satisfied. Multi-step confirm
+				// uses forced TTS on user transcript — ignore late Omni finals here.
+				if useTransferTool && !transferStartedLocal.Load() && transferConfirmRequired <= 1 {
 					toolPending := isSIPTransferPending(cs.CallID)
-					ackPhrase := realtimeMatchTransferAckPhrase(clean)
-					allowed, cnt := sipTransferMayExecute(cs.CallID, transferConfirmRequired)
-					if ackPhrase && transferConfirmRequired > 1 {
-						assistantRaw := clean
-						sipRealtimeStopTransferAckAudio(agent, ms, &aiBufMu, &aiBuf, &aiMutedUntilNs, &ttsPlaying, bargeInGrace)
-						if !allowed && cnt > 0 {
-							clean = transferConfirmNormalReplyZH
-							lg.Warn("sip voice (realtime): model used forbidden transfer promise (audio cut, dial blocked)",
-								zap.String("call_id", cs.CallID),
-								zap.Int("count", cnt),
-								zap.Int("required", transferConfirmRequired),
-								zap.String("assistant_text", assistantRaw),
-								zap.String("expected_user_reply", transferConfirmNormalReplyZH),
-							)
-						} else if allowed {
-							lg.Info("sip voice (realtime): transfer ack audio suppressed (dial uses normal reply only)",
-								zap.String("call_id", cs.CallID),
-								zap.String("assistant_text", clean),
-							)
-						}
-					}
+					allowed, _ := sipTransferMayExecute(cs.CallID, transferConfirmRequired)
 					if toolPending && allowed {
 						go func() {
 							waitRealtimePlaybackDrain(ms.GetContext(), 15*time.Second)
@@ -405,6 +397,23 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 							}
 							executeTransfer("function_call")
 						}()
+					}
+				}
+				if suppressOmniAssistant.Load() || confirmReplyBusy.Load() {
+					allowed, _ := sipTransferMayExecute(cs.CallID, transferConfirmRequired)
+					if allowed {
+						clean = transferConfirmExecuteReplyZH
+					} else {
+						clean = transferConfirmNormalReplyZH
+					}
+				} else if transferConfirmRequired > 1 && realtimeMatchTransferAckPhrase(clean) {
+					allowed, cnt := sipTransferMayExecute(cs.CallID, transferConfirmRequired)
+					if !allowed && cnt > 0 {
+						lg.Debug("sip voice (realtime): ignored late model transfer wording (fixed TTS path)",
+							zap.String("call_id", cs.CallID),
+							zap.String("assistant_text", clean),
+						)
+						clean = transferConfirmNormalReplyZH
 					}
 				}
 				// Hangup phrase: same semantics as pipeline mode —
@@ -433,16 +442,7 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 			// a coherent reply even if the server skips `done.transcript`.
 			assistantMu.Lock()
 			assistantBuf.WriteString(ev.Text)
-			acc := assistantBuf.String()
 			assistantMu.Unlock()
-			if useTransferTool && transferConfirmRequired > 1 &&
-				realtimeMatchTransferAckPhrase(acc) && !transferAckBlocked.Swap(true) {
-				sipRealtimeStopTransferAckAudio(agent, ms, &aiBufMu, &aiBuf, &aiMutedUntilNs, &ttsPlaying, bargeInGrace)
-				lg.Info("sip voice (realtime): cut assistant transfer-promise audio (use normal reply)",
-					zap.String("call_id", cs.CallID),
-					zap.String("partial_text", acc),
-				)
-			}
 			if turnT0.Load() == 0 {
 				turnT0.Store(time.Now().UnixNano())
 			}
@@ -453,7 +453,7 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 			// only. This is the critical "AI 不抢话" guarantee the
 			// pipeline path enforces via IsTransferInProgress at the
 			// pipe.SetTextCallback level.
-			if gateTransferOrShutdown() {
+			if gateTransferOrShutdown() || suppressOmniAssistant.Load() {
 				return
 			}
 			// Barge-in mute: drop in-flight chunks from the cancelled
@@ -832,11 +832,16 @@ func realtimeTemperatureFromEnv(env VoiceEnv) float64 {
 	return 0
 }
 
-// sipRealtimeStopTransferAckAudio cancels the in-flight Omni reply and
-// flushes queued AI PCM so the caller does not hear forbidden transfer
-// promise wording (「正在为您转接」等). Used when confirm gate is active.
-func sipRealtimeStopTransferAckAudio(
-	agent realtime.Agent,
+// sipRealtimeSafeCancel sends response.cancel; Omni may return "none active
+// response" if the turn already ended — treated as non-fatal in aliyunomni.
+func sipRealtimeSafeCancel(agent realtime.Agent) {
+	if agent != nil {
+		_ = agent.Cancel()
+	}
+}
+
+// sipRealtimeFlushAssistantOutput drops queued Omni PCM without Cancel.
+func sipRealtimeFlushAssistantOutput(
 	ms *media.MediaSession,
 	aiBufMu *sync.Mutex,
 	aiBuf *[]byte,
@@ -844,9 +849,6 @@ func sipRealtimeStopTransferAckAudio(
 	ttsPlaying *atomic.Bool,
 	muteFor time.Duration,
 ) {
-	if agent != nil {
-		_ = agent.Cancel()
-	}
 	if aiBufMu != nil && aiBuf != nil {
 		aiBufMu.Lock()
 		*aiBuf = (*aiBuf)[:0]

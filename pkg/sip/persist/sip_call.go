@@ -89,8 +89,13 @@ type SIPCall struct {
 	RemoteRTPAddr     string     `json:"remoteRtpAddr" gorm:"size:128;index"`
 	LocalRTPAddr      string     `json:"localRtpAddr" gorm:"size:128;index"`
 	PayloadType       uint8      `json:"-" gorm:"index"`
-	Codec             string     `json:"-" gorm:"size:32;index"`
-	ClockRate         int        `json:"-" gorm:"column:clock_rate"`
+	Codec             string     `json:"codec,omitempty" gorm:"size:32;index"`
+	ClockRate         int        `json:"clockRate,omitempty" gorm:"column:clock_rate"`
+	// QoS* are filled once at BYE from RTCP snapshot (no in-call sampling overhead).
+	QoSRTTMs          uint32  `json:"qosRttMs,omitempty" gorm:"column:qos_rtt_ms;default:0"`
+	QoSJitterMs       float32 `json:"qosJitterMs,omitempty" gorm:"column:qos_jitter_ms"`
+	QoSPacketLossPct  float32 `json:"qosPacketLossPct,omitempty" gorm:"column:qos_packet_loss_pct"`
+	QoSMosEstimate    float32 `json:"qosMosEstimate,omitempty" gorm:"column:qos_mos_estimate"`
 	State             string     `json:"state" gorm:"size:32;index"`
 	InviteAt          *time.Time `json:"inviteAt" gorm:"index"`
 	AckAt             *time.Time `json:"ackAt" gorm:"index"`

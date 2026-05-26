@@ -26,6 +26,7 @@ const Profile = lazy(() => import('@/pages/Profile'))
 const TenantDepartments = lazy(() => import('@/pages/TenantDepartments'))
 const TenantRolePermissions = lazy(() => import('@/pages/TenantRolePermissions'))
 const TenantManagement = lazy(() => import('@/pages/TenantManagement'))
+const PlatformAdmins = lazy(() => import('@/pages/PlatformAdmins'))
 const TenantAiConfig = lazy(() => import('@/pages/TenantAiConfig'))
 const TenantMembers = lazy(() => import('@/pages/TenantMembers'))
 
@@ -88,7 +89,7 @@ function App() {
                     <Route path="/overview" element={<RequireAuth><Overview /></RequireAuth>} />
                     <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
                     <Route path="/sip-users" element={<RequireAuth><RequirePlatform><SIPUsers /></RequirePlatform></RequireAuth>} />
-                    <Route path="/call-records" element={<RequireAuth><RequireTenant><CallRecords /></RequireTenant></RequireAuth>} />
+                    <Route path="/call-records" element={<RequireAuth><CallRecords /></RequireAuth>} />
                     <Route path="/number-pool" element={<RequireAuth><RequireTenant><NumberPool /></RequireTenant></RequireAuth>} />
                     <Route path="/outbound-tasks" element={<RequireAuth><RequireTenant><OutboundTasks /></RequireTenant></RequireAuth>} />
                     <Route path="/script-manager/new" element={<RequireAuth><RequireTenant><ScriptManagerNew /></RequireTenant></RequireAuth>} />
@@ -102,6 +103,16 @@ function App() {
                         <RequireAuth>
                           <RequirePlatform>
                             <TenantManagement />
+                          </RequirePlatform>
+                        </RequireAuth>
+                      }
+                    />
+                    <Route
+                      path="/platform-admins"
+                      element={
+                        <RequireAuth>
+                          <RequirePlatform>
+                            <PlatformAdmins />
                           </RequirePlatform>
                         </RequireAuth>
                       }

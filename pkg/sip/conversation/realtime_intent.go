@@ -45,15 +45,19 @@ const transferAgentMarker = "[TRANSFER_TO_AGENT]"
 // positives cause unnecessary transfers, which are user-visible.
 var transferUserPhrasesDefault = []string{
 	"转人工",
-	"人工，", // e.g.「人工，人工」— not matched inside「主人公」
+	"人工",
+	"人工，", // e.g.「人工，人工」
 	"人工客服",
 	"真人客服",
 	"找客服",
 	"接客服",
 	"接线员",
 	"我要人工",
+	"我这边要人工",
 	"换个人工",
 	"转接人工",
+	"可以转接人工吗",
+	"可以转接人工",
 }
 
 // transferAckPromisePhrases are active transfer-in-progress wording only.
@@ -99,13 +103,13 @@ func realtimeTransferToolPromptRule(confirmRequired int) string {
 		"transfer_to_agent 仅用户明确要求转人工时调用，平时勿提起。"
 	if confirmRequired <= 1 {
 		return realtimeNoProactiveTransferRule + "\n" + tools +
-			" 问时间请调用 get_current_time。用户明确要转人工时调用 transfer_to_agent；对用户说「请问有什么可以帮您的」等正常接待语，勿说「正在转接」「请稍候」。"
+			" 问时间请调用 get_current_time。用户明确要转人工时调用 transfer_to_agent；对用户说「" + transferConfirmExecuteReplyZH + "」，勿说其它转接措辞。"
 	}
 	return realtimeNoProactiveTransferRule + "\n" + tools +
 		" 问时间请调用 get_current_time，不要编造。" +
 		" 转人工由后台累计用户 " + strconv.Itoa(confirmRequired) + " 次明确表达后才可调用 transfer_to_agent（勿向用户透露累计几次或还剩几次）。" +
-		"未满次数时勿调用该工具；对用户只能正常接待，例如「请问有什么可以帮您的」，严禁「正在为您转接」「请稍候」「马上转接」，不要追问「再说一次转人工」。" +
-		"满足次数后调用 transfer_to_agent；对用户仍只说「请问有什么可以帮您的」等，转接在后台进行，禁止「正在为您转接」「请稍候」。"
+		"未满次数时勿调用该工具；对用户只能说「" + transferConfirmNormalReplyZH + "」，严禁「正在为您转接」「请稍候」「马上转接」，不要追问「再说一次转人工」。" +
+		"满足次数后调用 transfer_to_agent；对用户只说「" + transferConfirmExecuteReplyZH + "」。"
 }
 
 // realtimeAugmentSystemPrompt appends transfer/tool rules after operatorCore.
@@ -149,6 +153,9 @@ func realtimeMatchTransferIntent(which, text string, userPhrases []string) bool 
 		for _, p := range phrases {
 			p = strings.ToLower(strings.TrimSpace(p))
 			if p == "" {
+				continue
+			}
+			if p == "人工" && strings.Contains(t, "人工智能") {
 				continue
 			}
 			if strings.Contains(t, p) {

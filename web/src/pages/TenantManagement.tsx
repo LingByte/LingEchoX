@@ -13,6 +13,7 @@ import {
 } from '@arco-design/web-react'
 import { Link, useNavigate } from 'react-router-dom'
 import BaseLayout from '@/components/Layout/BaseLayout'
+import { TableIdCell } from '@/components/TableIdCell'
 import {
   createTenantPlatform,
   deleteTenantPlatform,
@@ -102,7 +103,7 @@ export default function TenantManagement() {
               onChange: (p) => setPage(p),
             }}
             columns={[
-              { title: 'ID', dataIndex: 'id', width: 72 },
+              { title: 'ID', dataIndex: 'id', width: 96, render: (id: number) => <TableIdCell id={id} /> },
               { title: '企业名称', dataIndex: 'name' },
               { title: '标识 slug', dataIndex: 'slug', render: (v: string) => <Typography.Text copyable>{v}</Typography.Text> },
               { title: '联系邮箱', dataIndex: 'contactEmail', width: 180, render: (v: string) => v || '—' },
