@@ -54,6 +54,9 @@ type TrunkNumber struct {
 	VoiceDialogWSURL      string         `json:"voiceDialogWsUrl,omitempty" gorm:"column:voice_dialog_ws_url;size:512" label:"呼入语音对话WS"`
 	WelcomeAudioURL       string         `json:"welcomeAudioUrl,omitempty" gorm:"column:welcome_audio_url;size:1024" label:"欢迎语音频URL"`
 	TransferRingingURL    string         `json:"transferRingingUrl,omitempty" gorm:"column:transfer_ringing_url;size:1024" label:"转接回铃音频URL"`
+	// TransferAgentBriefText 坐席接听后、与客户桥接前向坐席侧 TTS 播报的模板（可选）。
+	// 支持 {{N}} 主叫号码、{{NTail4}} 尾号、{{Name}} 坐席名等占位符；空则直接桥接。
+	TransferAgentBriefText string        `json:"transferAgentBriefText,omitempty" gorm:"column:transfer_agent_brief_text;size:256" label:"坐席接听前播报"`
 	ACDDispatchMode       string         `json:"acdDispatchMode,omitempty" gorm:"column:acd_dispatch_mode;size:24;index;default:weight" label:"ACD 分配模式"`
 	OutboundTrunkNumberID uint           `json:"outboundTrunkNumberId" gorm:"column:outbound_trunk_number_id;not null;default:0;index" label:"外呼号码"`
 }

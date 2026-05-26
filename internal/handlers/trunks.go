@@ -64,6 +64,9 @@ type trunkNumberWriteReq struct {
 	// 空则回退 SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav。
 	// 与 WelcomeAudioUrl 共用同一套校验逻辑（welcomeaudio.ValidateURL）。
 	TransferRingingUrl string `json:"transferRingingUrl"`
+	// TransferAgentBriefText 坐席接听后、与客户桥接前向坐席 TTS 播报模板（可选，最长 256 字）。
+	// 占位符：{{N}} 主叫号码、{{NTail4}} 尾号四位、{{Name}} 坐席名称。
+	TransferAgentBriefText string `json:"transferAgentBriefText"`
 }
 
 func (h *Handlers) listTrunks(c *gin.Context) {
@@ -249,6 +252,11 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
+	briefText, err := utils.NormalizeTransferAgentBriefText(req.TransferAgentBriefText)
+	if err != nil {
+		response.Fail(c, err.Error(), nil)
+		return
+	}
 	if err := models.ValidateOutboundTrunkNumberBinding(h.db, 0, req.OutboundTrunkNumberID, req.TenantID); err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
@@ -268,9 +276,10 @@ func (h *Handlers) createTrunkNumber(c *gin.Context) {
 		EffectiveTime:         eff,
 		ExpirationTime:        exp,
 		VoiceDialogWSURL:      voiceWS,
-		WelcomeAudioURL:       welcomeURL,
-		TransferRingingURL:    ringingURL,
-		OutboundTrunkNumberID: req.OutboundTrunkNumberID,
+		WelcomeAudioURL:        welcomeURL,
+		TransferRingingURL:     ringingURL,
+		TransferAgentBriefText: briefText,
+		OutboundTrunkNumberID:  req.OutboundTrunkNumberID,
 	}
 	if err := h.db.Create(&row).Error; err != nil {
 		ginutil.WriteInternalError(c, err)
@@ -341,6 +350,11 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 		response.Fail(c, err.Error(), nil)
 		return
 	}
+	briefText, err := utils.NormalizeTransferAgentBriefText(req.TransferAgentBriefText)
+	if err != nil {
+		response.Fail(c, err.Error(), nil)
+		return
+	}
 	if err := models.ValidateOutboundTrunkNumberBinding(h.db, id, req.OutboundTrunkNumberID, req.TenantID); err != nil {
 		response.Fail(c, err.Error(), nil)
 		return
@@ -360,9 +374,10 @@ func (h *Handlers) updateTrunkNumber(c *gin.Context) {
 		"effective_time":           eff,
 		"expiration_time":          exp,
 		"voice_dialog_ws_url":      voiceWS,
-		"welcome_audio_url":        welcomeURL,
-		"transfer_ringing_url":     ringingURL,
-		"outbound_trunk_number_id": req.OutboundTrunkNumberID,
+		"welcome_audio_url":         welcomeURL,
+		"transfer_ringing_url":      ringingURL,
+		"transfer_agent_brief_text": briefText,
+		"outbound_trunk_number_id":  req.OutboundTrunkNumberID,
 	}
 	if err := h.db.Model(&models.TrunkNumber{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		ginutil.WriteInternalError(c, err)

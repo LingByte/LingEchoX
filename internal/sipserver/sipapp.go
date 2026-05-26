@@ -411,6 +411,42 @@ func Start(cfg Config) (*Embedded, error) {
 		}
 		return ""
 	})
+	conversation.SetTransferAgentBriefTemplateResolver(func(callID string) string {
+		cid := strings.TrimSpace(callID)
+		if cid == "" || acdDB == nil {
+			return ""
+		}
+		callRow, err := persist.FindActiveSIPCallByCallID(context.Background(), acdDB, cid)
+		if err != nil {
+			return ""
+		}
+		called := strings.TrimSpace(callRow.ToNumber)
+		if called == "" {
+			return ""
+		}
+		if tn, ok := models.FindTrunkNumberByInboundDID(acdDB, called); ok {
+			return strings.TrimSpace(tn.TransferAgentBriefText)
+		}
+		return ""
+	})
+	conversation.SetTransferACDAgentNameResolver(func(callID string) string {
+		cid := strings.TrimSpace(callID)
+		if cid == "" || acdDB == nil {
+			return ""
+		}
+		id, ok := conversation.PeekInboundTransferACDTargetID(cid)
+		if !ok || id == 0 {
+			return ""
+		}
+		row, err := models.GetActiveACDPoolTargetByID(acdDB, id)
+		if err != nil {
+			return ""
+		}
+		if n := strings.TrimSpace(row.Name); n != "" {
+			return n
+		}
+		return strings.TrimSpace(row.TargetValue)
+	})
 	conversation.SetSIPTurnPersist(func(ctx context.Context, callID string, turn conversation.DialogTurn) {
 		sipCallPersist.SaveConversationTurn(ctx, callID, turn)
 	})

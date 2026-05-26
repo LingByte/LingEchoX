@@ -34,6 +34,8 @@ function toRFC3339OrUndefined(isoLocal: string): string | undefined {
   return d.toISOString()
 }
 
+const MAX_TRANSFER_AGENT_BRIEF_LEN = 256
+
 type FormState = {
   trunkId: string
   tenantId: string
@@ -54,6 +56,7 @@ type FormState = {
   welcomeAudioUrl: string
   // transferRingingUrl 转接阶段回铃 WAV URL，语义同 welcomeAudioUrl。
   transferRingingUrl: string
+  transferAgentBriefText: string
   outboundTrunkNumberId: string
 }
 
@@ -74,6 +77,7 @@ const defaultForm = (): FormState => ({
   voiceDialogWsUrl: '',
   welcomeAudioUrl: '',
   transferRingingUrl: '',
+  transferAgentBriefText: '',
   outboundTrunkNumberId: '0',
 })
 
@@ -181,6 +185,7 @@ const SIPTrunkNumbers = () => {
       voiceDialogWsUrl: r.voiceDialogWsUrl || '',
       welcomeAudioUrl: r.welcomeAudioUrl || '',
       transferRingingUrl: r.transferRingingUrl || '',
+      transferAgentBriefText: r.transferAgentBriefText || '',
       outboundTrunkNumberId: String(r.outboundTrunkNumberId ?? 0),
     })
     setModalOpen(true)
@@ -280,6 +285,7 @@ const SIPTrunkNumbers = () => {
       voiceDialogWsUrl: form.voiceDialogWsUrl.trim(),
       welcomeAudioUrl: form.welcomeAudioUrl.trim(),
       transferRingingUrl: form.transferRingingUrl.trim(),
+      transferAgentBriefText: form.transferAgentBriefText.trim().slice(0, MAX_TRANSFER_AGENT_BRIEF_LEN),
       outboundTrunkNumberId: (() => {
         const v = parseInt(form.outboundTrunkNumberId, 10)
         return Number.isFinite(v) && v > 0 ? v : 0
@@ -642,6 +648,28 @@ const SIPTrunkNumbers = () => {
               )}
               <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
                 转接/转人工阶段（SIP 透传 ringback 与 voicedialog transfer-loading）播放给主叫的回铃 WAV。校验规则与上传流程同欢迎语完全一致；留空则回退到 SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav。
+              </Typography.Paragraph>
+            </div>
+            <div>
+              <Typography.Text style={{ fontSize: 12 }}>坐席接听前播报（可选）</Typography.Text>
+              <Input.TextArea
+                maxLength={MAX_TRANSFER_AGENT_BRIEF_LEN}
+                showWordLimit
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                placeholder="例：您好{{Name}}，尾号{{NTail4}}的来电，请接听。"
+                value={form.transferAgentBriefText}
+                onChange={(v) =>
+                  setForm((f) => ({
+                    ...f,
+                    transferAgentBriefText: String(v).slice(0, MAX_TRANSFER_AGENT_BRIEF_LEN),
+                  }))
+                }
+              />
+              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                坐席接通后、与客户通话前，向坐席侧 TTS 播报一句（主叫仍听转接音乐）。占位符：{' '}
+                <Typography.Text code>{'{{N}}'}</Typography.Text> 主叫号码、{' '}
+                <Typography.Text code>{'{{NTail4}}'}</Typography.Text> 尾号四位、{' '}
+                <Typography.Text code>{'{{Name}}'}</Typography.Text> 坐席名称（ACD 名称）。最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字；留空则直接通话。
               </Typography.Paragraph>
             </div>
             <div>

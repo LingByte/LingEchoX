@@ -271,11 +271,32 @@ func TeardownTransferBridgeOnOutboundRemoteByeFallback(inboundCallID, outboundCa
 }
 
 // StartTransferBridge stops AI media on both legs and bridges audio.
-// Raw UDP RTP relay only when both legs are the same narrowband G.711 (e.g. PCMU↔PCMU); transfer agent
-// legs are offered PCMU, so the usual path is PCM transcode (e.g. inbound Opus ↔ agent PCMU).
-// Raw relay keeps peer SSRC/seq/timestamp; only PT is remapped when needed.
-// inboundCallID is the original caller's Call-ID (CorrelationID on the outbound DialRequest).
+// When TrunkNumber.transfer_agent_brief_text is set, the caller keeps hold
+// music while the agent hears a one-line TTS brief, then the bridge starts.
 func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSession, outboundCallID string, lg *zap.Logger) {
+	inboundCallID = normCallID(inboundCallID)
+	outboundCallID = normCallID(outboundCallID)
+	if lg == nil && logger.Lg != nil {
+		lg = logger.Lg
+	}
+	if lg == nil {
+		lg = zap.NewNop()
+	}
+	if tmpl := resolveTransferAgentBriefTemplate(inboundCallID); tmpl != "" {
+		if _, loaded := transferAgentBriefRunning.LoadOrStore(inboundCallID, struct{}{}); loaded {
+			return
+		}
+		go func() {
+			defer transferAgentBriefRunning.Delete(inboundCallID)
+			playTransferAgentBriefThenBridge(inboundCallID, outboundCS, outboundCallID, tmpl, lg)
+		}()
+		return
+	}
+	startTransferBridgeNow(inboundCallID, outboundCS, outboundCallID, lg)
+}
+
+// startTransferBridgeNow performs hold-music stop and bidirectional media bridge.
+func startTransferBridgeNow(inboundCallID string, outboundCS *sipSession.CallSession, outboundCallID string, lg *zap.Logger) {
 	inboundCallID = normCallID(inboundCallID)
 	outboundCallID = normCallID(outboundCallID)
 	stopTransferRinging(inboundCallID)
