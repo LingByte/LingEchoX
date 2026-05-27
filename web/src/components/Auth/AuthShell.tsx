@@ -3,6 +3,7 @@ import { Button, Select } from '@arco-design/web-react'
 import { IconMoon, IconSun } from '@arco-design/web-react/icon'
 import { useThemeStore } from '@/stores/themeStore'
 import { useLocaleStore } from '@/stores/localeStore'
+import { useTranslation } from '@/i18n'
 
 interface AuthShellProps {
   title: string
@@ -13,6 +14,7 @@ interface AuthShellProps {
 
 export default function AuthShell({ title, subtitle, children, footer }: AuthShellProps) {
   const { toggleMode, isDark } = useThemeStore()
+  const { t } = useTranslation()
   const locale = useLocaleStore((s) => s.locale)
   const setLocale = useLocaleStore((s) => s.setLocale)
 
@@ -60,8 +62,8 @@ export default function AuthShell({ title, subtitle, children, footer }: AuthShe
           value={locale}
           style={{ width: 98, marginRight: 8 }}
           options={[
-            { value: 'zh-CN', label: '中文' },
-            { value: 'en-US', label: 'English' },
+            { value: 'zh-CN', label: t('locale.zh') },
+            { value: 'en-US', label: t('locale.en') },
           ]}
           onChange={(v) => setLocale(v as 'zh-CN' | 'en-US')}
         />

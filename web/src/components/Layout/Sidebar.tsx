@@ -22,11 +22,12 @@ import {
 import { useSidebar } from '@/contexts/SidebarContext'
 import { useSiteConfig } from '@/contexts/SiteConfigContext'
 import { useAuthStore } from '@/stores/authStore'
+import { useTranslation } from '@/i18n'
 
 const Sider = Layout.Sider
 
 type NavDef = {
-  name: string
+  labelKey: string
   href: string
   icon: typeof Users
   /** 租户登录：仅当 effective 权限含该菜单码时展示（平台管理员不按此项过滤） */
@@ -34,21 +35,21 @@ type NavDef = {
 }
 
 const navigation: NavDef[] = [
-  { name: '工作台', href: '/overview', icon: LayoutDashboard, tenantMenuCode: 'menu.workspace.overview' },
-  { name: 'SIP 用户', href: '/sip-users', icon: Users },
-  { name: '通话记录', href: '/call-records', icon: Phone, tenantMenuCode: 'menu.tel.records' },
-  { name: '号码池', href: '/number-pool', icon: Hash, tenantMenuCode: 'menu.res.pool' },
-  { name: '中继线路', href: '/sip-trunks', icon: RadioTower },
-  { name: '中继号码', href: '/sip-trunk-numbers', icon: ListOrdered },
-  { name: '租户管理', href: '/tenant-management', icon: Briefcase },
-  { name: '平台管理员', href: '/platform-admins', icon: Shield },
-  { name: '外呼任务', href: '/outbound-tasks', icon: PhoneCall, tenantMenuCode: 'menu.res.outbound' },
-  { name: '脚本管理', href: '/script-manager', icon: FileText, tenantMenuCode: 'menu.res.script' },
-  { name: 'Web 坐席', href: '/web-agents', icon: Headphones, tenantMenuCode: 'menu.tel.webseat' },
-  { name: '访问管理', href: '/access-keys', icon: KeyRound, tenantMenuCode: 'menu.acc.keys' },
-  { name: '成员管理', href: '/tenant-members', icon: Contact, tenantMenuCode: 'menu.org.members' },
-  { name: '部门', href: '/departments', icon: Building2, tenantMenuCode: 'menu.org.dept' },
-  { name: '角色与权限', href: '/role-permissions', icon: Shield, tenantMenuCode: 'menu.org.role' },
+  { labelKey: 'nav.overview', href: '/overview', icon: LayoutDashboard, tenantMenuCode: 'menu.workspace.overview' },
+  { labelKey: 'nav.sipUsers', href: '/sip-users', icon: Users },
+  { labelKey: 'nav.callRecords', href: '/call-records', icon: Phone, tenantMenuCode: 'menu.tel.records' },
+  { labelKey: 'nav.numberPool', href: '/number-pool', icon: Hash, tenantMenuCode: 'menu.res.pool' },
+  { labelKey: 'nav.sipTrunks', href: '/sip-trunks', icon: RadioTower },
+  { labelKey: 'nav.sipTrunkNumbers', href: '/sip-trunk-numbers', icon: ListOrdered },
+  { labelKey: 'nav.tenantManagement', href: '/tenant-management', icon: Briefcase },
+  { labelKey: 'nav.platformAdmins', href: '/platform-admins', icon: Shield },
+  { labelKey: 'nav.outboundTasks', href: '/outbound-tasks', icon: PhoneCall, tenantMenuCode: 'menu.res.outbound' },
+  { labelKey: 'nav.scriptManager', href: '/script-manager', icon: FileText, tenantMenuCode: 'menu.res.script' },
+  { labelKey: 'nav.webAgents', href: '/web-agents', icon: Headphones, tenantMenuCode: 'menu.tel.webseat' },
+  { labelKey: 'nav.accessKeys', href: '/access-keys', icon: KeyRound, tenantMenuCode: 'menu.acc.keys' },
+  { labelKey: 'nav.tenantMembers', href: '/tenant-members', icon: Contact, tenantMenuCode: 'menu.org.members' },
+  { labelKey: 'nav.departments', href: '/departments', icon: Building2, tenantMenuCode: 'menu.org.dept' },
+  { labelKey: 'nav.rolePermissions', href: '/role-permissions', icon: Shield, tenantMenuCode: 'menu.org.role' },
 ]
 
 function tenantMaySeeItem(menuCodes: readonly string[] | undefined, menuCode: string | undefined): boolean {
@@ -96,8 +97,9 @@ function NavMenuBody({
   const dn = String(user?.displayName || '').trim()
   const un = String(user?.username || '').trim()
   const em = String(user?.email || '').trim()
-  const sidebarUserLabel = dn || un || em || '我'
+  const sidebarUserLabel = dn || un || em || t('nav.me')
   const avatarUrl = isTenantUser ? String(user?.avatarUrl || '').trim() : ''
+  const { t } = useTranslation()
   const menuCodes = (user?.permissionCodes as string[] | undefined) ?? []
   const visibleNavigation = isPlatformAdmin
     ? navigation.filter((n) => platformAdminMenuHrefs.has(n.href))
@@ -168,7 +170,7 @@ function NavMenuBody({
                 }}
               >
                 <Icon size={18} strokeWidth={2} />
-                {!collapsed && item.name}
+                {!collapsed && t(item.labelKey)}
               </span>
             </Menu.Item>
           )

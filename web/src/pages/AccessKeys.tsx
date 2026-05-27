@@ -24,6 +24,7 @@ import {
   type CredentialStatus,
 } from '@/api/credentials'
 import { showAlert } from '@/utils/notification'
+import { useTranslation } from '@/i18n'
 
 type EditState = {
   id: number | null
@@ -51,6 +52,7 @@ const StatusTag = ({ status }: { status: CredentialStatus }) => {
 }
 
 const AccessKeys = () => {
+  const { t } = useTranslation()
   const [rows, setRows] = useState<CredentialRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -236,7 +238,7 @@ const AccessKeys = () => {
   }
 
   return (
-    <BaseLayout title="访问管理" description="云联络中心 / 访问管理">
+    <BaseLayout title={t('pages.accessKeys.title')} description={t('pages.accessKeys.description')}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Space wrap align="end">
           <Space direction="vertical" size={4}>

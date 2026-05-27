@@ -6,6 +6,7 @@ import SIPAgentIncomingBell from '@/components/SIPAgentIncomingBell'
 import { useThemeStore } from '@/stores/themeStore'
 import { useSidebar } from '@/contexts/SidebarContext'
 import { useLocaleStore } from '@/stores/localeStore'
+import { useTranslation } from '@/i18n'
 
 interface AdminLayoutProps {
   children: ReactNode
@@ -18,6 +19,7 @@ interface AdminLayoutProps {
 
 const BaseLayout = ({ children, title, description, actions, hideHeader }: AdminLayoutProps) => {
   const { toggleMode, isDark } = useThemeStore()
+  const { t } = useTranslation()
   const locale = useLocaleStore((s) => s.locale)
   const setLocale = useLocaleStore((s) => s.setLocale)
   const { isCollapsed, toggleCollapse } = useSidebar()
@@ -65,8 +67,8 @@ const BaseLayout = ({ children, title, description, actions, hideHeader }: Admin
                   value={locale}
                   style={{ width: 98 }}
                   options={[
-                    { value: 'zh-CN', label: '中文' },
-                    { value: 'en-US', label: 'English' },
+                    { value: 'zh-CN', label: t('locale.zh') },
+                    { value: 'en-US', label: t('locale.en') },
                   ]}
                   onChange={(v) => setLocale(v as 'zh-CN' | 'en-US')}
                 />
@@ -83,7 +85,7 @@ const BaseLayout = ({ children, title, description, actions, hideHeader }: Admin
                     size="small"
                     icon={isCollapsed ? <IconMenuUnfold /> : <IconMenuFold />}
                     onClick={toggleCollapse}
-                    title={isCollapsed ? '展开侧栏' : '收起侧栏'}
+                    title={isCollapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
                   />
                 )}
               </div>

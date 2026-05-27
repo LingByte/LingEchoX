@@ -26,6 +26,7 @@ import {
   logoutApi,
 } from '@/api/me'
 import { useAuthStore } from '@/stores/authStore'
+import { useTranslation } from '@/i18n'
 
 const FormItem = Form.Item
 
@@ -46,6 +47,7 @@ function fmtStatus(s?: string) {
 }
 
 export default function Profile() {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [me, setMe] = useState<any>(null)
   const [activeSection, setActiveSection] = useState<ProfileSection>('profile')
@@ -110,12 +112,12 @@ export default function Profile() {
 
   const navItems = useMemo(() => {
     const items: { key: ProfileSection; label: string }[] = [
-      { key: 'profile', label: '资料信息' },
+      { key: 'profile', label: t('profile.navProfile') },
     ]
-    items.push({ key: 'security', label: '安全 · 两步验证' })
-    items.push({ key: 'password', label: '修改密码' })
+    items.push({ key: 'security', label: t('profile.navSecurity') })
+    items.push({ key: 'password', label: t('profile.navPassword') })
     return items
-  }, [isPlatform])
+  }, [isPlatform, t])
 
   const resetProfileFormFromMe = () => {
     if (isPlatform && me?.platformAdmin) {
@@ -589,7 +591,7 @@ export default function Profile() {
   }
 
   return (
-    <BaseLayout title="个人中心" description="">
+    <BaseLayout title={t('profile.title')} description="">
       <div className="flex flex-wrap items-start gap-3">
         <aside
           className="flex w-[168px] shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card"
@@ -609,7 +611,7 @@ export default function Profile() {
           </Menu>
           <div className="mt-auto shrink-0 border-t border-border p-3">
             <Button long status="warning" onClick={() => void handleLogout()}>
-              退出登录
+              {t('profile.logout')}
             </Button>
           </div>
         </aside>

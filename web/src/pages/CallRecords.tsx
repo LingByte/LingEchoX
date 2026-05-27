@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { AlertCircle, MicOff } from 'lucide-react'
 import { Button, Card, Drawer } from '@arco-design/web-react'
 import BaseLayout from '@/components/Layout/BaseLayout.tsx'
+import { useTranslation } from '@/i18n'
 import {
   getSIPCall,
   listSIPCalls,
@@ -15,6 +16,7 @@ import { EllipsisHoverCell } from '@/pages/ContactCenter/EllipsisHoverCell'
 import CallAudioPlayer from '@/components/CallAudioPlayer'
 
 const CallRecords = () => {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [calls, setCalls] = useState<SIPCallRow[]>([])
   const [callsPage, setCallsPage] = useState(1)
@@ -141,7 +143,7 @@ const CallRecords = () => {
     (d.qosMosEstimate ?? 0) > 0
 
   return (
-    <BaseLayout title="通话记录" description="云联络中心 / 通话记录">
+    <BaseLayout title={t('pages.callRecords.title')} description={t('pages.callRecords.description')}>
       <div className="mb-3 flex flex-wrap gap-2 items-center">
         <input
           className="border border-border rounded-md px-3 py-1.5 text-sm bg-background max-w-xs"
@@ -166,9 +168,6 @@ const CallRecords = () => {
           搜索
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground max-w-2xl mb-3">
-        列表仅展示主被叫号码；原始 SIP From/To 头保存在服务端，可在详情里折叠查看（一般用于排障）。
-      </p>
       <Card bordered={false} bodyStyle={{ padding: 0 }}>
         <div className="overflow-x-auto">
           <table className="min-w-[1280px] w-full text-sm">

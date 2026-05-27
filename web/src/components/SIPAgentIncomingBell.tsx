@@ -21,8 +21,10 @@ export default function SIPAgentIncomingBell() {
     notify: true,
   })
 
+  const isPlatformAdmin = Boolean(user?.isPlatformAdmin || user?.principal === 'platform')
+
   useEffect(() => {
-    if (!isAuthenticated || !user) {
+    if (!isAuthenticated || !user || isPlatformAdmin) {
       setMatchedSeats([])
       setReady(false)
       return
@@ -45,7 +47,7 @@ export default function SIPAgentIncomingBell() {
     return () => {
       cancelled = true
     }
-  }, [isAuthenticated, user?.id, user?.username, user?.email, user?.displayName])
+  }, [isAuthenticated, isPlatformAdmin, user?.id, user?.username, user?.email, user?.displayName])
 
   useEffect(() => {
     if (hasIncoming) setPopoverOpen(true)

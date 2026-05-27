@@ -13,6 +13,7 @@ import (
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/ginutil"
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
@@ -51,12 +52,12 @@ func signTenantAccessToken(db *gorm.DB, user models.TenantUser, tenant models.Te
 // Disabled unless TENANT_SELF_REGISTER=true (never enable in production).
 func (h *Handlers) registerTenant(c *gin.Context) {
 	if !utils.GetBoolEnv(constants.ENVTenantSelfRegister) {
-		response.Fail(c, "自助注册已关闭，请联系管理员开通租户", nil)
+		response.FailI18n(c, i18n.KeyTenantRegisterDisabled, nil)
 		return
 	}
 	var req tenantRegisterReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "请求参数无效", err.Error())
+		response.FailI18n(c, i18n.KeyInvalidParams, err.Error())
 		return
 	}
 
@@ -66,7 +67,7 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 	if !utils.IsEmail(req.AdminEmail) {
-		response.Fail(c, "邮箱格式错误", nil)
+		response.FailI18n(c, i18n.KeyTenantInvalidEmail, nil)
 		return
 	}
 	takenMail, mailErr := models.CheckTenantUserEmailExists(h.db, req.AdminEmail, 0)
@@ -75,7 +76,7 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 		return
 	}
 	if takenMail {
-		response.Fail(c, "该邮箱已被注册", nil)
+		response.FailI18n(c, i18n.KeyTenantEmailExists, nil)
 		return
 	}
 
@@ -92,12 +93,12 @@ func (h *Handlers) registerTenant(c *gin.Context) {
 
 	token, err := signTenantAccessToken(h.db, user, tenant)
 	if err != nil {
-		response.Fail(c, "签发登录凭证失败", nil)
+		response.FailI18n(c, i18n.KeyTenantSignTokenFailed, nil)
 		return
 	}
 
 	pc, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, user.ID)
-	response.Success(c, "success", gin.H{
+	response.SuccessI18n(c, i18n.KeySuccess, gin.H{
 		"principal":       "tenant",
 		"token":           token,
 		"expiresIn":       int(constants.TenantAccessTokenTTL.Seconds()),
@@ -158,7 +159,7 @@ func (h *Handlers) createTenantPlatform(c *gin.Context) {
 		return
 	}
 	if takenMail {
-		response.Fail(c, "该邮箱已被注册", nil)
+		response.FailI18n(c, i18n.KeyTenantEmailExists, nil)
 		return
 	}
 	tenant, user, role, err := models.ProvisionTenantWithAdmin(h.db, models.TenantProvisionInput{

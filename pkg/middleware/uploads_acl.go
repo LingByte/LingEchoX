@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/LinByte/VoiceServer/internal/constants"
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
@@ -84,7 +85,7 @@ func UploadsACL() gin.HandlerFunc {
 		if !TryAttachTenantJWT(c) && !TryAttachPlatformJWT(c) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"code": 401,
-				"msg":  "recording access requires authenticated bearer token; set UPLOADS_RECORDINGS_PUBLIC=true to disable (NOT for production)",
+				"msg":  i18n.TGin(c, i18n.KeyUploadsRecordingAuth),
 			})
 			return
 		}

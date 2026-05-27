@@ -13,6 +13,7 @@ import (
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/ginutil"
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
@@ -50,16 +51,16 @@ func (h *Handlers) createCredential(c *gin.Context) {
 	accessKey := "ak_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	if req.PermissionCodes == nil || len(req.PermissionCodes) == 0 {
-		response.Fail(c, "permissionCodes 必填，至少指定一项权限（不可用空数组或省略）", nil)
+		response.FailI18n(c, i18n.KeyCredPermRequired, nil)
 		return
 	}
 	pcodes, err := utils.MarshalStringSliceJSON(req.PermissionCodes, nil)
 	if err != nil {
-		response.Fail(c, "invalid permissionCodes", nil)
+		response.FailI18n(c, i18n.KeyCredInvalidPerm, nil)
 		return
 	}
 	if strings.TrimSpace(req.AllowIP) == "" && !utils.GetBoolEnv(constants.ENVCredentialAllowEmptyAllowIP) {
-		response.Fail(c, "allowIp 必填（逗号分隔客户端 IP）；开发环境可设 CREDENTIAL_ALLOW_EMPTY_ALLOW_IP=true", nil)
+		response.FailI18n(c, i18n.KeyCredAllowIPRequired, nil)
 		return
 	}
 	row := &models.Credential{
@@ -82,7 +83,7 @@ func (h *Handlers) createCredential(c *gin.Context) {
 
 	var pc []string
 	_ = json.Unmarshal([]byte(row.PermissionCodes), &pc)
-	response.Success(c, "success", gin.H{
+	response.SuccessI18n(c, i18n.KeySuccess, gin.H{
 		"id":              row.ID,
 		"tenantId":        row.TenantID,
 		"name":            row.Name,
@@ -92,7 +93,7 @@ func (h *Handlers) createCredential(c *gin.Context) {
 		"permissionCodes": pc,
 		"status":          row.Status,
 		"createdAt":       row.CreatedAt,
-		"notice":          "secretKey is shown once; store it safely",
+		"notice":          i18n.TGin(c, i18n.KeyCredNoticeSecretOnce),
 	})
 }
 
@@ -173,7 +174,7 @@ func (h *Handlers) updateCredential(c *gin.Context) {
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if name == "" {
-			response.Fail(c, "name cannot be empty", nil)
+			response.FailI18n(c, i18n.KeyCredNameEmpty, nil)
 			return
 		}
 		updates["name"] = name
@@ -183,24 +184,24 @@ func (h *Handlers) updateCredential(c *gin.Context) {
 	}
 	if req.PermissionCodes != nil {
 		if len(req.PermissionCodes) == 0 {
-			response.Fail(c, "permissionCodes 不能为空数组", nil)
+			response.FailI18n(c, i18n.KeyCredPermEmptyArray, nil)
 			return
 		}
 		pcodes, marshalErr := utils.MarshalStringSliceJSON(req.PermissionCodes, nil)
 		if marshalErr != nil {
-			response.Fail(c, "invalid permissionCodes", nil)
+			response.FailI18n(c, i18n.KeyCredInvalidPerm, nil)
 			return
 		}
 		updates["permission_codes"] = pcodes
 	}
 	if req.AllowIP != nil && strings.TrimSpace(*req.AllowIP) == "" && !utils.GetBoolEnv(constants.ENVCredentialAllowEmptyAllowIP) {
-		response.Fail(c, "allowIp 不能为空", nil)
+		response.FailI18n(c, i18n.KeyCredAllowIPEmpty, nil)
 		return
 	}
 	if ginutil.WriteInternalError(c, h.db.Model(&models.Credential{}).Where("id = ?", row.ID).Updates(updates).Error) {
 		return
 	}
-	response.Success(c, "success", gin.H{"id": row.ID})
+	response.SuccessI18n(c, i18n.KeySuccess, gin.H{"id": row.ID})
 }
 
 func (h *Handlers) disableCredential(c *gin.Context) {
@@ -222,13 +223,13 @@ func patchCredentialStatus(h *Handlers, c *gin.Context, target string) {
 		return
 	}
 	if row.Status == target {
-		response.Success(c, "success", gin.H{"id": row.ID, "status": row.Status})
+		response.SuccessI18n(c, i18n.KeySuccess, gin.H{"id": row.ID, "status": row.Status})
 		return
 	}
 	if ginutil.WriteInternalError(c, models.UpdateCredentialStatus(h.db, &row, target, middleware.AuthEmail(c))) {
 		return
 	}
-	response.Success(c, "success", gin.H{"id": row.ID, "status": target})
+	response.SuccessI18n(c, i18n.KeySuccess, gin.H{"id": row.ID, "status": target})
 }
 
 // deleteCredential 软删除：deleted_at 非空后，AKSK 查询自然不可见，删除后立即吊销。
@@ -254,5 +255,5 @@ func (h *Handlers) deleteCredential(c *gin.Context) {
 		}).Error) {
 		return
 	}
-	response.Success(c, "success", gin.H{"id": row.ID})
+	response.SuccessI18n(c, i18n.KeySuccess, gin.H{"id": row.ID})
 }

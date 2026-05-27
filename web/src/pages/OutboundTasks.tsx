@@ -1,9 +1,11 @@
 import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import OutboundCampaignTab from '@/pages/ContactCenter/OutboundCampaignTab'
+import { useTranslation } from '@/i18n'
 
 const OutboundTasks = () => {
+  const { t } = useTranslation()
   return (
-    <BaseLayout title="外呼任务" description="云联络中心 / 外呼任务">
+    <BaseLayout title={t('pages.outboundTasks.title')} description={t('pages.outboundTasks.description')}>
       <OutboundCampaignTab />
     </BaseLayout>
   )

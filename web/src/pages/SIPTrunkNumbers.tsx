@@ -25,6 +25,48 @@ import {
 } from '@/api/trunks'
 import { listTenants, type TenantRow } from '@/api/tenants'
 import { showAlert } from '@/utils/notification'
+import { useTranslation } from '@/i18n'
+import { EllipsisHoverCell } from '@/pages/ContactCenter/EllipsisHoverCell'
+import { FieldLabel } from '@/components/Form/FieldLabel'
+import { FieldHint } from '@/components/Form/FieldHint'
+
+const TRUNK_DIRECTION_OPTIONS = [
+  { value: '', label: '未设置' },
+  { value: 'inbound', label: '呼入 (inbound)' },
+  { value: 'outbound', label: '呼出 (outbound)' },
+  { value: 'both', label: '双向 (both)' },
+  { value: 'all', label: '全部 (all)' },
+] as const
+
+const TRUNK_STATUS_OPTIONS = [
+  { value: '', label: '未设置' },
+  { value: 'active', label: '启用 (active)' },
+  { value: 'disabled', label: '停用 (disabled)' },
+] as const
+
+const VALID_TRUNK_DIRECTIONS = new Set(['', 'inbound', 'outbound', 'both', 'all'])
+
+/** 与后端 PickTrunkConfig / 外呼选线语义对齐 */
+function normalizeDirectionForForm(raw?: string): string {
+  const s = (raw || '').trim().toLowerCase()
+  if (!s) return ''
+  const aliases: Record<string, string> = {
+    bidirectional: 'both',
+    duplex: 'both',
+  }
+  const v = aliases[s] || s
+  return VALID_TRUNK_DIRECTIONS.has(v) ? v : ''
+}
+
+function normalizeDirectionForSave(raw: string): string {
+  const s = raw.trim().toLowerCase()
+  if (!s) return ''
+  const aliases: Record<string, string> = {
+    bidirectional: 'both',
+    duplex: 'both',
+  }
+  return aliases[s] || s
+}
 
 function toRFC3339OrUndefined(isoLocal: string): string | undefined {
   const s = isoLocal.trim()
@@ -82,6 +124,7 @@ const defaultForm = (): FormState => ({
 })
 
 const SIPTrunkNumbers = () => {
+  const { t } = useTranslation()
   const [trunks, setTrunks] = useState<TrunkRow[]>([])
   const [tenants, setTenants] = useState<TenantRow[]>([])
   const [tenantFilter, setTenantFilter] = useState('')
@@ -175,8 +218,8 @@ const SIPTrunkNumbers = () => {
       callerDisplayName: r.callerDisplayName || '',
       prefix: r.prefix || '',
       description: r.description || '',
-      direction: r.direction || '',
-      status: r.status || '',
+      direction: normalizeDirectionForForm(r.direction),
+      status: (r.status || '').trim(),
       concurrent: String(r.concurrent ?? 0),
       callInConcurrent: String(r.callInConcurrent ?? 0),
       isTransferRelay: !!r.isTransferRelay,
@@ -262,6 +305,16 @@ const SIPTrunkNumbers = () => {
       showAlert('号码不能为空', 'error')
       return
     }
+    const direction = normalizeDirectionForSave(form.direction)
+    if (direction && !VALID_TRUNK_DIRECTIONS.has(direction)) {
+      showAlert('呼叫用途请选择：呼入、呼出、双向或全部', 'error')
+      return
+    }
+    const voiceWs = form.voiceDialogWsUrl.trim()
+    if (voiceWs && !/^wss?:\/\//i.test(voiceWs)) {
+      showAlert('呼入语音对话 WebSocket 须以 ws:// 或 wss:// 开头', 'error')
+      return
+    }
     const conc = parseInt(form.concurrent, 10) || 0
     const cin = parseInt(form.callInConcurrent, 10) || 0
     const eff = toRFC3339OrUndefined(form.effectiveTime)
@@ -275,7 +328,7 @@ const SIPTrunkNumbers = () => {
       callerDisplayName: form.callerDisplayName.trim(),
       prefix: form.prefix.trim(),
       description: form.description.trim(),
-      direction: form.direction.trim(),
+      direction,
       status: form.status.trim(),
       concurrent: conc,
       callInConcurrent: cin,
@@ -352,23 +405,21 @@ const SIPTrunkNumbers = () => {
   }
 
   return (
-    <BaseLayout title="中继号码" description="云联络中心 / 中继号码">
+    <BaseLayout title={t('pages.sipTrunkNumbers.title')} description={t('pages.sipTrunkNumbers.description')}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Typography.Paragraph style={{ margin: 0, fontSize: 12, padding: '10px 12px', background: 'var(--color-fill-2)', borderRadius: 8 }}>
-          维护每条中继线路下的外显 / 入局号码；「号码」对应外呼主叫 user（原 SIP_CALLER_ID），「主叫显示名」对应 From 头引号显示名（原 SIP_CALLER_DISPLAY_NAME，可留空）。
+          维护每条中继线路下的外显 / 入局号码；
+            <br/>
           通过「分配租户」将号码划拨给某个租户后，该租户才能在号码池绑定坐席（ACD）。生效时间请使用本地时间选择（将按 RFC3339 提交）。
           「呼入语音对话 WebSocket」按每条号码单独配置：留空则走平台默认网关；填写 ws:// 或 wss:// 完整路径后，该局呼入会在媒体建立后向该地址拨号（自动附带 token、call_id 查询参数）。
+            <br/>
           <strong style={{ fontWeight: 600 }}>用途</strong>
-          （呼叫用途字段）：号码的业务标签 / 呼叫方向约定，常见填{' '}
-          <Typography.Text code style={{ fontSize: 11 }}>inbound</Typography.Text>（侧重入局）、
-          <Typography.Text code style={{ fontSize: 11 }}>outbound</Typography.Text>（侧重外呼）、
-          <Typography.Text code style={{ fontSize: 11 }}>both</Typography.Text>
-          （双向），也可填自定义说明便于运维区分。
+          ：在下拉框中选择呼入 / 呼出 / 双向 / 全部，与网关外呼、转人工选线规则一致。
+            <br/>
           <strong style={{ fontWeight: 600 }}>呼出并发</strong>
           ：允许该号码同时占用的外呼通道数上限（容量规划用，具体是否在网关侧硬限流以实现为准）。
           <strong style={{ fontWeight: 600 }}>呼入并发</strong>
-          ：允许同时并发的入局呼叫路数上限（入局容量）。下方表格较宽时可在区域内<strong style={{ fontWeight: 600 }}>左右滑动</strong>
-          查看全部列。
+          ：允许同时并发的入局呼叫路数上限（入局容量）
         </Typography.Paragraph>
         <Space wrap align="end">
           <Space direction="vertical" size={4}>
@@ -397,14 +448,14 @@ const SIPTrunkNumbers = () => {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>号码</Typography.Text>
             <Input allowClear placeholder="模糊搜索" style={{ width: 180 }} value={numberQ} onChange={setNumberQ} />
           </Space>
-          <Button type="primary" onClick={() => { setPage(1); void load() }}>搜索</Button>
-          <Button type="outline" onClick={openCreate} disabled={!trunks.length}>新增号码</Button>
+          <Button type="primary" onClick={() => { setPage(1); void load() }}>{t('common.search')}</Button>
+          <Button type="outline" onClick={openCreate} disabled={!trunks.length}>{t('sipTrunkNumbers.addNumber')}</Button>
         </Space>
 
         <Card bordered={false} bodyStyle={{ padding: 0 }}>
           {loading ? (
             <div style={{ padding: 24 }}>
-              <Typography.Text type="secondary">加载中...</Typography.Text>
+              <Typography.Text type="secondary">{t('common.loading')}</Typography.Text>
             </div>
           ) : (
             <>
@@ -437,31 +488,44 @@ const SIPTrunkNumbers = () => {
                   </thead>
                   <tbody>
                     {rows.length === 0 ? (
-                      <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center' }}>暂无数据</td></tr>
+                      <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center' }}>{t('common.noData')}</td></tr>
                     ) : rows.map((r) => (
                       <tr key={r.id} style={{ borderTop: '1px solid var(--color-border)' }}>
                         <td style={{ padding: 12 }}><TableIdCell id={r.id} /></td>
-                        <td style={{ padding: 12, fontSize: 12, maxWidth: 200 }}>{tenantLabel(r.tenantId)}</td>
-                        <td style={{ padding: 12, maxWidth: 140 }}>{trunkLabel(r.trunkId)}</td>
-                        <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12 }}>{r.number}</td>
-                        <td style={{ padding: 12, maxWidth: 160, wordBreak: 'break-all', fontSize: 12 }}>{r.callerDisplayName?.trim() || '—'}</td>
+                        <td style={{ padding: 12, fontSize: 12, maxWidth: 200 }}>
+                          <EllipsisHoverCell text={tenantLabel(r.tenantId)} lines={1} />
+                        </td>
+                        <td style={{ padding: 12, maxWidth: 140 }}>
+                          <EllipsisHoverCell text={trunkLabel(r.trunkId)} lines={1} />
+                        </td>
+                        <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12, maxWidth: 140 }}>
+                          <EllipsisHoverCell text={r.number} lines={1} mono />
+                        </td>
+                        <td style={{ padding: 12, maxWidth: 160, fontSize: 12 }}>
+                          <EllipsisHoverCell text={r.callerDisplayName?.trim() || '—'} lines={1} />
+                        </td>
                         <td style={{ padding: 12, fontSize: 12 }}>{directionLabel(r.direction)}</td>
                         <td style={{ padding: 12, fontSize: 12 }}>{r.status || '—'}</td>
                         <td style={{ padding: 12 }}>{r.concurrent ?? '—'}</td>
                         <td style={{ padding: 12 }}>{r.callInConcurrent ?? '—'}</td>
                         <td style={{ padding: 12, fontSize: 12 }}>{r.isTransferRelay ? '是' : '否'}</td>
-                        <td style={{ padding: 12, fontSize: 11, wordBreak: 'break-all', maxWidth: 160, color: 'var(--color-text-2)' }}>
-                          {(() => {
-                            const u = String(r.voiceDialogWsUrl || '').trim()
-                            if (!u) return '默认'
-                            return u.length > 36 ? `${u.slice(0, 34)}…` : u
-                          })()}
+                        <td style={{ padding: 12, fontSize: 11, maxWidth: 160, color: 'var(--color-text-2)' }}>
+                          <EllipsisHoverCell
+                            text={(() => {
+                              const u = String(r.voiceDialogWsUrl || '').trim()
+                              return u || '默认'
+                            })()}
+                            lines={1}
+                            mono
+                          />
                         </td>
-                        <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', maxWidth: 240 }}>{r.providerCode || '—'}</td>
+                        <td style={{ padding: 12, fontFamily: 'monospace', fontSize: 12, maxWidth: 240 }}>
+                          <EllipsisHoverCell text={r.providerCode || '—'} lines={1} mono />
+                        </td>
                         <td style={{ padding: 12, textAlign: 'right' }}>
                           <Space>
-                            <Button type="outline" size="small" onClick={() => openEdit(r)}>编辑</Button>
-                            <Button type="outline" status="danger" size="small" icon={<IconDelete />} onClick={() => { setDelId(r.id); setDelOpen(true) }}>删除</Button>
+                            <Button type="outline" size="small" onClick={() => openEdit(r)}>{t('common.edit')}</Button>
+                            <Button type="outline" status="danger" size="small" icon={<IconDelete />} onClick={() => { setDelId(r.id); setDelOpen(true) }}>{t('common.delete')}</Button>
                           </Space>
                         </td>
                       </tr>
@@ -470,10 +534,10 @@ const SIPTrunkNumbers = () => {
                 </table>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, padding: '12px 16px 16px', borderTop: '1px solid var(--color-border)' }}>
-                <Typography.Text type="secondary">总计: {total}</Typography.Text>
+                <Typography.Text type="secondary">{t('common.total')}: {total}</Typography.Text>
                 <Space>
-                  <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</Button>
-                  <Button size="small" disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>下一页</Button>
+                  <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>{t('common.previous')}</Button>
+                  <Button size="small" disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>{t('common.next')}</Button>
                 </Space>
               </div>
             </>
@@ -481,35 +545,35 @@ const SIPTrunkNumbers = () => {
         </Card>
 
         <Drawer
-          title={editingId == null ? '新增中继号码' : '编辑中继号码'}
+          title={editingId == null ? t('sipTrunkNumbers.drawerCreate') : t('sipTrunkNumbers.drawerEdit')}
           visible={modalOpen}
           placement="right"
           width={640}
           onCancel={closeModal}
           footer={
             <Space>
-              <Button onClick={closeModal} disabled={saving}>取消</Button>
+              <Button onClick={closeModal} disabled={saving}>{t('common.cancel')}</Button>
               <Button type="primary" loading={saving} onClick={() => void save()}>
-                {saving ? '保存中...' : '保存'}
+                {saving ? t('common.saving') : t('common.save')}
               </Button>
             </Space>
           }
         >
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>分配租户</Typography.Text>
+              <FieldLabel
+                label="分配租户"
+                hint="选择租户后，该号码仅对该租户可见，用于号码池坐席绑定与外呼选线。"
+              />
               <Select
                 placeholder="待分配（平台池）"
                 value={form.tenantId}
                 onChange={(v) => setForm((f) => ({ ...f, tenantId: v ?? '0' }))}
                 options={tenantOptions}
               />
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                选择租户后，该号码仅对该租户可见，用于号码池坐席绑定与外呼选线。
-              </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>所属线路 *</Typography.Text>
+              <FieldLabel label="所属线路" required hint="号码挂载的中继线路；决定出局网关 local_addr 等线路级配置。" />
               <Select
                 placeholder="请选择"
                 value={form.trunkId || undefined}
@@ -518,25 +582,29 @@ const SIPTrunkNumbers = () => {
               />
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>号码 *</Typography.Text>
+              <FieldLabel
+                label="号码"
+                required
+                hint="外呼 / 转呼时 INVITE From 的 user 部分（原 SIP_CALLER_ID）。"
+              />
               <Input value={form.number} onChange={(v) => setForm((f) => ({ ...f, number: v }))} />
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                外呼 / 转呼时 INVITE From 的 user 部分（原 SIP_CALLER_ID）。
-              </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>主叫显示名</Typography.Text>
+              <FieldLabel
+                label="主叫显示名"
+                hint="INVITE From 头的引号显示名（原 SIP_CALLER_DISPLAY_NAME）；留空则 From 仅含号码，无 display-name。"
+              />
               <Input
                 placeholder="例如 七牛云客服专线（可留空）"
                 value={form.callerDisplayName}
                 onChange={(v) => setForm((f) => ({ ...f, callerDisplayName: v }))}
               />
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                INVITE From 头的引号显示名（原 SIP_CALLER_DISPLAY_NAME）；留空则 From 仅含号码，无 display-name。
-              </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>呼入语音对话 WebSocket</Typography.Text>
+              <FieldLabel
+                label="呼入语音对话 WebSocket"
+                hint="与本条「号码」入局匹配时生效；留空走平台默认 loopback。填写 ws:// 或 wss:// 完整路径后，网关会自动追加 token、call_id 查询参数。"
+              />
               <Input.TextArea
                 placeholder="留空=平台默认 loopback；例如 wss://your-host/dialog/ws"
                 autoSize={{ minRows: 2, maxRows: 5 }}
@@ -544,12 +612,12 @@ const SIPTrunkNumbers = () => {
                 onChange={(v) => setForm((f) => ({ ...f, voiceDialogWsUrl: v }))}
                 style={{ fontFamily: 'monospace', fontSize: 12 }}
               />
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                与本条「号码」入局匹配时生效；网关会自动追加 token、call_id 查询参数。
-              </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>入局欢迎语 WAV</Typography.Text>
+              <FieldLabel
+                label="入局欢迎语 WAV"
+                hint="呼入匹配本号码时播放的欢迎语音频（PCM WAV，建议 16-bit / 8–48 kHz mono）。可粘贴外链 URL 或点「上传 WAV」托管；保存时后端会做可达性 + RIFF/WAVE 校验。留空则回退 SIP_WELCOME_WAV_PATH / scripts/welcome.wav。"
+              />
               <Input
                 placeholder="留空=回退到 scripts/welcome.wav；可粘贴外链 URL 或点「上传 WAV」"
                 value={form.welcomeAudioUrl}
@@ -596,12 +664,12 @@ const SIPTrunkNumbers = () => {
                   当前浏览器不支持 audio 元素，请直接复制 URL 在外部播放器试听。
                 </audio>
               )}
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                呼入匹配本号码时播放的欢迎语音频（PCM WAV，建议 16-bit / 8-48 kHz mono）。可直接粘贴外链 URL，或点「上传 WAV」交由平台托管；保存时后端会做可达性 + RIFF/WAVE magic 双重校验。留空则回退到 SIP_WELCOME_WAV_PATH env / scripts/welcome.wav；都不存在则跳过欢迎语阶段。
-              </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>转接回铃 WAV</Typography.Text>
+              <FieldLabel
+                label="转接回铃 WAV"
+                hint="转接 / 转人工阶段播放给主叫的回铃 WAV（SIP ringback 与 voicedialog transfer-loading）。校验与上传流程同欢迎语；留空回退 SIP_TRANSFER_RINGING_WAV_PATH / scripts/ringing.wav。"
+              />
               <Input
                 placeholder="留空=回退到 scripts/ringing.wav；可粘贴外链 URL 或点「上传 WAV」"
                 value={form.transferRingingUrl}
@@ -646,12 +714,23 @@ const SIPTrunkNumbers = () => {
                   当前浏览器不支持 audio 元素，请直接复制 URL 在外部播放器试听。
                 </audio>
               )}
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                转接/转人工阶段（SIP 透传 ringback 与 voicedialog transfer-loading）播放给主叫的回铃 WAV。校验规则与上传流程同欢迎语完全一致；留空则回退到 SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav。
-              </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>坐席接听前播报（可选）</Typography.Text>
+              <FieldLabel
+                label="坐席接听前播报（可选）"
+                hint={
+                  <>
+                    坐席接通后、与客户通话前，向坐席侧 TTS 播报一句（主叫仍听转接音乐）。占位符：{' '}
+                    <Typography.Text code>{'{{N}}'}</Typography.Text> 主叫号码、
+                    <Typography.Text code>{'{{NTail4}}'}</Typography.Text> 尾号四位、
+                    <Typography.Text code>{'{{Name}}'}</Typography.Text> 坐席名称、
+                    <Typography.Text code>{'{{TargetValue}}'}</Typography.Text> 呼叫号码、
+                    <Typography.Text code>{'{{Note}}'}</Typography.Text> 坐席备注、
+                    <Typography.Text code>{'{{MetaData.FactoryNumber}}'}</Typography.Text>{' '}
+                    等（号码池坐席 MetaData）。最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字；留空则直接通话。
+                  </>
+                }
+              />
               <Input.TextArea
                 maxLength={MAX_TRANSFER_AGENT_BRIEF_LEN}
                 showWordLimit
@@ -665,61 +744,64 @@ const SIPTrunkNumbers = () => {
                   }))
                 }
               />
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                坐席接通后、与客户通话前，向坐席侧 TTS 播报一句（主叫仍听转接音乐）。占位符：
-                <Typography.Text code>{'{{N}}'}</Typography.Text> 主叫号码、
-                <Typography.Text code>{'{{NTail4}}'}</Typography.Text> 尾号四位、
-                <Typography.Text code>{'{{Name}}'}</Typography.Text> 坐席名称、
-                <Typography.Text code>{'{{TargetValue}}'}</Typography.Text> 呼叫号码、
-                <Typography.Text code>{'{{Note}}'}</Typography.Text> 坐席备注、
-                <Typography.Text code>{'{{MetaData.FactoryNumber}}'}</Typography.Text> 坐席 MetaData JSON 字段（在号码池坐席中配置）。
-                最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字；留空则直接通话。
-              </Typography.Paragraph>
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>前缀</Typography.Text>
+              <FieldLabel label="前缀" hint="可选；部分网关外呼拨号前缀，按线路/运营商约定填写。" />
               <Input value={form.prefix} onChange={(v) => setForm((f) => ({ ...f, prefix: v }))} />
             </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>备注</Typography.Text>
+              <FieldLabel label="备注" hint="运维备注，仅管理端展示，不参与 SIP 信令。" />
               <Input value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
             </div>
             <Space style={{ width: '100%' }} size={12}>
               <div style={{ flex: 1 }}>
-                <Typography.Text style={{ fontSize: 12 }}>呼叫用途</Typography.Text>
-                <Input
-                  placeholder="如 inbound / outbound / both"
-                  value={form.direction}
-                  onChange={(v) => setForm((f) => ({ ...f, direction: v }))}
+                <FieldLabel
+                  label="呼叫用途"
+                  hint="与网关选线一致：呼入仅入局；呼出 / 双向 / 全部可外呼；留空时转人工场景可回退匹配。"
                 />
-                <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                  号码用途或呼叫方向标签；列表中会翻译成常见中文（未知值则原样显示）。
-                </Typography.Paragraph>
+                <Select
+                  placeholder="请选择"
+                  allowClear
+                  value={form.direction || undefined}
+                  onChange={(v) => setForm((f) => ({ ...f, direction: (v as string) ?? '' }))}
+                  options={[...TRUNK_DIRECTION_OPTIONS]}
+                />
               </div>
               <div style={{ flex: 1 }}>
-                <Typography.Text style={{ fontSize: 12 }}>状态</Typography.Text>
-                <Input value={form.status} onChange={(v) => setForm((f) => ({ ...f, status: v }))} />
+                <FieldLabel label="状态" hint="运维标签，可选 active / disabled；留空表示未标注。" />
+                <Select
+                  placeholder="请选择"
+                  allowClear
+                  value={form.status || undefined}
+                  onChange={(v) => setForm((f) => ({ ...f, status: (v as string) ?? '' }))}
+                  options={[...TRUNK_STATUS_OPTIONS]}
+                />
               </div>
             </Space>
             <Space style={{ width: '100%' }} size={12}>
               <div style={{ flex: 1 }}>
-                <Typography.Text style={{ fontSize: 12 }}>呼出并发</Typography.Text>
+                <FieldLabel
+                  label="呼出并发"
+                  hint="允许该号码同时占用的外呼通道数上限（0 常表示不单独限制或未启用）。"
+                />
                 <Input type="number" value={form.concurrent} onChange={(v) => setForm((f) => ({ ...f, concurrent: v }))} />
-                <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                  同时外呼路数上限（0 常表示不单独限制或未启用）。
-                </Typography.Paragraph>
               </div>
               <div style={{ flex: 1 }}>
-                <Typography.Text style={{ fontSize: 12 }}>呼入并发</Typography.Text>
+                <FieldLabel label="呼入并发" hint="允许同时并发的入局呼叫路数上限（入局容量）。" />
                 <Input type="number" value={form.callInConcurrent} onChange={(v) => setForm((f) => ({ ...f, callInConcurrent: v }))} />
-                <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                  同时入局呼叫路数上限。
-                </Typography.Paragraph>
               </div>
             </Space>
-            <Checkbox checked={form.isTransferRelay} onChange={(c) => setForm((f) => ({ ...f, isTransferRelay: !!c }))}>转人工中继号码</Checkbox>
+            <div className="flex items-center gap-1">
+              <Checkbox checked={form.isTransferRelay} onChange={(c) => setForm((f) => ({ ...f, isTransferRelay: !!c }))}>
+                转人工中继号码
+              </Checkbox>
+              <FieldHint content="优先作为转人工 / 转接出局网关选线；与「呼叫用途」配合使用。" />
+            </div>
             <div>
-              <Typography.Text style={{ fontSize: 12 }}>外呼号码（可选）</Typography.Text>
+              <FieldLabel
+                label="外呼号码（可选）"
+                hint="当本号码作为呼入 DID 需要转接 / 外呼时，改用同租户下另一条可外呼号码作为出局网关与主叫。候选：direction 为 outbound / both / all。留空则使用本号码自己。"
+              />
               <Select
                 allowClear
                 placeholder="默认使用本号码自己外呼"
@@ -738,28 +820,34 @@ const SIPTrunkNumbers = () => {
                     .map((n) => ({ label: `${n.number} (#${n.id})`, value: String(n.id) }))
                 })()}
               />
-              <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                当本号码作为「呼入 DID」需要转接/外呼时,改用这条号码作为出局网关+主叫。候选范围:同租户、direction ∈ outbound/both/all。留空=用本号码自己。
-              </Typography.Paragraph>
             </div>
             <Space style={{ width: '100%' }} size={12}>
               <div style={{ flex: 1 }}>
-                <Typography.Text style={{ fontSize: 12 }}>生效时间（可选）</Typography.Text>
+                <FieldLabel
+                  label="生效时间（可选）"
+                  hint="号码开始生效的本地时间，保存时按 RFC3339 提交；留空表示不限制。"
+                />
                 <Input type="datetime-local" value={form.effectiveTime} onChange={(v) => setForm((f) => ({ ...f, effectiveTime: v }))} />
               </div>
               <div style={{ flex: 1 }}>
-                <Typography.Text style={{ fontSize: 12 }}>失效时间（可选）</Typography.Text>
+                <FieldLabel
+                  label="失效时间（可选）"
+                  hint="号码失效的本地时间，保存时按 RFC3339 提交；留空表示长期有效。"
+                />
                 <Input type="datetime-local" value={form.expirationTime} onChange={(v) => setForm((f) => ({ ...f, expirationTime: v }))} />
               </div>
             </Space>
-            <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
-              供应商编码由系统自动分配，全局唯一，创建后请在列表中查看。
-            </Typography.Paragraph>
+            <div className="flex items-center flex-wrap gap-1">
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                供应商编码由系统自动分配，创建后请在列表中查看。
+              </Typography.Text>
+              <FieldHint content="providerCode 在创建时由后端生成，全局唯一，不可在表单中修改。" />
+            </div>
           </Space>
         </Drawer>
 
         <Drawer
-          title="确认删除中继号码"
+          title={t('sipTrunkNumbers.deleteTitle')}
           visible={delOpen}
           placement="right"
           width={420}
@@ -767,15 +855,15 @@ const SIPTrunkNumbers = () => {
           footer={
             <Space>
               <Button onClick={() => { if (!delLoading) { setDelOpen(false); setDelId(null) } }} disabled={delLoading}>
-                取消
+                {t('common.cancel')}
               </Button>
               <Button status="danger" loading={delLoading} onClick={() => void confirmDelete()}>
-                确认删除
+                {t('common.confirmDelete')}
               </Button>
             </Space>
           }
         >
-          <Typography.Text>删除后不可恢复（软删除），确认继续吗？</Typography.Text>
+          <Typography.Text>{t('sipTrunkNumbers.deleteBody')}</Typography.Text>
         </Drawer>
       </Space>
     </BaseLayout>

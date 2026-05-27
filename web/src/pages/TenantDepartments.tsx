@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Form, Input, Message, Modal, Select, Space, Switch, Table, Typography } from '@arco-design/web-react'
 import BaseLayout from '@/components/Layout/BaseLayout'
+import { useTranslation } from '@/i18n'
 import {
   createOrgGroup,
   deleteOrgGroup,
@@ -14,6 +15,7 @@ import { listTenantUsers, type TenantUserRow } from '@/api/tenantUsers'
 const FormItem = Form.Item
 
 export default function TenantDepartments() {
+  const { t } = useTranslation()
   const [groups, setGroups] = useState<OrgGroup[]>([])
   const [users, setUsers] = useState<TenantUserRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -50,7 +52,7 @@ export default function TenantDepartments() {
   }, [refreshAll])
 
   return (
-    <BaseLayout title="部门" description="维护租户部门结构，并为成员分配所属部门">
+    <BaseLayout title={t('pages.departments.title')} description={t('pages.departments.description')}>
       <Card bordered={false} loading={loading}>
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Title heading={6} style={{ margin: 0 }}>

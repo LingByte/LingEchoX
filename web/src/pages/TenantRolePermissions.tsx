@@ -14,6 +14,7 @@ import {
 } from '@arco-design/web-react'
 import type { TreeDataType } from '@arco-design/web-react/es/Tree/interface'
 import BaseLayout from '@/components/Layout/BaseLayout'
+import { useTranslation } from '@/i18n'
 import {
   createOrgRole,
   deleteOrgRole,
@@ -100,6 +101,7 @@ function collectKeysWithChildren(nodes: TreeDataType[]): string[] {
 }
 
 export default function TenantRolePermissions() {
+  const { t } = useTranslation()
   const [roles, setRoles] = useState<OrgRole[]>([])
   const [perms, setPerms] = useState<OrgPermission[]>([])
   const [users, setUsers] = useState<TenantUserRow[]>([])
@@ -162,7 +164,7 @@ export default function TenantRolePermissions() {
   }
 
   return (
-    <BaseLayout title="角色与权限" description="定义租户角色，并按模块树勾选菜单与操作权限">
+    <BaseLayout title={t('pages.rolePermissions.title')} description={t('pages.rolePermissions.description')}>
       <Card bordered={false} loading={loading}>
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Title heading={6} style={{ margin: 0 }}>

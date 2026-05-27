@@ -4,10 +4,12 @@ import { Link, useNavigate } from 'react-router-dom'
 import AuthShell from '@/components/Auth/AuthShell'
 import { tenantLogin } from '@/api/tenantAuth'
 import { useAuthStore } from '@/stores/authStore'
+import { useTranslation } from '@/i18n'
 
 const FormItem = Form.Item
 
 export default function TenantLogin() {
+  const { t } = useTranslation()
   const [form] = Form.useForm()
   const navigate = useNavigate()
   const login = useAuthStore((s) => s.login)
@@ -15,12 +17,12 @@ export default function TenantLogin() {
 
   return (
     <AuthShell
-      title="租户登录"
+      title={t('auth.tenantLogin')}
       footer={
         <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--color-text-3)' }}>
-          还没有组织？
+          {t('auth.noOrgYet')}
           <Link to="/register" style={{ marginLeft: 6, color: 'rgb(var(--primary-6))' }}>
-            注册企业
+            {t('auth.registerOrg')}
           </Link>
         </div>
       }
@@ -45,10 +47,10 @@ export default function TenantLogin() {
               const extra = res.data as { needsTotp?: boolean } | undefined
               if (extra?.needsTotp) {
                 setNeedsTotp(true)
-                Message.warning('请输入验证器中的 6 位动态码')
+                Message.warning(t('auth.needsTotp'))
                 return
               }
-              Message.error(res.msg || '登录失败')
+              Message.error(res.msg || t('auth.loginFailed'))
               return
             }
             const d = res.data
@@ -71,37 +73,32 @@ export default function TenantLogin() {
                 permissionCodes: d.permissionCodes ?? [],
               })
             } else {
-              Message.error('登录响应无效')
+              Message.error(t('auth.invalidResponse'))
               return
             }
-            Message.success('登录成功')
+            Message.success(t('auth.loginSuccess'))
             navigate(d.principal === 'platform' ? '/sip-users' : '/overview', { replace: true })
           } catch (e: unknown) {
-            const msg = typeof e === 'object' && e && 'msg' in e ? String((e as { msg?: string }).msg) : '登录失败'
+            const msg =
+              typeof e === 'object' && e && 'msg' in e ? String((e as { msg?: string }).msg) : t('auth.loginFailed')
             Message.error(msg)
           }
         }}
       >
-        <FormItem label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }]}>
-          <Input placeholder="name@company.com" autoComplete="email" />
+        <FormItem label={t('auth.email')} field="email" rules={[{ required: true, message: t('auth.email') }]}>
+          <Input placeholder="name@company.com" />
         </FormItem>
-        <FormItem label="密码" field="password" rules={[{ required: true, message: '请输入密码' }]}>
-          <Input.Password placeholder="登录密码" autoComplete="current-password" />
+        <FormItem label={t('auth.password')} field="password" rules={[{ required: true, message: t('auth.password') }]}>
+          <Input.Password />
         </FormItem>
         {needsTotp && (
-          <FormItem
-            label="两步验证码"
-            field="totpCode"
-            rules={[{ required: true, message: '请输入 6 位动态码' }]}
-          >
-            <Input placeholder="打开验证器 App，输入 6 位数字" autoComplete="one-time-code" maxLength={12} />
+          <FormItem label={t('auth.totpCode')} field="totpCode" rules={[{ required: true, message: t('auth.totpCode') }]}>
+            <Input maxLength={12} placeholder={t('auth.totpPlaceholder')} />
           </FormItem>
         )}
-        <FormItem style={{ marginBottom: 0 }}>
-          <Button type="primary" htmlType="submit" long style={{ height: 40, marginTop: 4 }}>
-            {needsTotp ? '验证并登录' : '登录'}
-          </Button>
-        </FormItem>
+        <Button type="primary" htmlType="submit" long style={{ marginTop: 8 }}>
+          {t('auth.login')}
+        </Button>
       </Form>
     </AuthShell>
   )

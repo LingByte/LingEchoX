@@ -1,4 +1,5 @@
 import axiosInstance from '@/utils/axios'
+import { t } from '@/i18n'
 import { InternalAxiosRequestConfig, AxiosResponse } from 'axios'
 
 // 通用响应类型
@@ -40,18 +41,18 @@ const request = async <T = any>(
         // 其他格式，尝试提取错误信息
         throw {
           code: error.response.status || 500,
-          msg: errorData.message || errorData.msg || errorData.error || '请求失败',
+          msg: errorData.message || errorData.msg || errorData.error || t('request.failed'),
           data: null
         }
       }
     }
     
     // 网络错误处理
-    let errorMessage = '网络请求失败'
+    let errorMessage = t('request.networkFailed')
     if (error.code === 'ERR_CONNECTION_REFUSED') {
-      errorMessage = '无法连接到服务器，请检查后端服务是否已启动'
+      errorMessage = t('request.connectionRefused')
     } else if (error.code === 'ECONNABORTED') {
-      errorMessage = '请求超时，请稍后重试'
+      errorMessage = t('request.timeout')
     } else if (error.message) {
       errorMessage = error.message
     }

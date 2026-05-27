@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -24,6 +25,11 @@ func Success(c *gin.Context, msg string, data interface{}) {
 		"msg":  msg,
 		"data": data,
 	})
+}
+
+// SuccessI18n responds with a localized message for the request locale.
+func SuccessI18n(c *gin.Context, key string, data interface{}, args ...any) {
+	Success(c, i18n.TGin(c, key, args...), data)
 }
 
 func Fail(c *gin.Context, msg string, data interface{}) {
@@ -47,6 +53,11 @@ func Fail(c *gin.Context, msg string, data interface{}) {
 	c.JSON(http.StatusOK, errorResponse)
 }
 
+// FailI18n responds with a localized error message (business code 500 envelope).
+func FailI18n(c *gin.Context, key string, data interface{}, args ...any) {
+	Fail(c, i18n.TGin(c, key, args...), data)
+}
+
 func Result(context *gin.Context, httpStatus int, code int, msg string, data gin.H) {
 	context.JSON(httpStatus, gin.H{
 		"code": code,
@@ -62,17 +73,17 @@ func AbortWithStatus(c *gin.Context, httpStatus int) {
 // knownError maps well-known error substrings to user-friendly messages and error codes.
 type knownError struct {
 	substr  string
-	msg     string
+	msgKey  string
 	errCode string
 }
 
 var knownErrors = []knownError{
-	{"username must be at least 2 characters long", "用户名至少需要2个字符", "INVALID_USERNAME_LENGTH"},
-	{"username can only contain", "用户名只能包含字母（包括中文）、数字、下划线和连字符", "INVALID_USERNAME_FORMAT"},
-	{"email has exists", "该邮箱已被注册", "EMAIL_EXISTS"},
-	{"password must be at least 8 characters long", "密码至少需要8个字符", "INVALID_PASSWORD_LENGTH"},
-	{"captcha is required", "请输入验证码", "CAPTCHA_REQUIRED"},
-	{"invalid captcha code", "验证码错误", "INVALID_CAPTCHA"},
+	{"username must be at least 2 characters long", i18n.KeyValidationUsernameShort, "INVALID_USERNAME_LENGTH"},
+	{"username can only contain", i18n.KeyValidationUsernameFormat, "INVALID_USERNAME_FORMAT"},
+	{"email has exists", i18n.KeyTenantEmailExists, "EMAIL_EXISTS"},
+	{"password must be at least 8 characters long", i18n.KeyValidationPasswordShort, "INVALID_PASSWORD_LENGTH"},
+	{"captcha is required", i18n.KeyValidationCaptchaRequired, "CAPTCHA_REQUIRED"},
+	{"invalid captcha code", i18n.KeyValidationCaptchaInvalid, "INVALID_CAPTCHA"},
 }
 
 func AbortWithStatusJSON(c *gin.Context, httpStatus int, err error) {
@@ -83,7 +94,7 @@ func AbortWithStatusJSON(c *gin.Context, httpStatus int, err error) {
 		if strings.Contains(errorMsg, ke.substr) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"code":  400,
-				"msg":   ke.msg,
+				"msg":   i18n.TGin(c, ke.msgKey),
 				"error": ke.errCode,
 				"data":  nil,
 			})
@@ -122,7 +133,7 @@ func AbortWithStatusJSON(c *gin.Context, httpStatus int, err error) {
 	}
 	c.AbortWithStatusJSON(httpStatus, gin.H{
 		"code":  httpStatus,
-		"msg":   "internal error",
+		"msg":   i18n.TGin(c, i18n.KeyInternalError),
 		"error": "INTERNAL_ERROR",
 		"data":  nil,
 	})

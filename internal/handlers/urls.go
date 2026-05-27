@@ -35,6 +35,7 @@ func (h *Handlers) SetCampaignService(svc *sipserver.CampaignService) {
 }
 
 func (h *Handlers) Register(engine *gin.Engine) {
+	engine.Use(middleware.LocaleMiddleware())
 	engine.GET("/.well-known/jwks.json", h.JWKSHandler)
 	uploadDir := utils.GetEnv("UPLOAD_DIR")
 	if uploadDir == "" {

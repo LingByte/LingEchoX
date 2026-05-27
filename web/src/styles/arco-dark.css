@@ -51,14 +51,126 @@ body[arco-theme='dark'] .arco-card-header {
   color: hsl(var(--foreground));
 }
 
-/* Input / Textarea */
+/*
+ * Arco Input 统一外观
+ * - 普通 Input：单个 input.arco-input
+ * - 密码 / 搜索等：.arco-input-inner-wrapper 包一层
+ * 二者使用相同背景、边框、高度与 hover/focus
+ */
+.arco-input-group-wrapper {
+  width: 100%;
+}
+
+input.arco-input,
+.arco-input-inner-wrapper {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 14px;
+  line-height: 1.5715;
+  border-radius: var(--border-radius-small) !important;
+  border: 1px solid var(--color-border-2) !important;
+  background-color: var(--color-fill-2) !important;
+  color: var(--color-text-1) !important;
+  box-shadow: none !important;
+  transition:
+    border-color 0.1s ease,
+    background-color 0.1s ease;
+}
+
+input.arco-input {
+  display: block;
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.arco-input-inner-wrapper {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.arco-input-inner-wrapper input.arco-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.arco-input-inner-wrapper .arco-input-group-suffix,
+.arco-input-inner-wrapper .arco-input-group-prefix {
+  color: var(--color-text-3);
+  flex-shrink: 0;
+}
+
+input.arco-input:hover,
+.arco-input-inner-wrapper:hover {
+  background-color: var(--color-fill-3) !important;
+  border-color: var(--color-border-2) !important;
+}
+
+input.arco-input:focus,
+input.arco-input.arco-input-focus,
+.arco-input-inner-wrapper.arco-input-inner-wrapper-focus,
+.arco-input-inner-wrapper:focus-within {
+  border-color: rgb(var(--primary-6)) !important;
+  background-color: var(--color-bg-2) !important;
+  box-shadow: none !important;
+}
+
+.arco-textarea,
+.arco-select-view,
+.arco-picker {
+  border: 1px solid var(--color-border-2) !important;
+  background-color: var(--color-fill-2) !important;
+  box-shadow: none !important;
+  border-radius: var(--border-radius-small) !important;
+}
+
+.arco-textarea:focus,
+.arco-select-view:focus-within,
+.arco-picker:focus-within {
+  border-color: rgb(var(--primary-6)) !important;
+  background-color: var(--color-bg-2) !important;
+  box-shadow: none !important;
+}
+
+body[arco-theme='dark'] input.arco-input,
 body[arco-theme='dark'] .arco-input-inner-wrapper,
-body[arco-theme='dark'] .arco-input,
 body[arco-theme='dark'] .arco-textarea,
+body[arco-theme='dark'] .arco-select-view,
 body[arco-theme='dark'] .arco-picker,
 body[arco-theme='dark'] .arco-picker input {
   background-color: hsl(var(--background)) !important;
   border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+body[arco-theme='dark'] input.arco-input:hover,
+body[arco-theme='dark'] .arco-input-inner-wrapper:hover,
+body[arco-theme='dark'] .arco-textarea:hover,
+body[arco-theme='dark'] .arco-select-view:hover {
+  background-color: hsl(var(--muted)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+body[arco-theme='dark'] input.arco-input:focus,
+body[arco-theme='dark'] input.arco-input.arco-input-focus,
+body[arco-theme='dark'] .arco-input-inner-wrapper:focus-within,
+body[arco-theme='dark'] .arco-textarea:focus,
+body[arco-theme='dark'] .arco-select-view:focus-within,
+body[arco-theme='dark'] .arco-picker:focus-within {
+  background-color: hsl(var(--background)) !important;
+  border-color: rgb(var(--primary-6)) !important;
+}
+
+body[arco-theme='dark'] .arco-input-inner-wrapper input.arco-input {
+  background-color: transparent !important;
   color: hsl(var(--foreground)) !important;
 }
 

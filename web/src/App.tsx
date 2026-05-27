@@ -8,6 +8,7 @@ import { SidebarProvider } from '@/contexts/SidebarContext'
 import { SiteConfigProvider } from '@/contexts/SiteConfigContext'
 import { WebSeatProvider } from '@/components/WebSeat/WebSeatProvider'
 import { useAuthStore } from '@/stores/authStore'
+import { useTranslation } from '@/i18n'
 
 const Overview = lazy(() => import('@/pages/Overview'))
 const SIPUsers = lazy(() => import('@/pages/SIPUsers'))
@@ -67,6 +68,7 @@ function HomeRedirect() {
 }
 
 function App() {
+  const { t } = useTranslation()
   return (
     <ErrorBoundary>
       <SiteConfigProvider>
@@ -77,7 +79,7 @@ function App() {
                 <Suspense
                   fallback={
                     <div style={{ padding: 48, display: 'flex', justifyContent: 'center' }}>
-                      <Spin size={32} tip="页面加载中..." />
+                      <Spin size={32} tip={t('layout.loadingPage')} />
                     </div>
                   }
                 >

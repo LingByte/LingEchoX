@@ -8,6 +8,7 @@ import (
 
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -41,26 +42,27 @@ func AuthCredentialID(c *gin.Context) uint {
 	return 0
 }
 
-func abortForbiddenPermission(c *gin.Context, msg string) {
-	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": msg, "data": nil})
+func abortForbiddenPermission(c *gin.Context, key string, args ...any) {
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": i18n.TGin(c, key, args...), "data": nil})
 }
 
 // RequireTenantPermissionAll requires an authenticated tenant user JWT to have every listed permission code.
-// Platform-admin JWT bypasses. AK/SK requests must satisfy credential.permission_codes ( wildcards via "*").
+// Platform-admin JWT bypasses tenant RBAC; handlers must scope data (e.g. listSIPCalls cross-tenant branch).
+// AK/SK requests must satisfy credential.permission_codes (wildcards via "*").
 func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if AuthPlatformAdminID(c) != 0 {
-			abortForbiddenPermission(c, "平台管理员请使用平台专用接口，不能调用租户 RBAC 接口")
+			c.Next()
 			return
 		}
 		if cid := AuthCredentialID(c); cid != 0 {
 			db, ok := dbFromContext(c)
 			if !ok || db == nil {
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "database unavailable", "data": nil})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": i18n.TGin(c, i18n.KeyDatabaseUnavailable), "data": nil})
 				return
 			}
 			if AuthTenantID(c) == 0 {
-				abortForbiddenPermission(c, "需要租户上下文")
+				abortForbiddenPermission(c, i18n.KeyPermNeedTenantContext)
 				return
 			}
 			if len(codes) == 0 {
@@ -70,14 +72,14 @@ func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 			okPerm, err := models.CredentialMatchesPermissionCodes(db, cid, codes, true)
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					abortForbiddenPermission(c, "访问密钥无效")
+					abortForbiddenPermission(c, i18n.KeyPermInvalidCredential)
 					return
 				}
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "internal error", "data": nil})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": i18n.TGin(c, i18n.KeyInternalError), "data": nil})
 				return
 			}
 			if !okPerm {
-				abortForbiddenPermission(c, "权限不足（访问密钥）")
+				abortForbiddenPermission(c, i18n.KeyPermInsufficientCredential)
 				return
 			}
 			c.Next()
@@ -90,7 +92,7 @@ func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 		}
 		uid := AuthUserID(c)
 		if uid == 0 || AuthTenantID(c) == 0 {
-			abortForbiddenPermission(c, "需要租户用户登录")
+			abortForbiddenPermission(c, i18n.KeyPermNeedTenantUser)
 			return
 		}
 		if len(codes) == 0 {
@@ -100,7 +102,7 @@ func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 		userCodes := cachedPermissionCodes(db, uid)
 		for _, req := range codes {
 			if !slices.Contains(userCodes, req) {
-				abortForbiddenPermission(c, "权限不足："+req)
+				abortForbiddenPermission(c, i18n.KeyPermInsufficientCode, req)
 				return
 			}
 		}
@@ -112,17 +114,17 @@ func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if AuthPlatformAdminID(c) != 0 {
-			abortForbiddenPermission(c, "平台管理员请使用平台专用接口，不能调用租户 RBAC 接口")
+			c.Next()
 			return
 		}
 		if cid := AuthCredentialID(c); cid != 0 {
 			db, ok := dbFromContext(c)
 			if !ok || db == nil {
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "database unavailable", "data": nil})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": i18n.TGin(c, i18n.KeyDatabaseUnavailable), "data": nil})
 				return
 			}
 			if AuthTenantID(c) == 0 {
-				abortForbiddenPermission(c, "需要租户上下文")
+				abortForbiddenPermission(c, i18n.KeyPermNeedTenantContext)
 				return
 			}
 			if len(codes) == 0 {
@@ -132,14 +134,14 @@ func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 			okPerm, err := models.CredentialMatchesPermissionCodes(db, cid, codes, false)
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					abortForbiddenPermission(c, "访问密钥无效")
+					abortForbiddenPermission(c, i18n.KeyPermInvalidCredential)
 					return
 				}
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "internal error", "data": nil})
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": i18n.TGin(c, i18n.KeyInternalError), "data": nil})
 				return
 			}
 			if !okPerm {
-				abortForbiddenPermission(c, "权限不足（访问密钥）")
+				abortForbiddenPermission(c, i18n.KeyPermInsufficientCredential)
 				return
 			}
 			c.Next()
@@ -152,7 +154,7 @@ func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 		}
 		uid := AuthUserID(c)
 		if uid == 0 || AuthTenantID(c) == 0 {
-			abortForbiddenPermission(c, "需要租户用户登录")
+			abortForbiddenPermission(c, i18n.KeyPermNeedTenantUser)
 			return
 		}
 		if len(codes) == 0 {
@@ -166,7 +168,7 @@ func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 				return
 			}
 		}
-		abortForbiddenPermission(c, "权限不足")
+		abortForbiddenPermission(c, i18n.KeyPermInsufficient)
 	}
 }
 

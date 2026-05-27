@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
 	"github.com/gin-gonic/gin"
 )
@@ -48,11 +49,11 @@ func RequireTenantAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authz := strings.TrimSpace(c.GetHeader("Authorization"))
 		if authz == "" || !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "missing authorization token", "data": nil})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": i18n.TGin(c, i18n.KeyAuthMissingToken), "data": nil})
 			return
 		}
 		if !TryAttachTenantJWT(c) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "invalid or expired token", "data": nil})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": i18n.TGin(c, i18n.KeyAuthInvalidToken), "data": nil})
 			return
 		}
 		c.Next()
@@ -86,7 +87,7 @@ func CurrentTenantID(c *gin.Context) uint { return AuthTenantID(c) }
 func RequireHumanJWTUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if AuthUserID(c) == 0 || AuthTenantID(c) == 0 {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": "forbidden", "data": nil})
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": i18n.TGin(c, i18n.KeyForbidden), "data": nil})
 			return
 		}
 		c.Next()

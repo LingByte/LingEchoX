@@ -5,8 +5,10 @@ import BaseLayout from '@/components/Layout/BaseLayout.tsx'
 import { TableIdCell } from '@/components/TableIdCell'
 import { listSIPUsers, deleteSIPUser, type SIPUserRow } from '@/api/sipUsers'
 import { showAlert } from '@/utils/notification'
+import { useTranslation } from '@/i18n'
 
 const SIPUsers = () => {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [rows, setRows] = useState<SIPUserRow[]>([])
   const [page, setPage] = useState(1)
@@ -42,7 +44,7 @@ const SIPUsers = () => {
   const fmt = (s?: string) => (s ? new Date(s).toLocaleString() : '—')
   const signalAddr = (u: SIPUserRow) =>
     u.remoteIp ? `${u.remoteIp}${u.remotePort != null ? `:${u.remotePort}` : ''}` : '—'
-  const onlineLabel = (online?: boolean) => (online ? '在线' : '离线')
+  const onlineLabel = (online?: boolean) => (online ? t('sipUsers.online') : t('sipUsers.offline'))
 
   const openDetail = (u: SIPUserRow) => {
     setCurrent(u)
@@ -75,7 +77,7 @@ const SIPUsers = () => {
   }
 
   return (
-    <BaseLayout title="SIP 用户" description="云联络中心 / SIP 用户">
+    <BaseLayout title={t('pages.sipUsers.title')} description={t('pages.sipUsers.description')}>
       <Card bordered={false}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ minWidth: 860, width: '100%', fontSize: 13 }}>
@@ -91,9 +93,9 @@ const SIPUsers = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td style={{ padding: 24, textAlign: 'center' }} colSpan={6}>加载中...</td></tr>
+                <tr><td style={{ padding: 24, textAlign: 'center' }} colSpan={6}>{t('common.loading')}</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td style={{ padding: 24, textAlign: 'center' }} colSpan={6}>暂无数据</td></tr>
+                <tr><td style={{ padding: 24, textAlign: 'center' }} colSpan={6}>{t('common.noData')}</td></tr>
               ) : rows.map((u) => (
                 <tr key={u.id} style={{ borderTop: '1px solid var(--color-border)' }}>
                   <td style={{ padding: 12 }}><TableIdCell id={u.id} /></td>
@@ -103,8 +105,8 @@ const SIPUsers = () => {
                   <td style={{ padding: 12 }}>{fmt(u.lastSeenAt)}</td>
                   <td style={{ padding: 12, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <Space>
-                      <Button type="outline" size="small" icon={<IconEye />} onClick={() => openDetail(u)}>详情</Button>
-                      <Button type="outline" status="danger" size="small" icon={<IconDelete />} onClick={() => openDelete(u.id)}>删除</Button>
+                      <Button type="outline" size="small" icon={<IconEye />} onClick={() => openDetail(u)}>{t('common.detail')}</Button>
+                      <Button type="outline" status="danger" size="small" icon={<IconDelete />} onClick={() => openDelete(u.id)}>{t('common.delete')}</Button>
                     </Space>
                   </td>
                 </tr>
@@ -113,16 +115,16 @@ const SIPUsers = () => {
           </table>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
-          <Typography.Text type="secondary">总计: {total}</Typography.Text>
+          <Typography.Text type="secondary">{t('common.total')}: {total}</Typography.Text>
           <Space>
-            <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</Button>
-            <Button size="small" disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>下一页</Button>
+            <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>{t('common.previous')}</Button>
+            <Button size="small" disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>{t('common.next')}</Button>
           </Space>
         </div>
       </Card>
 
       <Modal
-        title="SIP 用户详情"
+        title={t('sipUsers.userDetail')}
         visible={detailOpen}
         onCancel={() => { setDetailOpen(false); setCurrent(null) }}
         footer={null}
@@ -171,15 +173,15 @@ const SIPUsers = () => {
       </Modal>
 
       <Modal
-        title="确认删除 SIP 用户"
+        title={t('sipUsers.deleteTitle')}
         visible={deleteOpen}
         onOk={() => void confirmDelete()}
         onCancel={() => { setDeleteOpen(false); setDeleteId(null) }}
-        okText="确认删除"
-        cancelText="取消"
+        okText={t('common.confirmDelete')}
+        cancelText={t('common.cancel')}
         okButtonProps={{ status: 'danger', loading: deleteLoading }}
       >
-        <Typography.Text>删除后不可恢复，确认继续吗？</Typography.Text>
+        <Typography.Text>{t('sipUsers.deleteBody')}</Typography.Text>
       </Modal>
     </BaseLayout>
   )

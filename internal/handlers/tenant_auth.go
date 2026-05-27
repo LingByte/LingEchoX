@@ -10,6 +10,7 @@ import (
 	"github.com/LinByte/VoiceServer/cmd/bootstrap"
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/utils/access"
@@ -27,12 +28,12 @@ type tenantLoginReq struct {
 func (h *Handlers) tenantLogin(c *gin.Context) {
 	var req tenantLoginReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "请求参数无效", err.Error())
+		response.FailI18n(c, i18n.KeyInvalidParams, err.Error())
 		return
 	}
 
 	if bootstrap.GlobalKeyManager == nil {
-		response.Fail(c, "服务未就绪：JWT 密钥未初始化", nil)
+		response.FailI18n(c, i18n.KeyAuthJWTNotReady, nil)
 		return
 	}
 
@@ -41,27 +42,27 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 	if err == nil {
 		tenant, terr := models.GetActiveTenantByID(h.db, user.TenantID)
 		if terr != nil {
-			response.Fail(c, "组织不存在或已被停用", nil)
+			response.FailI18n(c, i18n.KeyTenantNotFound, nil)
 			return
 		}
 		if tenant.Status != "" && tenant.Status != "active" {
-			response.Fail(c, "组织已暂停服务", nil)
+			response.FailI18n(c, i18n.KeyTenantSuspended, nil)
 			return
 		}
 		if user.Status != constants.TenantUserStatusActive {
-			response.Fail(c, "账号不可用", nil)
+			response.FailI18n(c, i18n.KeyTenantUserUnavailable, nil)
 			return
 		}
 		if !access.CheckPassword(user.PasswordHash, req.Password) {
-			response.Fail(c, "邮箱或密码错误", nil)
+			response.FailI18n(c, i18n.KeyAuthInvalidCredentials, nil)
 			return
 		}
 		if user.TOTPEnabled && strings.TrimSpace(user.TOTPSecret) != "" {
 			if !access.ValidateTOTP(req.TotpCode, user.TOTPSecret) {
 				if strings.TrimSpace(req.TotpCode) == "" {
-					response.Fail(c, "需要两步验证码", gin.H{"needsTotp": true})
+					response.FailI18n(c, i18n.KeyAuthNeedsTotp, gin.H{"needsTotp": true})
 				} else {
-					response.Fail(c, "两步验证码错误", gin.H{"needsTotp": true})
+					response.FailI18n(c, i18n.KeyAuthInvalidTotp, gin.H{"needsTotp": true})
 				}
 				return
 			}
@@ -69,11 +70,11 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 		_ = models.RecordTenantUserLogin(h.db, user.ID, c.ClientIP())
 		token, terr := signTenantAccessToken(h.db, user, tenant)
 		if terr != nil {
-			response.Fail(c, "签发登录凭证失败", nil)
+			response.FailI18n(c, i18n.KeyTenantSignTokenFailed, nil)
 			return
 		}
 		codes, _ := models.ListEffectivePermissionCodesForTenantUser(h.db, user.ID)
-		response.Success(c, "success", gin.H{
+		response.SuccessI18n(c, i18n.KeySuccess, gin.H{
 			"principal":       "tenant",
 			"token":           token,
 			"expiresIn":       int(constants.TenantAccessTokenTTL.Seconds()),
@@ -90,19 +91,19 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 
 	adm, err := models.GetActivePlatformAdminByEmail(h.db, email)
 	if err != nil {
-		response.Fail(c, "邮箱或密码错误", nil)
+		response.FailI18n(c, i18n.KeyAuthInvalidCredentials, nil)
 		return
 	}
 	if !access.CheckPassword(adm.PasswordHash, req.Password) {
-		response.Fail(c, "邮箱或密码错误", nil)
+		response.FailI18n(c, i18n.KeyAuthInvalidCredentials, nil)
 		return
 	}
 	if adm.TOTPEnabled && strings.TrimSpace(adm.TOTPSecret) != "" {
 		if !access.ValidateTOTP(req.TotpCode, adm.TOTPSecret) {
 			if strings.TrimSpace(req.TotpCode) == "" {
-				response.Fail(c, "需要两步验证码", gin.H{"needsTotp": true})
+				response.FailI18n(c, i18n.KeyAuthNeedsTotp, gin.H{"needsTotp": true})
 			} else {
-				response.Fail(c, "两步验证码错误", gin.H{"needsTotp": true})
+				response.FailI18n(c, i18n.KeyAuthInvalidTotp, gin.H{"needsTotp": true})
 			}
 			return
 		}
@@ -114,11 +115,11 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 		Role:    constants.JWTRolePlatformSuper,
 	}, bootstrap.GlobalKeyManager, constants.TenantAccessTokenTTL)
 	if err != nil {
-		response.Fail(c, "签发登录凭证失败", nil)
+		response.FailI18n(c, i18n.KeyTenantSignTokenFailed, nil)
 		return
 	}
 
-	response.Success(c, "success", gin.H{
+	response.SuccessI18n(c, i18n.KeySuccess, gin.H{
 		"principal":     "platform",
 		"token":         token,
 		"expiresIn":     int(constants.TenantAccessTokenTTL.Seconds()),

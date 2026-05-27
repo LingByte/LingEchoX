@@ -12,6 +12,7 @@ import {
   Typography,
 } from '@arco-design/web-react'
 import BaseLayout from '@/components/Layout/BaseLayout'
+import { useTranslation } from '@/i18n'
 import {
   createTenantUser,
   deleteTenantUser,
@@ -30,6 +31,7 @@ const statusOpts = [
 ]
 
 export default function TenantMembers() {
+  const { t } = useTranslation()
   const meId = Number(useAuthStore((s) => s.user?.id) ?? 0)
   const [rows, setRows] = useState<TenantUserRow[]>([])
   const [total, setTotal] = useState(0)
@@ -171,8 +173,8 @@ export default function TenantMembers() {
 
   return (
     <BaseLayout
-      title="成员管理"
-      description="维护本租户登录账号（平台「租户管理」由运维账号使用，与此无关）。呼入语音对话 WebSocket 请在「中继号码」按每条号码单独配置。"
+      title={t('pages.tenantMembers.title')}
+      description={t('pages.tenantMembers.description')}
     >
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Card bordered={false}>

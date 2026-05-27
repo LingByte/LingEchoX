@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosResponse } from 'axios'
 import { useAuthStore } from '../stores/authStore'
+import { useLocaleStore } from '../stores/localeStore'
 import { getApiBaseURL } from '../config/apiConfig'
 import { genReqId, X_REQ_ID_HEADER } from '@/utils/reqId'
 
@@ -18,6 +19,9 @@ const axiosInstance: AxiosInstance = axios.create({
 // 请求拦截器
 axiosInstance.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    const locale = useLocaleStore.getState().locale
+    config.headers['Accept-Language'] = locale
+
     // 添加认证token
     const token = localStorage.getItem('auth_token')
     if (token) {

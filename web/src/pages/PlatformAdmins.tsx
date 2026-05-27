@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@arco-design/web-react'
 import BaseLayout from '@/components/Layout/BaseLayout'
+import { useTranslation } from '@/i18n'
 import {
   createPlatformAdmin,
   deletePlatformAdmin,
@@ -38,6 +39,7 @@ function fmtStatus(s?: string) {
 }
 
 export default function PlatformAdmins() {
+  const { t } = useTranslation()
   const meId = Number(useAuthStore((s) => s.user?.id) ?? 0)
   const [rows, setRows] = useState<PlatformAdminRow[]>([])
   const [total, setTotal] = useState(0)
@@ -196,7 +198,7 @@ export default function PlatformAdmins() {
   }
 
   return (
-    <BaseLayout title="平台管理员" description="运维账号：启用/停用、重置密码（不可停用或删除当前登录账号）">
+    <BaseLayout title={t('pages.platformAdmins.title')} description={t('pages.platformAdmins.description')}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Card bordered={false}>
           <Space style={{ marginBottom: 12 }} wrap>

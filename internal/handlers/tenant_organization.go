@@ -7,6 +7,7 @@ import (
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/ginutil"
+	"github.com/LinByte/VoiceServer/pkg/i18n"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/gin-gonic/gin"
@@ -350,7 +351,7 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 		return
 	}
 	if r.IsSystem && r.Name == constants.TenantAdminRoleName {
-		response.Fail(c, "系统「管理员」角色固定拥有全部权限，不可在此修改", nil)
+		response.FailI18n(c, i18n.KeyOrgAdminRoleFixed, nil)
 		return
 	}
 	var req orgRolePermissionsReq
@@ -359,7 +360,7 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 	}
 	if err := models.ReplaceTenantRolePermissions(h.db, id, req.PermissionIDs, middleware.AuditOperator(c)); err != nil {
 		if errors.Is(err, models.ErrInvalidOrgReference) {
-			response.Fail(c, "无效的权限 id", nil)
+			response.FailI18n(c, i18n.KeyOrgInvalidPermID, nil)
 			return
 		}
 		ginutil.WriteInternalError(c, err)
@@ -373,7 +374,7 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 			middleware.InvalidatePermissionCache(uid)
 		}
 	}
-	response.Success(c, "success", gin.H{"roleId": id})
+	response.SuccessI18n(c, i18n.KeySuccess, gin.H{"roleId": id})
 }
 
 type orgUserRolesReq struct {
