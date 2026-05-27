@@ -129,18 +129,12 @@ func GetCarrotSessionField() string {
 func SecurityMiddlewareChain() []gin.HandlerFunc {
 	config := DefaultSecurityConfig()
 
+	// CSRF is omitted: REST API uses Bearer JWT, not cookie form posts.
+	// Cookie-session browser flows should mount CSRFMiddleware on a dedicated group.
 	return []gin.HandlerFunc{
-		// 1. Basic security headers
 		SecurityMiddleware(config),
-
-		// 2. XSS protection
 		XSSProtectionMiddleware(),
-
-		// 3. Input validation
 		InputValidationMiddleware(),
-
-		// 4. CSRF protection (only for state-changing operations)
-		CSRFMiddleware(config),
 	}
 }
 

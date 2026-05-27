@@ -117,6 +117,13 @@ func ListEffectivePermissionCodesForTenantUser(db *gorm.DB, tenantUserID uint) (
 	return codes, err
 }
 
+// ListTenantUserIDsByRoleID returns distinct tenant user ids bound to a role.
+func ListTenantUserIDsByRoleID(db *gorm.DB, roleID uint) ([]uint, error) {
+	var ids []uint
+	err := db.Model(&TenantUserRole{}).Where("role_id = ?", roleID).Distinct().Pluck("tenant_user_id", &ids).Error
+	return ids, err
+}
+
 // ReplaceTenantUserRoles replaces role assignments for a tenant user.
 func ReplaceTenantUserRoles(db *gorm.DB, tenantID, tenantUserID uint, roleIDs []uint, operator string) error {
 	return db.Transaction(func(tx *gorm.DB) error {

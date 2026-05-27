@@ -36,38 +36,26 @@ const BaseLayout = ({ children, title, description, actions, hideHeader }: Admin
   const marginLeft = isLg ? (isCollapsed ? 80 : 220) : 0
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--color-bg-1)' }}>
+    <div className="min-h-screen bg-background text-foreground">
       <Sidebar />
       <div
+        className="min-h-screen bg-background"
         style={{
           marginLeft,
           transition: 'margin-left 0.2s ease',
-          minHeight: '100vh',
-          background: 'var(--color-bg-1)',
         }}
       >
         {!hideHeader && (
           <header
-            style={{
-              position: 'sticky',
-              top: 0,
-              zIndex: 10,
-              height: 64,
-              padding: '0 24px',
-              display: 'flex',
-              alignItems: 'center',
-              background: 'var(--color-bg-2)',
-              borderBottom: '1px solid var(--color-border)',
-              boxSizing: 'border-box',
-            }}
+            className="sticky top-0 z-10 flex h-16 items-center border-b border-border bg-card px-6 box-border"
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 16 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
                 {title && (
-                  <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-text-1)' }}>{title}</div>
+                  <div className="text-lg font-semibold text-foreground">{title}</div>
                 )}
                 {description && (
-                  <div style={{ fontSize: 13, color: 'var(--color-text-3)', marginTop: 2 }}>{description}</div>
+                  <div className="mt-0.5 text-[13px] text-muted-foreground">{description}</div>
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>

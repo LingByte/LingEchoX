@@ -97,6 +97,16 @@ func (h *Handlers) tenantLogin(c *gin.Context) {
 		response.Fail(c, "邮箱或密码错误", nil)
 		return
 	}
+	if adm.TOTPEnabled && strings.TrimSpace(adm.TOTPSecret) != "" {
+		if !access.ValidateTOTP(req.TotpCode, adm.TOTPSecret) {
+			if strings.TrimSpace(req.TotpCode) == "" {
+				response.Fail(c, "需要两步验证码", gin.H{"needsTotp": true})
+			} else {
+				response.Fail(c, "两步验证码错误", gin.H{"needsTotp": true})
+			}
+			return
+		}
+	}
 
 	token, err := access.SignPlatformAccessTokenWithKey(access.PlatformPayload{
 		AdminID: adm.ID,

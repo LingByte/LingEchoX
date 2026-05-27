@@ -282,14 +282,13 @@ const Sidebar = () => {
         collapsed={isCollapsed}
         width={220}
         collapsedWidth={80}
+        className="!bg-card !border-border"
         style={{
           height: '100vh',
           position: 'fixed',
           left: 0,
           top: 0,
-          borderRight: '1px solid var(--color-border)',
           boxSizing: 'border-box',
-          background: 'var(--color-bg-2)',
         }}
       >
         <div className="ling-sidebar-root" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

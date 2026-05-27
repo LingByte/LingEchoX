@@ -307,8 +307,34 @@ type disableTotpReq struct {
 }
 
 func (h *Handlers) setupTotp(c *gin.Context) {
-	if middleware.AuthPlatformAdminID(c) > 0 {
-		response.Fail(c, "平台管理员不支持两步验证", nil)
+	issuer := strings.TrimSpace(config.GlobalConfig.Server.Name)
+	if issuer == "" {
+		issuer = access.DefaultTOTPIssuer
+	}
+	if aid := middleware.AuthPlatformAdminID(c); aid > 0 {
+		var adm models.PlatformAdmin
+		if err := h.db.Where("id = ?", aid).First(&adm).Error; err != nil {
+			response.Fail(c, "not found", nil)
+			return
+		}
+		if adm.TOTPEnabled {
+			response.Fail(c, "已开启两步验证，请先关闭后再重新绑定", nil)
+			return
+		}
+		account := strings.TrimSpace(adm.Email)
+		if account == "" {
+			account = "platform:" + strconv.FormatUint(uint64(adm.ID), 10)
+		}
+		setup, err := access.GenerateTOTPSetup(issuer, account, 0)
+		if err != nil {
+			ginutil.WriteInternalError(c, err)
+			return
+		}
+		response.Success(c, "success", gin.H{
+			"secret":    setup.Secret,
+			"url":       setup.URL,
+			"qrDataUrl": setup.QRDataURL,
+		})
 		return
 	}
 	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
@@ -319,10 +345,6 @@ func (h *Handlers) setupTotp(c *gin.Context) {
 	if u.TOTPEnabled {
 		response.Fail(c, "已开启两步验证，请先关闭后再重新绑定", nil)
 		return
-	}
-	issuer := strings.TrimSpace(config.GlobalConfig.Server.Name)
-	if issuer == "" {
-		issuer = access.DefaultTOTPIssuer
 	}
 	account := strings.TrimSpace(u.Email)
 	if account == "" {
@@ -341,8 +363,38 @@ func (h *Handlers) setupTotp(c *gin.Context) {
 }
 
 func (h *Handlers) enableTotp(c *gin.Context) {
-	if middleware.AuthPlatformAdminID(c) > 0 {
-		response.Fail(c, "平台管理员不支持两步验证", nil)
+	var req enableTotpReq
+	if !ginutil.BindJSON(c, &req) {
+		return
+	}
+	if !access.ValidateTOTP(req.Code, req.Secret) {
+		response.Fail(c, "验证码无效", nil)
+		return
+	}
+	secret := strings.TrimSpace(req.Secret)
+	if aid := middleware.AuthPlatformAdminID(c); aid > 0 {
+		var adm models.PlatformAdmin
+		if err := h.db.Where("id = ?", aid).First(&adm).Error; err != nil {
+			response.Fail(c, "not found", nil)
+			return
+		}
+		if adm.TOTPEnabled {
+			response.Fail(c, "两步验证已开启", nil)
+			return
+		}
+		if err := h.db.Model(&models.PlatformAdmin{}).Where("id = ?", aid).Updates(map[string]any{
+			"totp_secret":  secret,
+			"totp_enabled": true,
+		}).Error; err != nil {
+			ginutil.WriteInternalError(c, err)
+			return
+		}
+		var next models.PlatformAdmin
+		if err := h.db.Where("id = ?", aid).First(&next).Error; err != nil {
+			ginutil.WriteInternalError(c, err)
+			return
+		}
+		response.Success(c, "success", models.PlatformAdminPublic(next))
 		return
 	}
 	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
@@ -354,15 +406,6 @@ func (h *Handlers) enableTotp(c *gin.Context) {
 		response.Fail(c, "两步验证已开启", nil)
 		return
 	}
-	var req enableTotpReq
-	if !ginutil.BindJSON(c, &req) {
-		return
-	}
-	if !access.ValidateTOTP(req.Code, req.Secret) {
-		response.Fail(c, "验证码无效", nil)
-		return
-	}
-	secret := strings.TrimSpace(req.Secret)
 	if _, err := models.UpdateTenantUser(h.db, u.ID, map[string]any{
 		"totp_secret":  secret,
 		"totp_enabled": true,
@@ -379,8 +422,41 @@ func (h *Handlers) enableTotp(c *gin.Context) {
 }
 
 func (h *Handlers) disableTotp(c *gin.Context) {
-	if middleware.AuthPlatformAdminID(c) > 0 {
-		response.Fail(c, "平台管理员不支持两步验证", nil)
+	var req disableTotpReq
+	if !ginutil.BindJSON(c, &req) {
+		return
+	}
+	if aid := middleware.AuthPlatformAdminID(c); aid > 0 {
+		var adm models.PlatformAdmin
+		if err := h.db.Where("id = ?", aid).First(&adm).Error; err != nil {
+			response.Fail(c, "not found", nil)
+			return
+		}
+		if !adm.TOTPEnabled || strings.TrimSpace(adm.TOTPSecret) == "" {
+			response.Fail(c, "两步验证未开启", nil)
+			return
+		}
+		if !access.CheckPassword(adm.PasswordHash, req.Password) {
+			response.Fail(c, "密码错误", nil)
+			return
+		}
+		if !access.ValidateTOTP(req.Code, adm.TOTPSecret) {
+			response.Fail(c, "验证码无效", nil)
+			return
+		}
+		if err := h.db.Model(&models.PlatformAdmin{}).Where("id = ?", aid).Updates(map[string]any{
+			"totp_secret":  "",
+			"totp_enabled": false,
+		}).Error; err != nil {
+			ginutil.WriteInternalError(c, err)
+			return
+		}
+		var next models.PlatformAdmin
+		if err := h.db.Where("id = ?", aid).First(&next).Error; err != nil {
+			ginutil.WriteInternalError(c, err)
+			return
+		}
+		response.Success(c, "success", models.PlatformAdminPublic(next))
 		return
 	}
 	u, err := models.GetAuthenticatedTenantUser(h.db, middleware.AuthUserID(c), middleware.AuthTenantID(c))
@@ -390,10 +466,6 @@ func (h *Handlers) disableTotp(c *gin.Context) {
 	}
 	if !u.TOTPEnabled || strings.TrimSpace(u.TOTPSecret) == "" {
 		response.Fail(c, "两步验证未开启", nil)
-		return
-	}
-	var req disableTotpReq
-	if !ginutil.BindJSON(c, &req) {
 		return
 	}
 	if !access.CheckPassword(u.PasswordHash, req.Password) {

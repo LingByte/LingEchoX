@@ -135,10 +135,9 @@ class ErrorBoundary extends Component<Props, State> {
       return (
         <div
           className={cn(
-            'min-h-screen flex items-center justify-center p-4',
+            'min-h-screen flex items-center justify-center bg-background p-4',
             this.props.className
           )}
-          style={{ background: 'var(--color-bg-1)' }}
         >
           <div className="max-w-lg w-full">
             <Result

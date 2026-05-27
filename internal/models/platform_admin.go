@@ -23,6 +23,8 @@ type PlatformAdmin struct {
 	PasswordHash string `json:"-" gorm:"size:255;not null;column:password_hash;comment:密码哈希"`
 	DisplayName  string `json:"displayName" gorm:"size:128;comment:显示名"`
 	Status       string `json:"status" gorm:"size:24;index;not null;default:active;comment:账号状态"`
+	TOTPSecret   string `json:"-" gorm:"size:128;column:totp_secret;comment:TOTP密钥"`
+	TOTPEnabled  bool   `json:"totpEnabled" gorm:"column:totp_enabled;not null;default:0;comment:是否启用TOTP"`
 }
 
 func (PlatformAdmin) TableName() string {
@@ -53,6 +55,7 @@ func PlatformAdminPublic(a PlatformAdmin) map[string]any {
 		"email":       a.Email,
 		"displayName": a.DisplayName,
 		"status":      a.Status,
+		"totpEnabled": a.TOTPEnabled,
 		"createdAt":   a.CreatedAt,
 		"updatedAt":   a.UpdatedAt,
 	}

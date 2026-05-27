@@ -1,0 +1,222 @@
+/**
+ * Arco 组件暗色/亮色 token 桥接（不可放在 @layer 内，否则会被 arco.css 盖掉）。
+ * 同时覆盖页面内原生 <table> 与 Select/Card/Table 等。
+ */
+
+html,
+body,
+body[arco-theme='dark'] {
+  --color-bg-1: hsl(var(--background));
+  --color-bg-2: hsl(var(--card));
+  --color-bg-3: hsl(var(--muted));
+  --color-bg-4: hsl(var(--muted) / 0.65);
+  --color-fill-1: hsl(var(--muted) / 0.45);
+  --color-fill-2: hsl(var(--muted));
+  --color-fill-3: hsl(var(--muted) / 0.85);
+  --color-fill-4: hsl(var(--muted) / 0.55);
+  --color-text-1: hsl(var(--foreground));
+  --color-text-2: hsl(var(--muted-foreground));
+  --color-text-3: hsl(var(--muted-foreground) / 0.88);
+  --color-text-4: hsl(var(--muted-foreground) / 0.65);
+  --color-border: hsl(var(--border));
+  --color-border-2: hsl(var(--border));
+  --color-border-3: hsl(var(--border));
+  --color-primary-light-1: hsl(var(--primary) / 0.14);
+  --color-primary-light-2: hsl(var(--primary) / 0.22);
+  --color-primary-light-3: hsl(var(--primary) / 0.32);
+  --color-primary-light-4: hsl(var(--primary) / 0.42);
+  --color-bg-primary: hsl(var(--background));
+  --color-bg-secondary: hsl(var(--card));
+  --color-bg-tertiary: hsl(var(--muted));
+  --color-text-primary: hsl(var(--foreground));
+  --color-text-secondary: hsl(var(--muted-foreground));
+  --color-text-tertiary: hsl(var(--muted-foreground) / 0.8);
+  --color-border-light: hsl(var(--border));
+}
+
+body[arco-theme='dark'] {
+  color-scheme: dark;
+}
+
+/* Card（与 Tailwind 卡片色对齐；Arco 暗色 token 生效后多数组件已正常） */
+body[arco-theme='dark'] .arco-card,
+body[arco-theme='dark'] .arco-card .arco-card-body {
+  background-color: hsl(var(--card)) !important;
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+
+body[arco-theme='dark'] .arco-card-header {
+  border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground));
+}
+
+/* Input / Textarea */
+body[arco-theme='dark'] .arco-input-inner-wrapper,
+body[arco-theme='dark'] .arco-input,
+body[arco-theme='dark'] .arco-textarea,
+body[arco-theme='dark'] .arco-picker,
+body[arco-theme='dark'] .arco-picker input {
+  background-color: hsl(var(--background)) !important;
+  border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+body[arco-theme='dark'] .arco-input-inner-wrapper .arco-input::placeholder,
+body[arco-theme='dark'] .arco-textarea::placeholder {
+  color: hsl(var(--muted-foreground) / 0.7) !important;
+}
+
+/* Select */
+body[arco-theme='dark'] .arco-select-view {
+  background-color: hsl(var(--background)) !important;
+  border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+body[arco-theme='dark'] .arco-select-view-value,
+body[arco-theme='dark'] .arco-select-view-input {
+  color: hsl(var(--foreground)) !important;
+}
+
+body[arco-theme='dark'] .arco-select-suffix-icon,
+body[arco-theme='dark'] .arco-select-arrow-icon {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+body[arco-theme='dark'] .arco-select-popup {
+  background-color: hsl(var(--card)) !important;
+  border-color: hsl(var(--border)) !important;
+  box-shadow: 0 4px 16px hsl(0 0% 0% / 0.35);
+}
+
+body[arco-theme='dark'] .arco-select-option {
+  color: hsl(var(--foreground)) !important;
+  background-color: transparent !important;
+}
+
+body[arco-theme='dark'] .arco-select-option-hover,
+body[arco-theme='dark'] .arco-select-option:not(.arco-select-option-disabled):hover {
+  background-color: hsl(var(--muted)) !important;
+}
+
+body[arco-theme='dark'] .arco-select-option-selected {
+  background-color: hsl(var(--primary) / 0.18) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Arco Table */
+body[arco-theme='dark'] .arco-table-container,
+body[arco-theme='dark'] .arco-table {
+  background-color: hsl(var(--card)) !important;
+  color: hsl(var(--foreground));
+}
+
+body[arco-theme='dark'] .arco-table-th {
+  background-color: hsl(var(--muted)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+body[arco-theme='dark'] .arco-table-td {
+  background-color: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+body[arco-theme='dark'] .arco-table-tr:hover .arco-table-td {
+  background-color: hsl(var(--muted) / 0.45) !important;
+}
+
+body[arco-theme='dark'] .arco-table-border .arco-table-container {
+  border-color: hsl(var(--border)) !important;
+}
+
+/* 页面内手写 <table>（SIP 号码池、用户列表等） */
+body[arco-theme='dark'] main table {
+  color: hsl(var(--foreground));
+}
+
+body[arco-theme='dark'] main table thead {
+  background-color: hsl(var(--muted)) !important;
+}
+
+body[arco-theme='dark'] main table thead th {
+  color: hsl(var(--muted-foreground));
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+body[arco-theme='dark'] main table tbody td {
+  background-color: hsl(var(--card));
+  border-top: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+
+body[arco-theme='dark'] main table tbody tr:hover td {
+  background-color: hsl(var(--muted) / 0.4);
+}
+
+/* Drawer / Modal / Dropdown */
+body[arco-theme='dark'] .arco-drawer,
+body[arco-theme='dark'] .arco-drawer-content,
+body[arco-theme='dark'] .arco-drawer-header,
+body[arco-theme='dark'] .arco-drawer-footer {
+  background-color: hsl(var(--card)) !important;
+  border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground));
+}
+
+body[arco-theme='dark'] .arco-modal,
+body[arco-theme='dark'] .arco-modal-content,
+body[arco-theme='dark'] .arco-modal-header,
+body[arco-theme='dark'] .arco-modal-footer {
+  background-color: hsl(var(--card)) !important;
+  border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground));
+}
+
+body[arco-theme='dark'] .arco-dropdown-menu {
+  background-color: hsl(var(--card)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+body[arco-theme='dark'] .arco-dropdown-option {
+  color: hsl(var(--foreground));
+}
+
+body[arco-theme='dark'] .arco-dropdown-option:hover {
+  background-color: hsl(var(--muted)) !important;
+}
+
+/* Pagination */
+body[arco-theme='dark'] .arco-pagination-item {
+  background-color: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+body[arco-theme='dark'] .arco-pagination-item-active {
+  background-color: hsl(var(--primary) / 0.2) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Tree（角色权限等） */
+body[arco-theme='dark'] .arco-tree-node-title,
+body[arco-theme='dark'] .arco-tree-node-title-text {
+  color: hsl(var(--foreground));
+}
+
+body[arco-theme='dark'] .arco-tree-node-selected .arco-tree-node-title {
+  background-color: hsl(var(--primary) / 0.15) !important;
+}
+
+/* Checkbox / Radio */
+body[arco-theme='dark'] .arco-checkbox-text,
+body[arco-theme='dark'] .arco-radio-text {
+  color: hsl(var(--foreground));
+}
+
+/* Empty / Spin 文案 */
+body[arco-theme='dark'] .arco-empty-description {
+  color: hsl(var(--muted-foreground));
+}

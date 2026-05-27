@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/LinByte/VoiceServer/internal/constants"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -23,7 +24,7 @@ type Credential struct {
 	SecretKey string `json:"-" gorm:"size:256;not null"`
 	Status    string `json:"status" gorm:"size:24;index;not null;default:active"` // active | disabled
 	AllowIP   string `json:"allowIp,omitempty" gorm:"type:text;comment:白名单IP，多个逗号分隔"`
-	// PermissionCodes JSON array of catalog codes (e.g. ["api.sip.calls.read"]); ["*"] = all; empty legacy = treat as *.
+	// PermissionCodes JSON array of catalog codes (e.g. ["api.sip.calls.read"]); ["*"] = all; empty/missing = no permissions.
 	PermissionCodes string `json:"permissionCodes,omitempty" gorm:"column:permission_codes;type:text"`
 }
 
@@ -43,9 +44,8 @@ func CredentialMatchesPermissionCodes(db *gorm.DB, credID uint, required []strin
 		if err := json.Unmarshal([]byte(raw), &codes); err != nil {
 			return false, err
 		}
-	} else {
-		codes = []string{"*"}
 	}
+	// Empty / missing permission_codes → no permissions (fail closed).
 	for _, c := range codes {
 		if strings.TrimSpace(c) == "*" {
 			return true, nil
@@ -103,11 +103,11 @@ func GetActiveCredentialByAccessKey(db *gorm.DB, ak string) (Credential, error) 
 }
 
 // CredentialClientIPAllowed reports whether clientIP is permitted by AllowIP (comma-separated).
-// Empty or whitespace-only AllowIP means allow all.
+// Empty allowlist denies all clients unless CREDENTIAL_ALLOW_EMPTY_ALLOW_IP=true (dev only).
 func CredentialClientIPAllowed(allowList, clientIP string) bool {
 	allowList = strings.TrimSpace(allowList)
 	if allowList == "" {
-		return true
+		return strings.EqualFold(strings.TrimSpace(utils.GetEnv(constants.ENVCredentialAllowEmptyAllowIP)), "true")
 	}
 	clientIP = strings.TrimSpace(clientIP)
 	if clientIP == "" {

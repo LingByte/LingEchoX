@@ -365,6 +365,14 @@ func (h *Handlers) putOrgRolePermissions(c *gin.Context) {
 		ginutil.WriteInternalError(c, err)
 		return
 	}
+	if uids, err := models.ListTenantUserIDsByRoleID(h.db, id); err != nil {
+		ginutil.WriteInternalError(c, err)
+		return
+	} else {
+		for _, uid := range uids {
+			middleware.InvalidatePermissionCache(uid)
+		}
+	}
 	response.Success(c, "success", gin.H{"roleId": id})
 }
 

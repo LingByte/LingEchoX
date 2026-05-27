@@ -162,6 +162,13 @@ func main() {
 		r.Use(middleware.WithMemSession(utils.RandText(32)))
 	}
 
+	bootstrap.ValidateProductionSecurityEnv()
+
+	// Security headers, XSS/input sanitization (JWT API — CSRF omitted).
+	for _, mw := range middleware.SecurityMiddlewareChain() {
+		r.Use(mw)
+	}
+
 	// Cors Handle Middleware
 	r.Use(middleware.CorsMiddleware())
 

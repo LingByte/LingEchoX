@@ -31,14 +31,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
 const (
-	envUploadsRecordingsPublic = "UPLOADS_RECORDINGS_PUBLIC"
-
 	// uploadsRecordingsPrefix is the URL prefix relative to the static
 	// mount; matches the key shape used by pkg/sip/persist/call_store.go.
 	uploadsRecordingsPrefix = "/uploads/sip/recordings/"
@@ -51,7 +50,7 @@ var (
 
 func uploadsRecordingsPublicAllowed() bool {
 	uploadsRecordingsPublicOnce.Do(func() {
-		uploadsRecordingsPublic = strings.EqualFold(strings.TrimSpace(utils.GetEnv(envUploadsRecordingsPublic)), "true")
+		uploadsRecordingsPublic = strings.EqualFold(strings.TrimSpace(utils.GetEnv(constants.ENVUploadsRecordingsPublic)), "true")
 		if uploadsRecordingsPublic && logger.Lg != nil {
 			// Loud startup-time warning: this opens raw call recordings
 			// to anyone who can guess Call-ID + timestamp. Operators

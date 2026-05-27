@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import '@arco-design/web-react/dist/css/arco.css'
 import App from '@/App.tsx'
 import './index.css'
+import './styles/arco-dark.css'
 import { ArcoAppProvider } from '@/providers/ArcoAppProvider'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

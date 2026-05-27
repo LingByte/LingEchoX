@@ -48,7 +48,12 @@ func signTenantAccessToken(db *gorm.DB, user models.TenantUser, tenant models.Te
 }
 
 // registerTenant creates a tenant, default admin role, first admin user, and returns JWT.
+// Disabled unless TENANT_SELF_REGISTER=true (never enable in production).
 func (h *Handlers) registerTenant(c *gin.Context) {
+	if !utils.GetBoolEnv(constants.ENVTenantSelfRegister) {
+		response.Fail(c, "自助注册已关闭，请联系管理员开通租户", nil)
+		return
+	}
 	var req tenantRegisterReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, "请求参数无效", err.Error())

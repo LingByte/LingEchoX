@@ -251,8 +251,8 @@ func TestWithCookieSession_SetsPersistentCookie(t *testing.T) {
 
 func TestSecurityMiddlewareChain_LengthAndNoPanic(t *testing.T) {
 	mws := SecurityMiddlewareChain()
-	if len(mws) != 4 {
-		t.Fatalf("expected 4 security middlewares, got %d", len(mws))
+	if len(mws) != 3 {
+		t.Fatalf("expected 3 security middlewares, got %d", len(mws))
 	}
 
 	r := newEngine()

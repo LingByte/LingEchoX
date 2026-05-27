@@ -50,7 +50,7 @@ func abortForbiddenPermission(c *gin.Context, msg string) {
 func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if AuthPlatformAdminID(c) != 0 {
-			c.Next()
+			abortForbiddenPermission(c, "平台管理员请使用平台专用接口，不能调用租户 RBAC 接口")
 			return
 		}
 		if cid := AuthCredentialID(c); cid != 0 {
@@ -112,7 +112,7 @@ func RequireTenantPermissionAll(codes ...string) gin.HandlerFunc {
 func RequireTenantPermissionAny(codes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if AuthPlatformAdminID(c) != 0 {
-			c.Next()
+			abortForbiddenPermission(c, "平台管理员请使用平台专用接口，不能调用租户 RBAC 接口")
 			return
 		}
 		if cid := AuthCredentialID(c); cid != 0 {

@@ -49,15 +49,17 @@ func (h *Handlers) createCredential(c *gin.Context) {
 	secretKey := hex.EncodeToString(skBytes)
 	accessKey := "ak_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 
-	var pcodes string
-	var err error
-	if req.PermissionCodes != nil && len(req.PermissionCodes) == 0 {
-		pcodes = "[]"
-	} else {
-		pcodes, err = utils.MarshalStringSliceJSON(req.PermissionCodes, []string{constants.CredentialPermissionWildcard})
+	if req.PermissionCodes == nil || len(req.PermissionCodes) == 0 {
+		response.Fail(c, "permissionCodes 必填，至少指定一项权限（不可用空数组或省略）", nil)
+		return
 	}
+	pcodes, err := utils.MarshalStringSliceJSON(req.PermissionCodes, nil)
 	if err != nil {
 		response.Fail(c, "invalid permissionCodes", nil)
+		return
+	}
+	if strings.TrimSpace(req.AllowIP) == "" && !utils.GetBoolEnv(constants.ENVCredentialAllowEmptyAllowIP) {
+		response.Fail(c, "allowIp 必填（逗号分隔客户端 IP）；开发环境可设 CREDENTIAL_ALLOW_EMPTY_ALLOW_IP=true", nil)
 		return
 	}
 	row := &models.Credential{
@@ -180,18 +182,20 @@ func (h *Handlers) updateCredential(c *gin.Context) {
 		updates["allow_ip"] = strings.TrimSpace(*req.AllowIP)
 	}
 	if req.PermissionCodes != nil {
-		var pcodes string
-		var marshalErr error
 		if len(req.PermissionCodes) == 0 {
-			pcodes = "[]"
-		} else {
-			pcodes, marshalErr = utils.MarshalStringSliceJSON(req.PermissionCodes, []string{constants.CredentialPermissionWildcard})
+			response.Fail(c, "permissionCodes 不能为空数组", nil)
+			return
 		}
+		pcodes, marshalErr := utils.MarshalStringSliceJSON(req.PermissionCodes, nil)
 		if marshalErr != nil {
 			response.Fail(c, "invalid permissionCodes", nil)
 			return
 		}
 		updates["permission_codes"] = pcodes
+	}
+	if req.AllowIP != nil && strings.TrimSpace(*req.AllowIP) == "" && !utils.GetBoolEnv(constants.ENVCredentialAllowEmptyAllowIP) {
+		response.Fail(c, "allowIp 不能为空", nil)
+		return
 	}
 	if ginutil.WriteInternalError(c, h.db.Model(&models.Credential{}).Where("id = ?", row.ID).Updates(updates).Error) {
 		return

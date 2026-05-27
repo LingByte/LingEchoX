@@ -73,7 +73,7 @@ function App() {
         <SidebarProvider>
           <Router>
             <WebSeatProvider>
-              <div style={{ minHeight: '100vh', background: 'var(--color-bg-1)' }}>
+              <div className="min-h-screen bg-background text-foreground">
                 <Suspense
                   fallback={
                     <div style={{ padding: 48, display: 'flex', justifyContent: 'center' }}>
