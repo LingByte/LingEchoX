@@ -205,6 +205,11 @@ func RunMigrations(db *gorm.DB) error {
 		&models.TenantUserRole{},
 		&models.Credential{},
 		&models.PlatformAdmin{},
+		&models.VoiceTrainingTask{},
+		&models.VoiceClone{},
+		&models.VoiceSynthesis{},
+		&models.VoiceTrainingText{},
+		&models.VoiceTrainingTextSegment{},
 	})
 }
 

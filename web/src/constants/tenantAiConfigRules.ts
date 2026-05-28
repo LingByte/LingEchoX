@@ -188,6 +188,35 @@ export const TENANT_REALTIME_PROVIDER_RULES: AiProviderRule[] = [
       { key: 'baseUrl', label: 'WS 端点（可选）', type: 'text', placeholder: '留空=北京区；新加坡区 wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime' },
     ],
   },
+  {
+    provider: 'volcengine_dialogue',
+    label: '火山豆包 端到端实时语音',
+    fields: [
+      { key: 'appId', label: 'App ID', type: 'text', required: true, placeholder: '控制台 X-Api-App-ID' },
+      { key: 'accessKey', label: 'Access Token', type: 'password', required: true, placeholder: '控制台 X-Api-Access-Key' },
+      { key: 'model', label: '模型版本', type: 'text', placeholder: 'O2.0: 1.2.1.1（默认）/ SC2.0: 2.2.0.0' },
+      { key: 'speaker', label: '发音人', type: 'text', placeholder: 'O版默认 zh_female_vv_jupiter_bigtts；SC克隆音色填 S_xxx / saturn_xxx' },
+      {
+        key: 'systemRole',
+        label: '系统人设（O/O2 版）',
+        type: 'textarea',
+        textareaMinRows: 10,
+        placeholder: '例：你是客服助手，回答简洁专业',
+      },
+      { key: 'botName', label: '机器人名称（O 版可选）', type: 'text', placeholder: '默认豆包' },
+      { key: 'speakingStyle', label: '说话风格（O 版可选）', type: 'text', placeholder: '专业、简洁、友好' },
+      {
+        key: 'characterManifest',
+        label: '角色描述（SC/SC2 版）',
+        type: 'textarea',
+        textareaMinRows: 8,
+        placeholder: 'SC 版本使用；填写后优先于 botName/systemRole',
+      },
+      { key: 'resourceId', label: 'Resource ID（可选）', type: 'text', placeholder: '默认 volc.speech.dialog' },
+      { key: 'appKey', label: 'App Key（可选）', type: 'text', placeholder: '默认 PlgvMymc7f3tQnJ6' },
+      { key: 'baseUrl', label: 'WS 端点（可选）', type: 'text', placeholder: 'wss://openspeech.bytedance.com/api/v3/realtime/dialogue' },
+    ],
+  },
 ]
 
 export type AiTab = 'asr' | 'tts' | 'llm' | 'realtime'

@@ -18,6 +18,7 @@ import {
   Building2,
   Briefcase,
   Contact,
+  Mic2,
 } from 'lucide-react'
 import { useSidebar } from '@/contexts/SidebarContext'
 import { useSiteConfig } from '@/contexts/SiteConfigContext'
@@ -32,6 +33,8 @@ type NavDef = {
   icon: typeof Users
   /** 租户登录：仅当 effective 权限含该菜单码时展示（平台管理员不按此项过滤） */
   tenantMenuCode?: string
+  /** 满足任一权限码即可展示（用于菜单/API 权限并存） */
+  tenantMenuAnyOf?: string[]
 }
 
 const navigation: NavDef[] = [
@@ -45,6 +48,12 @@ const navigation: NavDef[] = [
   { labelKey: 'nav.platformAdmins', href: '/platform-admins', icon: Shield },
   { labelKey: 'nav.outboundTasks', href: '/outbound-tasks', icon: PhoneCall, tenantMenuCode: 'menu.res.outbound' },
   { labelKey: 'nav.scriptManager', href: '/script-manager', icon: FileText, tenantMenuCode: 'menu.res.script' },
+  {
+    labelKey: 'nav.voiceClones',
+    href: '/voice-clones',
+    icon: Mic2,
+    tenantMenuAnyOf: ['menu.res.voice', 'api.voice.read', 'api.voice.write'],
+  },
   { labelKey: 'nav.webAgents', href: '/web-agents', icon: Headphones, tenantMenuCode: 'menu.tel.webseat' },
   { labelKey: 'nav.accessKeys', href: '/access-keys', icon: KeyRound, tenantMenuCode: 'menu.acc.keys' },
   { labelKey: 'nav.tenantMembers', href: '/tenant-members', icon: Contact, tenantMenuCode: 'menu.org.members' },
@@ -52,11 +61,16 @@ const navigation: NavDef[] = [
   { labelKey: 'nav.rolePermissions', href: '/role-permissions', icon: Shield, tenantMenuCode: 'menu.org.role' },
 ]
 
-function tenantMaySeeItem(menuCodes: readonly string[] | undefined, menuCode: string | undefined): boolean {
-  if (!menuCode) return false
+function tenantMaySeeItem(menuCodes: readonly string[] | undefined, item: NavDef): boolean {
+  const required = item.tenantMenuAnyOf?.length
+    ? item.tenantMenuAnyOf
+    : item.tenantMenuCode
+      ? [item.tenantMenuCode]
+      : []
+  if (!required.length) return false
   const list = menuCodes ?? []
   if (!list.length) return false
-  return list.includes(menuCode)
+  return required.some((code) => list.includes(code))
 }
 
 const platformAdminMenuHrefs = new Set([
@@ -91,6 +105,7 @@ function NavMenuBody({
   const location = useLocation()
   const navigate = useNavigate()
   const { config } = useSiteConfig()
+  const { t } = useTranslation()
   const user = useAuthStore((s) => s.user)
   const isPlatformAdmin = Boolean(user?.isPlatformAdmin || user?.principal === 'platform')
   const isTenantUser = user?.principal === 'tenant'
@@ -99,13 +114,12 @@ function NavMenuBody({
   const em = String(user?.email || '').trim()
   const sidebarUserLabel = dn || un || em || t('nav.me')
   const avatarUrl = isTenantUser ? String(user?.avatarUrl || '').trim() : ''
-  const { t } = useTranslation()
   const menuCodes = (user?.permissionCodes as string[] | undefined) ?? []
   const visibleNavigation = isPlatformAdmin
     ? navigation.filter((n) => platformAdminMenuHrefs.has(n.href))
     : navigation.filter((n) => {
         if (tenantHiddenHrefs.has(n.href)) return false
-        return tenantMaySeeItem(menuCodes, n.tenantMenuCode)
+        return tenantMaySeeItem(menuCodes, n)
       })
   const siteName = config?.SITE_NAME || '灵语'
   const logoUrl = '/icon-lingyu.png'
@@ -157,21 +171,19 @@ function NavMenuBody({
       >
         {visibleNavigation.map((item) => {
           const Icon = item.icon
+          const label = t(item.labelKey)
           return (
-            <Menu.Item key={item.href}>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: collapsed ? 0 : 10,
-                  width: collapsed ? '100%' : '100%',
-                  justifyContent: collapsed ? 'center' : 'flex-start',
-                  lineHeight: 1,
-                }}
-              >
-                <Icon size={18} strokeWidth={2} />
-                {!collapsed && t(item.labelKey)}
-              </span>
+            <Menu.Item key={item.href} title={collapsed ? label : undefined}>
+              {collapsed ? (
+                <span className="ling-sidebar-menu-icon-cell" aria-hidden>
+                  <Icon size={18} strokeWidth={2} />
+                </span>
+              ) : (
+                <span className="ling-sidebar-menu-item-label">
+                  <Icon size={18} strokeWidth={2} aria-hidden />
+                  {label}
+                </span>
+              )}
             </Menu.Item>
           )
         })}
@@ -278,13 +290,12 @@ const Sidebar = () => {
       </Drawer>
 
       <Sider
-        className="ling-sidebar-sider hidden lg:block"
+        className="ling-sidebar-sider hidden lg:block !bg-card !border-border"
         collapsible
         trigger={null}
         collapsed={isCollapsed}
         width={220}
         collapsedWidth={80}
-        className="!bg-card !border-border"
         style={{
           height: '100vh',
           position: 'fixed',

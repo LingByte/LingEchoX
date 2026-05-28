@@ -222,6 +222,25 @@ func TestRealtimeReady_RequiresProviderAndApiKey(t *testing.T) {
 	}
 }
 
+func TestRealtimeReady_VolcDialogue(t *testing.T) {
+	if RealtimeReady(VoiceEnv{
+		RealtimeProvider:  "volcengine_dialogue",
+		RealtimeConfigRaw: map[string]any{"provider": "volcengine_dialogue", "appId": "123"},
+	}) {
+		t.Error("volc without accessKey should not be ready")
+	}
+	if !RealtimeReady(VoiceEnv{
+		RealtimeProvider: "volcengine_dialogue",
+		RealtimeConfigRaw: map[string]any{
+			"provider":  "volcengine_dialogue",
+			"appId":     "123",
+			"accessKey": "tok",
+		},
+	}) {
+		t.Error("volc with appId + accessKey should be ready")
+	}
+}
+
 func TestRealtimeReady_ReadsProviderFromRaw(t *testing.T) {
 	// RealtimeProvider field empty but raw map has provider — should
 	// still be considered ready.

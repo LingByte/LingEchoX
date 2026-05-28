@@ -33,6 +33,9 @@ const (
 	CredentialAPISecret           = "X-API-SECRET"
 	LingechoWebSeatPathPrefix     = "lingecho/webseat/v1"
 	LingechoVoiceDialogPathPrefix = "lingecho/voice-dialog/v1"
+
+	KEYVoiceCloneXunfeiConfig     = "VOICE_CLONE_XUNFEI_CONFIG"
+	KEYVoiceCloneVolcengineConfig = "VOICE_CLONE_VOLCENGINE_CONFIG"
 )
 
 // Legacy aliases.

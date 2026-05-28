@@ -64,14 +64,21 @@ func RealtimeReady(env VoiceEnv) bool {
 	if provider == "" {
 		return false
 	}
-	for _, k := range []string{"apiKey", "api_key"} {
-		if v, ok := raw[k]; ok {
-			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-				return true
+	switch provider {
+	case "volcengine_dialogue", "volc_realtime", "doubao_realtime", "volcengine_realtime":
+		appID := strFromMap(raw, "appId", "app_id")
+		accessKey := strFromMap(raw, "accessKey", "access_key", "access_token", "token")
+		return appID != "" && accessKey != ""
+	default:
+		for _, k := range []string{"apiKey", "api_key"} {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					return true
+				}
 			}
 		}
+		return false
 	}
-	return false
 }
 
 // llmReady (private) is the LLM credential check for cascaded mode.

@@ -55,6 +55,7 @@ func (h *Handlers) Register(engine *gin.Engine) {
 	h.registerPlatformSystemRoutes(protected)
 	h.registerAccountRoutes(protected)
 	h.registerCredentialRoutes(protected)
+	h.registerVoiceCloneRoutes(protected)
 	h.registerLingechoWebSeatRoutes(r)
 	h.registerVoiceDialogRoutes(r)
 }

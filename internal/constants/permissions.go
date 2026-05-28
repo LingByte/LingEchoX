@@ -28,12 +28,16 @@ const (
 	PermAPICredentialsRead  = "api.credentials.read"
 	PermAPICredentialsWrite = "api.credentials.write"
 
+	PermAPIVoiceRead  = "api.voice.read"
+	PermAPIVoiceWrite = "api.voice.write"
+
 	PermMenuWorkspaceOverview = "menu.workspace.overview"
 	PermMenuTelRecords        = "menu.tel.records"
 	PermMenuTelWebseat        = "menu.tel.webseat"
 	PermMenuResPool           = "menu.res.pool"
 	PermMenuResOutbound       = "menu.res.outbound"
 	PermMenuResScript         = "menu.res.script"
+	PermMenuResVoice          = "menu.res.voice"
 	PermMenuAccKeys           = "menu.acc.keys"
 	PermMenuOrgMembers        = "menu.org.members"
 	PermMenuOrgDept           = "menu.org.dept"

@@ -30,6 +30,7 @@ const TenantManagement = lazy(() => import('@/pages/TenantManagement'))
 const PlatformAdmins = lazy(() => import('@/pages/PlatformAdmins'))
 const TenantAiConfig = lazy(() => import('@/pages/TenantAiConfig'))
 const TenantMembers = lazy(() => import('@/pages/TenantMembers'))
+const VoiceClones = lazy(() => import('@/pages/VoiceClones'))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -96,6 +97,7 @@ function App() {
                     <Route path="/outbound-tasks" element={<RequireAuth><RequireTenant><OutboundTasks /></RequireTenant></RequireAuth>} />
                     <Route path="/script-manager/new" element={<RequireAuth><RequireTenant><ScriptManagerNew /></RequireTenant></RequireAuth>} />
                     <Route path="/script-manager" element={<RequireAuth><RequireTenant><ScriptManager /></RequireTenant></RequireAuth>} />
+                    <Route path="/voice-clones" element={<RequireAuth><RequireTenant><VoiceClones /></RequireTenant></RequireAuth>} />
                     <Route path="/web-agents" element={<RequireAuth><RequireTenant><WebAgents /></RequireTenant></RequireAuth>} />
                     <Route path="/sip-trunks" element={<RequireAuth><RequirePlatform><SIPTrunks /></RequirePlatform></RequireAuth>} />
                     <Route path="/sip-trunk-numbers" element={<RequireAuth><RequirePlatform><SIPTrunkNumbers /></RequirePlatform></RequireAuth>} />

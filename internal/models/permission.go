@@ -131,12 +131,15 @@ var builtinPermissions = []struct {
 	{constants.PermAPITenantUsersWrite, "成员管理", constants.PermissionKindAPI, "api.tenant"},
 	{constants.PermAPICredentialsRead, "访问密钥查看", constants.PermissionKindAPI, "api.credentials"},
 	{constants.PermAPICredentialsWrite, "访问密钥管理", constants.PermissionKindAPI, "api.credentials"},
+	{constants.PermAPIVoiceRead, "音色克隆查看", constants.PermissionKindAPI, "api.voice"},
+	{constants.PermAPIVoiceWrite, "音色克隆管理", constants.PermissionKindAPI, "api.voice"},
 	{constants.PermMenuWorkspaceOverview, "工作台菜单", constants.PermissionKindMenu, "menu.workspace"},
 	{constants.PermMenuTelRecords, "通话记录菜单", constants.PermissionKindMenu, "menu.tel"},
 	{constants.PermMenuTelWebseat, "Web 坐席菜单", constants.PermissionKindMenu, "menu.tel"},
 	{constants.PermMenuResPool, "号码池菜单", constants.PermissionKindMenu, "menu.res"},
 	{constants.PermMenuResOutbound, "外呼任务菜单", constants.PermissionKindMenu, "menu.res"},
 	{constants.PermMenuResScript, "脚本管理菜单", constants.PermissionKindMenu, "menu.res"},
+	{constants.PermMenuResVoice, "音色管理菜单", constants.PermissionKindMenu, "menu.res"},
 	{constants.PermMenuAccKeys, "访问管理菜单", constants.PermissionKindMenu, "menu.acc"},
 	{constants.PermMenuOrgMembers, "成员管理菜单", constants.PermissionKindMenu, "menu.org"},
 	{constants.PermMenuOrgDept, "部门菜单", constants.PermissionKindMenu, "menu.org"},
@@ -147,25 +150,33 @@ var builtinPermissions = []struct {
 // full current catalog. Idempotent; only inserts missing pivot rows. Used to heal tenants
 // created before new permission codes (e.g. menu.* codes) were introduced.
 func BackfillSystemTenantAdminPermissions(db *gorm.DB, operator string) error {
+	_, err := BackfillSystemTenantAdminPermissionsStats(db, operator)
+	return err
+}
+
+// BackfillSystemTenantAdminPermissionsStats is like BackfillSystemTenantAdminPermissions
+// but returns the number of tenant_role_permissions rows inserted.
+func BackfillSystemTenantAdminPermissionsStats(db *gorm.DB, operator string) (int, error) {
 	var permIDs []uint
 	if err := db.Model(&Permission{}).Pluck("id", &permIDs).Error; err != nil {
-		return err
+		return 0, err
 	}
 	if len(permIDs) == 0 {
-		return nil
+		return 0, nil
 	}
 	var adminRoleIDs []uint
 	if err := db.Model(&TenantRole{}).
 		Where("is_system = ? AND name = ?", true, constants.TenantAdminRoleName).
 		Pluck("id", &adminRoleIDs).Error; err != nil {
-		return err
+		return 0, err
 	}
+	added := 0
 	for _, roleID := range adminRoleIDs {
 		var bound []uint
 		if err := db.Model(&TenantRolePermission{}).
 			Where("role_id = ?", roleID).
 			Pluck("permission_id", &bound).Error; err != nil {
-			return err
+			return added, err
 		}
 		have := make(map[uint]struct{}, len(bound))
 		for _, id := range bound {
@@ -178,11 +189,22 @@ func BackfillSystemTenantAdminPermissions(db *gorm.DB, operator string) error {
 			rp := &TenantRolePermission{RoleID: roleID, PermissionID: pid}
 			rp.SetCreateInfo(operator)
 			if err := db.Create(rp).Error; err != nil {
-				return err
+				return added, err
 			}
+			added++
 		}
 	}
-	return nil
+	return added, nil
+}
+
+// CountPermissionsByCodes returns how many catalog rows exist for the given codes.
+func CountPermissionsByCodes(db *gorm.DB, codes ...string) (int64, error) {
+	if len(codes) == 0 {
+		return 0, nil
+	}
+	var n int64
+	err := db.Model(&Permission{}).Where("code IN ?", codes).Count(&n).Error
+	return n, err
 }
 
 // SyncPermissionCatalog upserts the built-in permission rows; existing rows are updated, missing ones created.

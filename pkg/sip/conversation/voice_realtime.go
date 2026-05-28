@@ -40,7 +40,8 @@ import (
 
 	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/realtime"
-	_ "github.com/LinByte/VoiceServer/pkg/realtime/aliyunomni" // self-registers as aliyun_omni
+	_ "github.com/LinByte/VoiceServer/pkg/realtime/aliyunomni"     // self-registers as aliyun_omni
+	_ "github.com/LinByte/VoiceServer/pkg/realtime/volcdialogue" // self-registers as volcengine_dialogue
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
 	siprecorder "github.com/LinByte/VoiceServer/pkg/voice/recorder"
 	"go.uber.org/zap"
