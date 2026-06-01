@@ -10,7 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultTransferConfirmNormalWAV = "scripts/transfer_confirm_normal.wav"
+const (
+	defaultTransferConfirmNormalWAV  = "scripts/transfer_confirm_normal.wav"
+	defaultTransferConfirmExecuteWAV = "scripts/transfer_confirm_execute.wav"
+)
 
 func transferConfirmReplyText(execute bool) string {
 	if execute {
@@ -26,17 +29,24 @@ func transferConfirmNormalWAVPath() string {
 	return defaultTransferConfirmNormalWAV
 }
 
+func transferConfirmExecuteWAVPath() string {
+	if p := strings.TrimSpace(os.Getenv("SIP_TRANSFER_CONFIRM_EXECUTE_WAV_PATH")); p != "" {
+		return p
+	}
+	return defaultTransferConfirmExecuteWAV
+}
+
 // PlayTransferConfirmReply plays the fixed transfer-confirm phrase on the inbound leg.
 // execute=false → scripts/transfer_confirm_normal.wav (or SIP_TRANSFER_CONFIRM_NORMAL_WAV_PATH).
-// execute=true → tenant TTS for the final phrase before dial.
+// execute=true  → scripts/transfer_confirm_execute.wav (or SIP_TRANSFER_CONFIRM_EXECUTE_WAV_PATH).
 func PlayTransferConfirmReply(ctx context.Context, cs *sipSession.CallSession, execute bool, lg *zap.Logger) error {
 	if cs == nil {
 		return nil
 	}
-	if !execute {
-		return playTransferConfirmWAV(ctx, cs, transferConfirmNormalWAVPath(), lg)
+	if execute {
+		return playTransferConfirmWAV(ctx, cs, transferConfirmExecuteWAVPath(), lg)
 	}
-	return SpeakTextOnce(ctx, cs, transferConfirmReplyText(true), lg)
+	return playTransferConfirmWAV(ctx, cs, transferConfirmNormalWAVPath(), lg)
 }
 
 func playTransferConfirmWAV(ctx context.Context, cs *sipSession.CallSession, wavPath string, lg *zap.Logger) error {

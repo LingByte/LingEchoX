@@ -203,7 +203,7 @@ func attachRealtimeVoiceInner(ctx context.Context, cs *sipSession.CallSession, e
 		}
 		ttsPlaying.Store(false)
 		// Dial in a goroutine: onEvent must NOT block (realtime WS read loop).
-		// The transfer-confirm phrase is already spoken via tenant TTS
+		// The transfer-confirm phrase is already spoken via fixed WAV
 		// (PlayTransferConfirmReply) before this runs.
 		go func() {
 			TriggerTransferToAgent(context.Background(), cs.CallID, lg)
