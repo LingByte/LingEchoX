@@ -99,6 +99,7 @@ type FormState = {
   // transferRingingUrl 转接阶段回铃 WAV URL，语义同 welcomeAudioUrl。
   transferRingingUrl: string
   transferAgentBriefText: string
+  transferCallerBriefText: string
   outboundTrunkNumberId: string
 }
 
@@ -120,6 +121,7 @@ const defaultForm = (): FormState => ({
   welcomeAudioUrl: '',
   transferRingingUrl: '',
   transferAgentBriefText: '',
+  transferCallerBriefText: '',
   outboundTrunkNumberId: '0',
 })
 
@@ -229,6 +231,7 @@ const SIPTrunkNumbers = () => {
       welcomeAudioUrl: r.welcomeAudioUrl || '',
       transferRingingUrl: r.transferRingingUrl || '',
       transferAgentBriefText: r.transferAgentBriefText || '',
+      transferCallerBriefText: r.transferCallerBriefText || '',
       outboundTrunkNumberId: String(r.outboundTrunkNumberId ?? 0),
     })
     setModalOpen(true)
@@ -339,6 +342,7 @@ const SIPTrunkNumbers = () => {
       welcomeAudioUrl: form.welcomeAudioUrl.trim(),
       transferRingingUrl: form.transferRingingUrl.trim(),
       transferAgentBriefText: form.transferAgentBriefText.trim().slice(0, MAX_TRANSFER_AGENT_BRIEF_LEN),
+      transferCallerBriefText: form.transferCallerBriefText.trim().slice(0, MAX_TRANSFER_AGENT_BRIEF_LEN),
       outboundTrunkNumberId: (() => {
         const v = parseInt(form.outboundTrunkNumberId, 10)
         return Number.isFinite(v) && v > 0 ? v : 0
@@ -717,17 +721,17 @@ const SIPTrunkNumbers = () => {
             </div>
             <div>
               <FieldLabel
-                label="坐席接听前播报（可选）"
+                label="坐席桥接前播报（可选）"
                 hint={
                   <>
-                    坐席接通后、与客户通话前，向坐席侧 TTS 播报一句（主叫仍听转接音乐）。占位符：{' '}
+                    坐席接通后、与客户通话前，向坐席侧 TTS 播报一句。占位符：{' '}
                     <Typography.Text code>{'{{N}}'}</Typography.Text> 主叫号码、
                     <Typography.Text code>{'{{NTail4}}'}</Typography.Text> 尾号四位、
                     <Typography.Text code>{'{{Name}}'}</Typography.Text> 坐席名称、
                     <Typography.Text code>{'{{TargetValue}}'}</Typography.Text> 呼叫号码、
                     <Typography.Text code>{'{{Note}}'}</Typography.Text> 坐席备注、
                     <Typography.Text code>{'{{MetaData.FactoryNumber}}'}</Typography.Text>{' '}
-                    等（号码池坐席 MetaData）。最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字；留空则直接通话。
+                    等（号码池坐席 MetaData）。最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字。
                   </>
                 }
               />
@@ -741,6 +745,30 @@ const SIPTrunkNumbers = () => {
                   setForm((f) => ({
                     ...f,
                     transferAgentBriefText: String(v).slice(0, MAX_TRANSFER_AGENT_BRIEF_LEN),
+                  }))
+                }
+              />
+            </div>
+            <div>
+              <FieldLabel
+                label="主叫桥接前播报（可选）"
+                hint={
+                  <>
+                    向主叫侧 TTS 播报一句（转接音乐会先停止）。留空则与上方坐席播报相同、同步播放；
+                    填写不同文案则主叫与坐席同时听到各自内容。占位符同上，最多 {MAX_TRANSFER_AGENT_BRIEF_LEN} 字。
+                  </>
+                }
+              />
+              <Input.TextArea
+                maxLength={MAX_TRANSFER_AGENT_BRIEF_LEN}
+                showWordLimit
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                placeholder="留空=与坐席播报相同；例：正在为您转接客服，请稍候。"
+                value={form.transferCallerBriefText}
+                onChange={(v) =>
+                  setForm((f) => ({
+                    ...f,
+                    transferCallerBriefText: String(v).slice(0, MAX_TRANSFER_AGENT_BRIEF_LEN),
                   }))
                 }
               />

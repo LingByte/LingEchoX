@@ -430,6 +430,24 @@ func Start(cfg Config) (*Embedded, error) {
 		}
 		return ""
 	})
+	conversation.SetTransferCallerBriefTemplateResolver(func(callID string) string {
+		cid := strings.TrimSpace(callID)
+		if cid == "" || acdDB == nil {
+			return ""
+		}
+		callRow, err := persist.FindActiveSIPCallByCallID(context.Background(), acdDB, cid)
+		if err != nil {
+			return ""
+		}
+		called := strings.TrimSpace(callRow.ToNumber)
+		if called == "" {
+			return ""
+		}
+		if tn, ok := models.FindTrunkNumberByInboundDID(acdDB, called); ok {
+			return strings.TrimSpace(tn.TransferCallerBriefText)
+		}
+		return ""
+	})
 	conversation.SetTransferAgentBriefVarsResolver(func(callID string) conversation.TransferAgentBriefVars {
 		cid := strings.TrimSpace(callID)
 		vars := conversation.TransferAgentBriefVars{

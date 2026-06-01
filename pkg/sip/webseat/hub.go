@@ -57,7 +57,7 @@ type Config struct {
 	OnWebSeatBridgeEstablished func(callID string)
 	// OnWebSeatJoinTimeout runs when no browser join arrives within SIP_WEBSEAT_JOIN_TIMEOUT (after dedupe release).
 	OnWebSeatJoinTimeout func(callID string, acdPoolTargetID uint)
-	// PlayTransferAgentBrief plays optional trunk transfer_agent_brief_text TTS on browser downlink
+	// PlayTransferAgentBrief plays optional trunk transfer_agent_brief_text TTS to caller + browser downlink
 	// before PSTN↔WebRTC bridge (caller keeps transfer ringing until bridge starts).
 	PlayTransferAgentBrief func(ctx context.Context, inboundCallID string, agentDownlink media.MediaTransport) (played bool, err error)
 	// StopTransferRinging cancels inbound hold/ring loop before web bridge (mirrors SIP StartTransferBridge).

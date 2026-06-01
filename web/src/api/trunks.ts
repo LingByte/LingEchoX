@@ -40,8 +40,10 @@ export interface TrunkNumberRow {
   // SIP_TRANSFER_RINGING_WAV_PATH env / scripts/ringing.wav。与 welcomeAudioUrl
   // 同套校验、同种上传流程，只是平台落盘目录不同。
   transferRingingUrl?: string
-  /** 坐席接听前 TTS 模板（可选，最长 256 字）。占位符 {{N}} {{NTail4}} {{Name}} */
+  /** 坐席桥接前 TTS 模板（可选，最长 256 字）。占位符 {{N}} {{NTail4}} {{Name}} */
   transferAgentBriefText?: string
+  /** 主叫桥接前 TTS 模板（可选）。留空则与坐席侧相同 */
+  transferCallerBriefText?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -114,6 +116,7 @@ export async function createTrunkNumber(body: {
   welcomeAudioUrl?: string
   transferRingingUrl?: string
   transferAgentBriefText?: string
+  transferCallerBriefText?: string
 }): Promise<ApiResponse<TrunkNumberRow>> {
   return post('/sip-center/trunk-numbers', body)
 }
@@ -138,6 +141,7 @@ export async function updateTrunkNumber(id: number, body: {
   welcomeAudioUrl?: string
   transferRingingUrl?: string
   transferAgentBriefText?: string
+  transferCallerBriefText?: string
 }): Promise<ApiResponse<TrunkNumberRow>> {
   return put(`/sip-center/trunk-numbers/${id}`, body)
 }

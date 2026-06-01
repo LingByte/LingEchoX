@@ -289,8 +289,8 @@ func TeardownTransferBridgeOnOutboundRemoteByeFallback(inboundCallID, outboundCa
 }
 
 // StartTransferBridge stops AI media on both legs and bridges audio.
-// When TrunkNumber.transfer_agent_brief_text is set, the caller keeps hold
-// music while the agent hears a one-line TTS brief, then the bridge starts.
+// When TrunkNumber transfer brief templates are set, caller and agent hear TTS
+// (hold music stops first; same text syncs via one pipeline, different text in parallel).
 func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSession, outboundCallID string, lg *zap.Logger) {
 	inboundCallID = normCallID(inboundCallID)
 	outboundCallID = normCallID(outboundCallID)
@@ -300,13 +300,13 @@ func StartTransferBridge(inboundCallID string, outboundCS *sipSession.CallSessio
 	if lg == nil {
 		lg = zap.NewNop()
 	}
-	if tmpl := resolveTransferAgentBriefTemplate(inboundCallID); tmpl != "" {
+	if hasTransferBriefConfigured(inboundCallID) {
 		if _, loaded := transferAgentBriefRunning.LoadOrStore(inboundCallID, struct{}{}); loaded {
 			return
 		}
 		go func() {
 			defer transferAgentBriefRunning.Delete(inboundCallID)
-			playTransferAgentBriefThenBridge(inboundCallID, outboundCS, outboundCallID, tmpl, lg)
+			playTransferAgentBriefThenBridge(inboundCallID, outboundCS, outboundCallID, lg)
 		}()
 		return
 	}

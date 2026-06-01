@@ -372,21 +372,30 @@ func NormalizeTrunkNumberAudioURL(ctx context.Context, fieldName, raw string) (s
 // MaxTransferAgentBriefTextLen matches conversation.MaxTransferAgentBriefTextLen (API/DB cap).
 const MaxTransferAgentBriefTextLen = 256
 
+// NormalizeTransferCallerBriefText validates optional caller brief template on trunk numbers.
+func NormalizeTransferCallerBriefText(raw string) (string, error) {
+	return normalizeTransferBriefText(raw, "transferCallerBriefText")
+}
+
 // NormalizeTransferAgentBriefText validates optional agent brief template on trunk numbers.
 func NormalizeTransferAgentBriefText(raw string) (string, error) {
+	return normalizeTransferBriefText(raw, "transferAgentBriefText")
+}
+
+func normalizeTransferBriefText(raw, fieldName string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return "", nil
 	}
 	if len([]rune(s)) > MaxTransferAgentBriefTextLen {
-		return "", fmt.Errorf("transferAgentBriefText exceeds %d characters", MaxTransferAgentBriefTextLen)
+		return "", fmt.Errorf("%s exceeds %d characters", fieldName, MaxTransferAgentBriefTextLen)
 	}
 	for _, r := range s {
 		if r == '\n' || r == '\r' || r == '\t' {
-			return "", fmt.Errorf("transferAgentBriefText must be a single line")
+			return "", fmt.Errorf("%s must be a single line", fieldName)
 		}
 		if unicode.IsControl(r) {
-			return "", fmt.Errorf("transferAgentBriefText contains invalid control characters")
+			return "", fmt.Errorf("%s contains invalid control characters", fieldName)
 		}
 	}
 	return s, nil

@@ -125,70 +125,6 @@ func sipVoiceTTSCloudSampleRate(env VoiceEnv, synthRate, pcmBridgeSR int) int {
 	return 16000
 }
 
-func VoiceEnvFromProcess() VoiceEnv {
-	voiceType, _ := strconv.ParseInt(utils.GetEnv("TTS_VOICE_TYPE"), 10, 64)
-	ttsSpeed, _ := strconv.ParseInt(utils.GetEnv("TTS_SPEED"), 10, 64)
-	// TTS_SAMPLE_RATE: when unset / non-positive we leave it at 0 so that
-	// sipVoiceTTSCloudSampleRate() falls through to the negotiated SIP PCM
-	// bridge rate. For G.711 (PCMU/PCMA) this means TTS is requested at
-	// 8 kHz directly — NO resample, NO interpolator chunk-boundary
-	// artifacts (the source of the high-frequency "滋滋" hiss). Previously
-	// this defaulted to 16000 which forced an unnecessary 16k→8k
-	// downsample on every G.711 call and caused the audible hiss.
-	sr, _ := strconv.Atoi(utils.GetEnv("TTS_SAMPLE_RATE"))
-	if sr < 0 {
-		sr = 0
-	}
-	provider := utils.GetEnv("LLM_PROVIDER")
-	appID := utils.GetEnv("LLM_APP_ID")
-	if appID == "" {
-		appID = utils.GetEnv("ALIBABA_AI_APP_ID")
-	}
-	apiKey := utils.GetEnv("LLM_APIKEY")
-	if apiKey == "" && strings.EqualFold(provider, "alibaba") {
-		apiKey = utils.GetEnv("ALIBABA_AI_API_KEY")
-	}
-	env := VoiceEnv{
-		LLMProvider: provider,
-		LLMBaseURL:  utils.GetEnv("LLM_BASEURL"),
-		LLMAppID:    appID,
-		LLMAPIKey:   apiKey,
-		LLMModel:    utils.GetEnv("LLM_MODEL"),
-
-		ASRAppID:     utils.GetEnv("ASR_APPID"),
-		ASRSecretID:  utils.GetEnv("ASR_SECRET_ID"),
-		ASRSecretKey: utils.GetEnv("ASR_SECRET_KEY"),
-		ASRModelType: utils.GetEnv("ASR_MODEL_TYPE"),
-
-		TTSProvider:   "qcloud",
-		TTSAppID:      utils.GetEnv("TTS_APPID"),
-		TTSSecretID:   utils.GetEnv("TTS_SECRET_ID"),
-		TTSSecretKey:  utils.GetEnv("TTS_SECRET_KEY"),
-		TTSVoiceType:  voiceType,
-		TTSSpeed:      ttsSpeed,
-		TTSSampleRate: sr,
-	}
-	// Synthesize a TTSConfigRaw map so legacy env-driven callers can use
-	// the same provider-agnostic factory the tenant path uses.
-	raw := map[string]any{
-		"provider":  "qcloud",
-		"appId":     env.TTSAppID,
-		"secretId":  env.TTSSecretID,
-		"secretKey": env.TTSSecretKey,
-	}
-	if env.TTSVoiceType != 0 {
-		raw["voiceType"] = env.TTSVoiceType
-	}
-	if env.TTSSpeed != 0 {
-		raw["speed"] = env.TTSSpeed
-	}
-	if env.TTSSampleRate > 0 {
-		raw["sampleRate"] = env.TTSSampleRate
-	}
-	env.TTSConfigRaw = raw
-	return env
-}
-
 // llmAPIURLForProvider returns the apiUrl argument for llm.NewLLMProvider (OpenAI-compatible base URL or Alibaba App ID).
 func llmAPIURLForProvider(env VoiceEnv) string {
 	if strings.EqualFold(env.LLMProvider, "alibaba") {
@@ -790,9 +726,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 	}
 
 	if !scriptMode {
-		// Resolve + decode the welcome WAV up front so we can short-
-		// circuit (skip goroutine + welcomePlaying flag) when there is
-		// no configured source. Two paths feed loadWelcomePCM:
 		//   1) TrunkNumber.WelcomeAudioURL (per-DID, set by admin)
 		//   2) scripts/welcome.wav (legacy / global default)
 		// Both yield decoded PCM at the bridge sample rate; the
@@ -800,10 +733,6 @@ func attachVoiceInner(ctx context.Context, cs *sipSession.CallSession, env Voice
 		welcomePCM, src, werr := loadWelcomePCM(ms.GetContext(), cs.CallID, pcmBridgeSR, lg)
 		switch {
 		case werr != nil:
-			// Configured source failed (URL unreachable / decode error).
-			// We already logged inside loadWelcomePCM; skip playback
-			// rather than silently falling back, so the operator sees
-			// the misconfiguration in observability.
 			lg.Warn("sip voice: welcome audio load failed, skipping welcome phase",
 				zap.String("call_id", cs.CallID),
 				zap.String("source", string(src)),
