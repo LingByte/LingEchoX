@@ -538,6 +538,45 @@ func PickEligibleACDPoolTargetForTransferWithMode(ctx context.Context, db *gorm.
 	return pick, nil
 }
 
+// ApplyACDPoolTargetShiftWorkState reconciles one row's work_state with its shift schedule.
+// Empty shift schedule means 24/7 (always in shift). Break/busy/ringing/acw are not promoted
+// to available; outside-shift available/ringing/break/acw become offline.
+func ApplyACDPoolTargetShiftWorkState(ctx context.Context, db *gorm.DB, row *ACDPoolTarget, now time.Time, updateBy string) (bool, error) {
+	if db == nil || row == nil || row.ID == 0 {
+		return false, nil
+	}
+	if updateBy == "" {
+		updateBy = "acd-shift"
+	}
+	loc := ACDShiftTimeLocation()
+	inShift := ACDFitsShiftSchedule(row.ShiftScheduleJSON, now, loc)
+	ws := NormalizeACDWorkState(row.WorkState)
+
+	if !inShift {
+		switch ws {
+		case constants.ACDWorkStateAvailable, constants.ACDWorkStateRinging, constants.ACDWorkStateBreak, constants.ACDWorkStateACW:
+			if err := UpdateACDPoolTargetWorkState(ctx, db, row.ID, constants.ACDWorkStateOffline, updateBy); err != nil {
+				return false, err
+			}
+			row.WorkState = constants.ACDWorkStateOffline
+			return true, nil
+		}
+		return false, nil
+	}
+
+	if ws != constants.ACDWorkStateOffline {
+		return false, nil
+	}
+	if row.RouteType == constants.ACDPoolRouteTypeWeb && !WebSeatLastSeenFresh(row.WebSeatLastSeenAt) {
+		return false, nil
+	}
+	if err := UpdateACDPoolTargetWorkState(ctx, db, row.ID, constants.ACDWorkStateAvailable, updateBy); err != nil {
+		return false, err
+	}
+	row.WorkState = constants.ACDWorkStateAvailable
+	return true, nil
+}
+
 // MarkACDPoolTargetsOfflineOutsideSchedule forces offline when current time is outside configured shift windows.
 func MarkACDPoolTargetsOfflineOutsideSchedule(ctx context.Context, db *gorm.DB, now time.Time) (int64, error) {
 	if db == nil {
@@ -555,11 +594,37 @@ func MarkACDPoolTargetsOfflineOutsideSchedule(ctx context.Context, db *gorm.DB, 
 		return 0, err
 	}
 	var n int64
-	for _, row := range rows {
-		if ACDFitsShiftSchedule(row.ShiftScheduleJSON, now, loc) {
+	for i := range rows {
+		if ACDFitsShiftSchedule(rows[i].ShiftScheduleJSON, now, loc) {
 			continue
 		}
-		if err := UpdateACDPoolTargetWorkState(ctx, db, row.ID, constants.ACDWorkStateOffline, "acd-shift"); err != nil {
+		changed, err := ApplyACDPoolTargetShiftWorkState(ctx, db, &rows[i], now, "acd-shift")
+		if err != nil || !changed {
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
+// MarkACDPoolTargetsAvailableInsideSchedule sets offline seats to available when current time
+// falls inside configured shift windows (empty schedule = 24/7). Intentional break is left
+// unchanged. Web seats require a fresh heartbeat so disconnected browsers are not marked reachable.
+func MarkACDPoolTargetsAvailableInsideSchedule(ctx context.Context, db *gorm.DB, now time.Time) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	var rows []ACDPoolTarget
+	err := ActiveACDPoolTargets(db.WithContext(ctx)).
+		Where("work_state = ?", constants.ACDWorkStateOffline).
+		Find(&rows).Error
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for i := range rows {
+		changed, err := ApplyACDPoolTargetShiftWorkState(ctx, db, &rows[i], now, "acd-shift")
+		if err != nil || !changed {
 			continue
 		}
 		n++

@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Button,
   Checkbox,
-  Input,
   Modal,
   Radio,
   Space,
@@ -20,13 +19,10 @@ import {
   defaultTimeSlot,
   emptyDayGrid,
   parseShiftScheduleJSON,
-  readShiftPresets,
   segmentsToDayGrid,
   serializeShiftSchedule,
   validHm,
-  writeShiftPresets,
   type DaySchedule,
-  type ShiftPreset,
   type ShiftSegment,
   type ShiftTimeType,
   type TimeSlot,
@@ -66,10 +62,6 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
   const [days, setDays] = useState<DaySchedule[]>(() => emptyDayGrid())
   const [bulkStart, setBulkStart] = useState('09:00')
   const [bulkEnd, setBulkEnd] = useState('18:00')
-  const [presets, setPresets] = useState<ShiftPreset[]>(() => readShiftPresets())
-  const [selectedPresetId, setSelectedPresetId] = useState<string | undefined>()
-  const [presetManageOpen, setPresetManageOpen] = useState(false)
-  const [newPresetName, setNewPresetName] = useState('')
 
   const resetFromValue = useCallback((raw: string) => {
     const segs = parseShiftScheduleJSON(raw)
@@ -85,44 +77,6 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
   useEffect(() => {
     if (visible) resetFromValue(value)
   }, [visible, value, resetFromValue])
-
-  const presetOptions = useMemo(
-    () => presets.map((p) => ({ label: p.name, value: p.id })),
-    [presets],
-  )
-
-  const applyPreset = (id: string | undefined) => {
-    setSelectedPresetId(id)
-    if (!id) return
-    const hit = presets.find((p) => p.id === id)
-    if (!hit) return
-    const { days: grid, timeType: inferred } = segmentsToDayGrid(hit.segments)
-    setDays(grid)
-    setTimeType(inferred)
-  }
-
-  const saveCurrentAsPreset = () => {
-    const name = newPresetName.trim()
-    if (!name) {
-      showAlert('请输入策略名称', 'warning')
-      return
-    }
-    const segs = dayGridToSegments(days)
-    const id = `preset-${Date.now()}`
-    const next = [...presets, { id, name, segments: segs }]
-    setPresets(next)
-    writeShiftPresets(next)
-    setSelectedPresetId(id)
-    setNewPresetName('')
-    showAlert('策略已保存', 'success')
-  }
-
-  const deletePreset = (id: string) => {
-    const next = presets.filter((p) => p.id !== id)
-    setPresets(next)
-    writeShiftPresets(next)
-    if (selectedPresetId === id) setSelectedPresetId(undefined)
-  }
 
   const onTimeTypeChange = (t: ShiftTimeType) => {
     if (t === 'holiday') {
@@ -200,44 +154,24 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
   }
 
   return (
-    <>
-      <Modal
-        title="座席时间策略"
-        visible={visible}
-        onCancel={onCancel}
-        style={{ width: 760 }}
-        autoFocus={false}
-        focusLock
-        footer={
-          <Space>
-            <Button onClick={onCancel}>取消</Button>
-            <Button type="primary" onClick={handleConfirm}>
-              确定
-            </Button>
-          </Space>
-        }
-      >
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <Typography.Text style={{ fontSize: 13, whiteSpace: 'nowrap' }}>选择策略</Typography.Text>
-            <select
-              className="h-8 min-w-[200px] rounded border border-border bg-background px-2 text-sm"
-              value={selectedPresetId ?? ''}
-              onChange={(e) => applyPreset(e.target.value || undefined)}
-            >
-              <option value="">请选择策略</option>
-              {presetOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <Button type="outline" size="small" onClick={() => setPresetManageOpen(true)}>
-              策略管理
-            </Button>
-          </div>
-
-          <div>
+    <Modal
+      title="座席时间策略"
+      visible={visible}
+      onCancel={onCancel}
+      style={{ width: 760 }}
+      autoFocus={false}
+      focusLock
+      footer={
+        <Space>
+          <Button onClick={onCancel}>取消</Button>
+          <Button type="primary" onClick={handleConfirm}>
+            确定
+          </Button>
+        </Space>
+      }
+    >
+      <div className="space-y-4">
+        <div>
             <Typography.Text style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>时间类型</Typography.Text>
             <Radio.Group
               type="button"
@@ -254,13 +188,6 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
 
           {timeType !== 'all' && (
             <>
-              <Typography.Paragraph style={{ margin: 0, fontSize: 12 }} type="secondary">
-                <Typography.Text type="error">*</Typography.Text> 指定时间{' '}
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  指定时间须勾选才可生效
-                </Typography.Text>
-              </Typography.Paragraph>
-
               <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/20 px-3 py-2.5">
                 <Typography.Text style={{ fontSize: 12 }}>一键应用</Typography.Text>
                 <TimePicker
@@ -345,72 +272,8 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
               </div>
             </>
           )}
-
-          {timeType === 'all' && (
-            <Typography.Paragraph style={{ margin: 0, fontSize: 12 }} type="secondary">
-              全部时间：不限制接线时段，坐席在班次外不会被自动标记离线。
-            </Typography.Paragraph>
-          )}
-
-          <Typography.Paragraph style={{ margin: 0, fontSize: 11 }} type="secondary">
-            跨午夜时段（如 22:00–06:00）已支持。判断时区由服务端 ACD_SHIFT_TIMEZONE 决定。
-          </Typography.Paragraph>
-        </div>
-      </Modal>
-
-      <Modal
-        title="策略管理"
-        visible={presetManageOpen}
-        onCancel={() => setPresetManageOpen(false)}
-        style={{ width: 480 }}
-        footer={
-          <Button onClick={() => setPresetManageOpen(false)}>关闭</Button>
-        }
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          <Space style={{ width: '100%' }}>
-            <Input
-              placeholder="新策略名称"
-              value={newPresetName}
-              onChange={setNewPresetName}
-              style={{ flex: 1 }}
-            />
-            <Button type="primary" onClick={saveCurrentAsPreset}>
-              保存当前配置
-            </Button>
-          </Space>
-          {presets.length === 0 ? (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              暂无已保存策略，配置好时段后点击「保存当前配置」。
-            </Typography.Text>
-          ) : (
-            presets.map((p) => (
-              <div
-                key={p.id}
-                className="flex items-center justify-between rounded border border-border px-3 py-2"
-              >
-                <Typography.Text>{p.name}</Typography.Text>
-                <Space>
-                  <Button
-                    type="text"
-                    size="mini"
-                    onClick={() => {
-                      applyPreset(p.id)
-                      setPresetManageOpen(false)
-                    }}
-                  >
-                    应用
-                  </Button>
-                  <Button type="text" size="mini" status="danger" onClick={() => deletePreset(p.id)}>
-                    删除
-                  </Button>
-                </Space>
-              </div>
-            ))
-          )}
-        </Space>
-      </Modal>
-    </>
+      </div>
+    </Modal>
   )
 }
 

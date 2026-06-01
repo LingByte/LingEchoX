@@ -100,4 +100,14 @@ func (c *SIPUserOnlineCleaner) sweep() {
 	if shiftRows > 0 && logger.Lg != nil {
 		logger.Lg.Info("acd shift cleaner marked seats offline", zap.Int64("rows", shiftRows))
 	}
+
+	availRows, availErr := models.MarkACDPoolTargetsAvailableInsideSchedule(context.Background(), c.db, time.Now())
+	if availErr != nil {
+		if logger.Lg != nil {
+			logger.Lg.Warn("acd shift cleaner available restore failed", zap.Error(availErr))
+		}
+	}
+	if availRows > 0 && logger.Lg != nil {
+		logger.Lg.Info("acd shift cleaner marked seats available", zap.Int64("rows", availRows))
+	}
 }

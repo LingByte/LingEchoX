@@ -450,7 +450,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
               </Button>
             </div>
             <Typography.Paragraph style={{ margin: '6px 0 0', fontSize: 11 }} type="secondary">
-              按星期逐日配置时段，支持一键应用、复制上一天、多段时段与策略模板。
+              按星期逐日配置时段，支持一键应用、复制上一天与多段时段。
             </Typography.Paragraph>
           </div>
         </Space>

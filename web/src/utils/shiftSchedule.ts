@@ -18,14 +18,6 @@ export type ShiftTimeType =
   | 'workday'
   | 'custom'
 
-export const SHIFT_PRESET_LS = 'soulnexus.acd.shiftPresets'
-
-export type ShiftPreset = {
-  id: string
-  name: string
-  segments: ShiftSegment[]
-}
-
 export const WEEKDAY_ROWS: { weekday: number; label: string }[] = [
   { weekday: 1, label: '星期一' },
   { weekday: 2, label: '星期二' },
@@ -229,29 +221,4 @@ export function shiftScheduleSummary(json?: string): string {
   } catch {
     return '格式异常'
   }
-}
-
-export function readShiftPresets(): ShiftPreset[] {
-  if (typeof localStorage === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(SHIFT_PRESET_LS)
-    if (!raw) return []
-    const arr = JSON.parse(raw) as unknown
-    if (!Array.isArray(arr)) return []
-    return arr.filter(
-      (p): p is ShiftPreset =>
-        !!p &&
-        typeof p === 'object' &&
-        typeof (p as ShiftPreset).id === 'string' &&
-        typeof (p as ShiftPreset).name === 'string' &&
-        Array.isArray((p as ShiftPreset).segments),
-    )
-  } catch {
-    return []
-  }
-}
-
-export function writeShiftPresets(list: ShiftPreset[]) {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(SHIFT_PRESET_LS, JSON.stringify(list))
 }

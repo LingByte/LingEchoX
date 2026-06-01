@@ -109,6 +109,29 @@ func TestSIPCallDurationSince(t *testing.T) {
 	}
 }
 
+func TestApplySIPCallDurationFromRecording(t *testing.T) {
+	ack := time.Date(2026, 6, 1, 7, 36, 44, 0, time.UTC)
+	call := SIPCall{AckAt: &ack}
+	wall := ack.Add(30 * time.Minute) // delayed OnBye
+	upd := map[string]interface{}{"state": SIPCallStateEnded}
+
+	ApplySIPCallDurationFromRecording(upd, call, 51, wall)
+	if upd["duration_sec"] != 51 {
+		t.Fatalf("duration_sec = %v", upd["duration_sec"])
+	}
+	end := upd["ended_at"].(time.Time)
+	wantEnd := ack.Add(51 * time.Second)
+	if !end.Equal(wantEnd) {
+		t.Fatalf("ended_at = %v want %v", end, wantEnd)
+	}
+
+	upd2 := map[string]interface{}{}
+	ApplySIPCallDurationFromRecording(upd2, call, 0, wall)
+	if upd2["duration_sec"] != int(wall.Sub(ack).Seconds()) {
+		t.Fatalf("fallback duration = %v", upd2["duration_sec"])
+	}
+}
+
 func TestRedactSIPCallForAPI(t *testing.T) {
 	c := &SIPCall{
 		FromHeader:     `"Alice" <sip:1001@10.0.0.5>;tag=abc`,

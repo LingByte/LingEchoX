@@ -91,12 +91,12 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	endStatus := SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
 
 	now := time.Now()
-	durationSec := 0
 	var call SIPCall
-	if err := s.db.WithContext(ctx).Where("call_id = ?", callID).First(&call).Error; err == nil {
-		durationSec = SIPCallDurationSince(call.AckAt, call.InviteAt, now)
+	if err := s.db.WithContext(ctx).Where("call_id = ?", callID).First(&call).Error; err != nil {
+		s.lg.Warn("sippersist bye lookup", zap.String("call_id", callID), zap.Error(err))
 	}
-	updates := SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, durationSec)
+	updates := SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, 0)
+	recordingSec := 0
 	if transferTargetID > 0 {
 		updates["transfer_acd_target_id"] = transferTargetID
 	}
@@ -144,13 +144,14 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 			updates["recording_wav_bytes"] = wav.Bytes
 		}
 		if wav.DurationMs > 0 {
-			if sec := int(wav.DurationMs / 1000); sec > 0 {
-				updates["duration_sec"] = sec
+			if sec := int((wav.DurationMs + 500) / 1000); sec > 0 {
+				recordingSec = sec
 			}
 		}
 		if wav.Hash != "" {
 			updates["recording_hash"] = wav.Hash
 		}
+		ApplySIPCallDurationFromRecording(updates, call, recordingSec, now)
 		s.lg.Info("sippersist recording attached from voice/recorder",
 			zap.String("call_id", callID),
 			zap.String("url", wav.URL),
@@ -214,8 +215,8 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 		}
 		if len(wav) > 0 {
-			if wavSec := wavDurationSec(wav); wavSec > 0 {
-				updates["duration_sec"] = wavSec
+			if wavSec := WAVDurationSec(wav); wavSec > 0 {
+				recordingSec = wavSec
 			}
 			key := fmt.Sprintf("sip/recordings/%s_%d.wav", sanitizeRecordingKey(callID), now.Unix())
 			if err := store.Write(key, bytes.NewReader(wav)); err != nil {
@@ -242,6 +243,7 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 			zap.String("call_id", callID), zap.String("codec", codecName))
 	}
 
+	ApplySIPCallDurationFromRecording(updates, call, recordingSec, now)
 	if err := s.db.WithContext(ctx).Model(&SIPCall{}).Where("call_id = ?", callID).Updates(updates).Error; err != nil {
 		s.lg.Warn("sippersist bye update", zap.String("call_id", callID), zap.Error(err))
 	}
@@ -344,9 +346,9 @@ func sanitizeRecordingKey(s string) string {
 	return out
 }
 
-// wavDurationSec parses a minimal PCM WAV header and returns rounded seconds.
-// It is used to keep sip_calls.duration_sec aligned with the actual uploaded audio.
-func wavDurationSec(wav []byte) int {
+// WAVDurationSec parses a minimal PCM WAV header and returns rounded seconds.
+// Used to align sip_calls.duration_sec with the actual uploaded audio.
+func WAVDurationSec(wav []byte) int {
 	if len(wav) < 44 {
 		return 0
 	}

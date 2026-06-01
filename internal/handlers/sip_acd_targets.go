@@ -64,6 +64,16 @@ func normalizeACDPoolTargetWriteMeta(remark string, metaRaw json.RawMessage) (st
 	return nRemark, nMeta, nil
 }
 
+func (h *Handlers) reconcileACDPoolTargetShiftAfterSave(c *gin.Context, id uint) models.ACDPoolTarget {
+	row, err := models.ReloadACDPoolTargetByID(h.db, id)
+	if err != nil || row.ID == 0 {
+		return row
+	}
+	_, _ = models.ApplyACDPoolTargetShiftWorkState(c.Request.Context(), h.db, &row, time.Now(), "acd-shift")
+	row, _ = models.ReloadACDPoolTargetByID(h.db, id)
+	return row
+}
+
 func (h *Handlers) listACDPoolTargets(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
 	page, size := ginutil.QueryPage(c, 100)
@@ -255,7 +265,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 				}
 				_, _ = models.SoftDeleteACDPoolTargetsByIDs(ctx, h.db, dupIDs, op)
 			}
-			updated, _ := models.ReloadACDPoolTargetByID(h.db, keep.ID)
+			updated := h.reconcileACDPoolTargetShiftAfterSave(c, keep.ID)
 			response.Success(c, "success", updated)
 			return
 		}
@@ -264,7 +274,8 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}
-	response.Success(c, "success", row)
+	created := h.reconcileACDPoolTargetShiftAfterSave(c, row.ID)
+	response.Success(c, "success", created)
 }
 
 func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
@@ -329,8 +340,8 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 	if rt == constants.ACDPoolRouteTypeWeb && ws == constants.ACDWorkStateOffline {
 		_ = models.ClearACDPoolTargetWebSeatLastSeen(h.db, id)
 	}
-	row, _ = models.ReloadACDPoolTargetByID(h.db, id)
-	response.Success(c, "success", row)
+	updated := h.reconcileACDPoolTargetShiftAfterSave(c, id)
+	response.Success(c, "success", updated)
 }
 
 func (h *Handlers) deleteACDPoolTarget(c *gin.Context) {

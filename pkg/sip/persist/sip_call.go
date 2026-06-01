@@ -542,6 +542,43 @@ func SIPCallDurationSince(ackAt, inviteAt *time.Time, end time.Time) int {
 	return sec
 }
 
+// SIPCallStartTime returns ack_at, else invite_at, for duration anchoring.
+func SIPCallStartTime(c *SIPCall) time.Time {
+	if c == nil {
+		return time.Time{}
+	}
+	if c.AckAt != nil && !c.AckAt.IsZero() {
+		return *c.AckAt
+	}
+	if c.InviteAt != nil && !c.InviteAt.IsZero() {
+		return *c.InviteAt
+	}
+	return time.Time{}
+}
+
+// ApplySIPCallDurationFromRecording sets duration_sec and bye_at/ended_at.
+// When recordingSec > 0, end time is start + recording length (authoritative).
+// Otherwise falls back to wallEnd (SIP BYE arrival time).
+func ApplySIPCallDurationFromRecording(updates map[string]interface{}, call SIPCall, recordingSec int, wallEnd time.Time) {
+	if updates == nil {
+		return
+	}
+	start := SIPCallStartTime(&call)
+	if recordingSec > 0 && !start.IsZero() {
+		end := start.Add(time.Duration(recordingSec) * time.Second)
+		updates["duration_sec"] = recordingSec
+		updates["bye_at"] = end
+		updates["ended_at"] = end
+		return
+	}
+	sec := SIPCallDurationSince(call.AckAt, call.InviteAt, wallEnd)
+	if sec > 0 {
+		updates["duration_sec"] = sec
+	}
+	updates["bye_at"] = wallEnd
+	updates["ended_at"] = wallEnd
+}
+
 func SIPCallByeFinalizeUpdateMap(now time.Time, endStatus string, hadSIPTransfer, hadWebSeat bool, durationSec int) map[string]interface{} {
 	return map[string]interface{}{
 		"state":            SIPCallStateEnded,
