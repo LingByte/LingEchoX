@@ -62,6 +62,8 @@ type Config struct {
 	PlayTransferAgentBrief func(ctx context.Context, inboundCallID string, agentDownlink media.MediaTransport) (played bool, err error)
 	// StopTransferRinging cancels inbound hold/ring loop before web bridge (mirrors SIP StartTransferBridge).
 	StopTransferRinging func(inboundCallID string)
+	// AbortTransferOnAgentReject clears transfer retry/ring state before BYEing the customer on agent reject.
+	AbortTransferOnAgentReject func(inboundCallID string)
 }
 
 // Hub tracks pending joins and active bridges.
@@ -759,6 +761,9 @@ func (h *Hub) handleAgentReject(w http.ResponseWriter, r *http.Request) {
 	if callID == "" {
 		http.Error(w, "call_id required", http.StatusBadRequest)
 		return
+	}
+	if h.cfg.AbortTransferOnAgentReject != nil {
+		h.cfg.AbortTransferOnAgentReject(callID)
 	}
 	if !HangupFull(callID) {
 		http.NotFound(w, r)

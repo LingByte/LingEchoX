@@ -10,8 +10,8 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/logger"
 	"github.com/LinByte/VoiceServer/pkg/media"
 	"github.com/LinByte/VoiceServer/pkg/media/encoder"
-	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	sipSession "github.com/LinByte/VoiceServer/pkg/sip/session"
+	"github.com/LinByte/VoiceServer/pkg/synthesizer"
 	siptts "github.com/LinByte/VoiceServer/pkg/voice/tts"
 	"go.uber.org/zap"
 )
@@ -288,6 +288,7 @@ func playTransferAgentBriefThenBridge(
 		zap.String("outbound_call_id", outboundCallID),
 		zap.String("text", rendered),
 	)
+	outboundCS.StartOnACK()
 	playCtx, cancel := context.WithTimeout(ms.GetContext(), transferAgentBriefMaxPlay)
 	defer cancel()
 	if err := SpeakTextOnLeg(playCtx, outboundCS, inbound, rendered, lg); err != nil {

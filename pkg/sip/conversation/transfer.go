@@ -90,6 +90,23 @@ func HandleSIPINFODTMF(inboundCallID string, contentType, body string, lg *zap.L
 
 // TriggerTransferToAgent starts transfer for an inbound call (AI/tool/fallback text).
 func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.Logger) {
+	inboundCallID = strings.TrimSpace(inboundCallID)
+	if inboundCallID == "" {
+		return
+	}
+	if lg == nil && logger.Lg != nil {
+		lg = logger.Lg
+	}
+	if lg == nil {
+		lg = zap.NewNop()
+	}
+	if !inboundCallerStillPresentForTransfer(inboundCallID) {
+		abandonTransferBecauseCallerGone(inboundCallID)
+		lg.Info("sip transfer: inbound caller gone — skip transfer/retry",
+			zap.String("inbound_call_id", inboundCallID))
+		return
+	}
+
 	transferMu.Lock()
 	d := transferDialer
 	resolveTgt := transferDialTarget
@@ -160,19 +177,13 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	startTransferRinging(ctx, inboundCallID, lg)
 	notifyTransferPhase(inboundCallID, "ringing", nil)
 	if tgt.ACDPoolTargetID != 0 {
+		markTransferACDWorkState(tgt.ACDPoolTargetID, "ringing")
 		sipagentpoll.SetSIPAgentRinging(tgt.ACDPoolTargetID, inboundCallID, extractInboundCallerNumber(inboundCallID))
 	}
 
-	// 转接坐席时，From 的 SIP URI user 部分仍走中继配置的主叫号（避免运营商
-	// ANI 校验拒接），但把 display-name 改成真实主叫（PSTN 用户）的手机号
-	// —— 坐席话机屏幕上看到的是【谁打来的】，而不是 400 中继。
-	// 出局 / 主动 dial（campaign）的 CallSession remoteFromHeader 是空，
-	// 这种情况维持 Target.CallerDisplayName 默认值不动。
+	// 转接外呼：被叫为 ACD targetValue（加白坐席号）；主叫优先用入局真实用户号码
+	//（非 400/中继外显），坐席侧看到「用户打来」而非平台号码。
 	agentDisplayOverride := extractInboundCallerNumber(inboundCallID)
-	// PAI (RFC 3325) 透传真实主叫，From 维持中继外显号通过运营商 ANI 校验，
-	// 同时让坐席话机 / 软电话从 P-Asserted-Identity 取出真实手机号显示。
-	// URI 形态优先使用入局 From 的完整 sip:user@host（运营商原样回传，最贴近
-	// "operator-validated" 的语义），否则回落 tel:<number>。
 	agentAssertedURI := extractInboundCallerURI(inboundCallID)
 	paiSource := "inbound_from"
 	if agentAssertedURI == "" && agentDisplayOverride != "" {
@@ -182,12 +193,21 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 	if agentAssertedURI == "" {
 		paiSource = "none"
 	}
-	lg.Info("sip transfer: P-Asserted-Identity prepared",
+	fromUserForDial := strings.TrimSpace(tgt.CallerUser)
+	fromDispForDial := strings.TrimSpace(tgt.CallerDisplayName)
+	cliMode := "trunk_relay"
+	if agentDisplayOverride != "" {
+		fromUserForDial = agentDisplayOverride
+		fromDispForDial = agentDisplayOverride
+		cliMode = "original_caller"
+	}
+	lg.Info("sip transfer: agent leg CLI prepared",
 		zap.String("inbound_call_id", inboundCallID),
-		zap.String("from_user", strings.TrimSpace(tgt.CallerUser)),
-		zap.String("from_display", agentDisplayOverride),
+		zap.String("cli_mode", cliMode),
+		zap.String("from_user", fromUserForDial),
+		zap.String("from_display", fromDispForDial),
+		zap.String("to_uri", strings.TrimSpace(tgt.RequestURI)),
 		zap.String("pai_uri", agentAssertedURI),
-		zap.String("pai_display", agentDisplayOverride),
 		zap.String("pai_source", paiSource),
 	)
 	// Pull the inbound INVITE's To + History-Info + Diversion headers so
@@ -212,6 +232,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 				zap.String("inbound_call_id", inboundCallID))
 			stopTransferRinging(inboundCallID)
 			sipagentpoll.ClearByInbound(inboundCallID)
+			releaseTransferACDWorkState(inboundCallID)
 			transferStarted.Delete(inboundCallID)
 			notifyTransferPhase(inboundCallID, "aborted", map[string]any{"reason": "inbound_gone"})
 			return
@@ -222,20 +243,11 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 			CorrelationID: inboundCallID,
 			MediaProfile:  outbound.MediaProfileTransferBridge,
 		}
-		if agentDisplayOverride != "" {
-			// outbound.manager 的优先级是「DialRequest.CallerUser 非空 →
-			// 用 DialRequest 的 user+display；否则 fallback 到 Target.*」，
-			// 单独设 CallerDisplayName 会被丢弃。所以这里把 user 部分显式
-			// 写成 Target.CallerUser（保留中继外显号通过 ANI 校验），同时
-			// 把 display 改成主叫真实手机号。真正的"号码透传"靠 PAI 头
-			// （见下面的 AssertedIdentity 设置），需中继支持。
-			req.CallerUser = strings.TrimSpace(tgt.CallerUser)
-			req.CallerDisplayName = agentDisplayOverride
+		if fromUserForDial != "" {
+			req.CallerUser = fromUserForDial
+			req.CallerDisplayName = fromDispForDial
 		}
-		if agentAssertedURI != "" {
-			// PAI 走 RFC 3325 的"运营商已验证主叫"语义，display-name 取
-			// 真实手机号方便坐席话机直接读出来。Privacy 头不设（默认 none），
-			// 让中继 SBC / 坐席侧自由消费这条 PAI。
+		if agentAssertedURI != "" && cliMode == "trunk_relay" {
 			req.AssertedIdentityURI = agentAssertedURI
 			if agentDisplayOverride != "" {
 				req.AssertedIdentityDisplayName = agentDisplayOverride
@@ -253,6 +265,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 		if err != nil {
 			stopTransferRinging(inboundCallID)
 			sipagentpoll.ClearByInbound(inboundCallID)
+			releaseTransferACDWorkState(inboundCallID)
 			transferStarted.Delete(inboundCallID)
 			notifyTransferPhase(inboundCallID, "failed", map[string]any{"error": err.Error()})
 			lg.Warn("sip transfer: outbound dial failed", zap.String("inbound_call_id", inboundCallID), zap.Error(err))
@@ -279,6 +292,7 @@ func TriggerTransferToAgent(ctx context.Context, inboundCallID string, lg *zap.L
 				}
 			}
 			sipagentpoll.ClearByInbound(inboundCallID)
+			releaseTransferACDWorkState(inboundCallID)
 			transferStarted.Delete(inboundCallID)
 		}
 	})
@@ -554,8 +568,7 @@ func startNoAgentRetryLoop(inboundCallID string, lg *zap.Logger) {
 			if _, active := transferStarted.Load(inboundCallID); active {
 				return
 			}
-			inbound := lookupInboundSession(inboundCallID)
-			if inbound == nil || inbound.MediaSession() == nil {
+			if !inboundCallerStillPresentForTransfer(inboundCallID) {
 				return
 			}
 			TriggerTransferToAgent(context.Background(), inboundCallID, lg)
@@ -630,7 +643,9 @@ func CleanupCallState(callID string) {
 	// 已建立桥接的 leg 走 HangupTransferBridgeFull → bridgeSendOutboundBYE
 	// 路径，这里 LoadAndDelete 取不到东西就 no-op，互不冲突。
 	CancelPendingTransferLeg(callID)
+	markTransferCallerHungUp(callID)
 	sipagentpoll.ClearByInbound(callID)
+	releaseTransferACDWorkState(callID)
 	transferStarted.Delete(callID)
 	stopTransferRinging(callID)
 	stopNoAgentRetryLoop(callID)

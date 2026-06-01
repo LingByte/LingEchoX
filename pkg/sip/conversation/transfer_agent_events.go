@@ -177,6 +177,11 @@ func scheduleTransferInviteWatch(inbound, outbound string) {
 		if ActiveTransferBridgeForCallID(inbound) || ActiveWebSeatBridge(inbound) {
 			return
 		}
+		if !inboundCallerStillPresentForTransfer(inbound) {
+			cancelTransferInviteWatch(outbound)
+			abandonTransferBecauseCallerGone(inbound)
+			return
+		}
 		_ = abandonTransferLeg(outbound)
 	})
 	transferInviteTimers.Store(outbound, t)
@@ -232,21 +237,19 @@ func scheduleWebSeatJoinWatch(inbound string, acdTargetID uint) {
 		if ActiveTransferBridgeForCallID(inbound) || ActiveWebSeatBridge(inbound) {
 			return
 		}
+		if !inboundCallerStillPresentForTransfer(inbound) {
+			abandonTransferBecauseCallerGone(inbound)
+			return
+		}
 		if acdTargetID != 0 {
+			markTransferACDWorkState(acdTargetID, "available")
 			transferExcludeAdd(inbound, acdTargetID)
 		}
 		webseat.ReleaseInboundWebACDOffer(inbound)
 		transferStarted.Delete(inbound)
 		transferLastACDRowByInbound.Delete(inbound)
 		notifyTransferPhase(inbound, "retrying", map[string]any{"reason": "webseat_join_timeout"})
-		lg := logger.Lg
-		if lg == nil {
-			lg = zap.NewNop()
-		}
-		logger.SafeGo("transfer-retry-after-fail", func() {
-			time.Sleep(60 * time.Millisecond)
-			TriggerTransferToAgent(context.Background(), inbound, lg)
-		})
+		scheduleTransferRetryToNextAgent(inbound, logger.Lg)
 	})
 	webSeatJoinTimers.Store(inbound, t)
 }
@@ -264,6 +267,9 @@ func cancelWebSeatJoinWatch(inbound string) {
 }
 
 func transferFailureRetryable(code int, reason string) bool {
+	if transferFailureAgentRejected(code, reason) {
+		return false
+	}
 	r := strings.ToLower(strings.TrimSpace(reason))
 	if strings.Contains(r, "transfer_invite_timeout") {
 		return true
@@ -317,6 +323,14 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 	if ActiveTransferBridgeForCallID(inbound) || ActiveWebSeatBridge(inbound) {
 		return
 	}
+	if !inboundCallerStillPresentForTransfer(inbound) {
+		abandonTransferBecauseCallerGone(inbound)
+		return
+	}
+	if transferFailureAgentRejected(evt.StatusCode, evt.Reason) {
+		terminateTransferBecauseAgentRejected(inbound, evt.StatusCode, evt.Reason)
+		return
+	}
 	lg := logger.Lg
 	if lg == nil {
 		lg = zap.NewNop()
@@ -325,6 +339,7 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 	hasResolver := transferDialTarget != nil
 	transferMu.Unlock()
 	if !hasResolver {
+		releaseTransferACDWorkState(inbound)
 		transferExcludeReset(inbound)
 		transferStarted.Delete(inbound)
 		notifyTransferPhase(inbound, "failed", map[string]any{"sip_code": evt.StatusCode, "reason": evt.Reason})
@@ -333,6 +348,7 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 		return
 	}
 	if !transferFailureRetryable(evt.StatusCode, evt.Reason) {
+		releaseTransferACDWorkState(inbound)
 		transferExcludeReset(inbound)
 		transferStarted.Delete(inbound)
 		notifyTransferPhase(inbound, "failed", map[string]any{"sip_code": evt.StatusCode, "reason": evt.Reason})
@@ -347,6 +363,7 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 		}
 	}
 	if rowID != 0 {
+		markTransferACDWorkState(rowID, "available")
 		transferExcludeAdd(inbound, rowID)
 	}
 	webseat.ReleaseInboundWebACDOffer(inbound)
@@ -355,10 +372,7 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 	transferLastACDRowByInbound.Delete(inbound)
 
 	notifyTransferPhase(inbound, "retrying", map[string]any{"sip_code": evt.StatusCode, "reason": evt.Reason})
-	logger.SafeGo("transfer-retry-on-status", func() {
-		time.Sleep(60 * time.Millisecond)
-		TriggerTransferToAgent(context.Background(), inbound, lg)
-	})
+	scheduleTransferRetryToNextAgent(inbound, lg)
 }
 
 // ResetTransferRoutingState clears per-call transfer routing scratch state after a successful handoff.
@@ -386,19 +400,17 @@ func OnWebSeatJoinTimeout(inboundCallID string, acdTargetID uint) {
 	if inboundCallID == "" {
 		return
 	}
+	if !inboundCallerStillPresentForTransfer(inboundCallID) {
+		abandonTransferBecauseCallerGone(inboundCallID)
+		return
+	}
 	if acdTargetID != 0 {
+		markTransferACDWorkState(acdTargetID, "available")
 		transferExcludeAdd(inboundCallID, acdTargetID)
 	}
 	cancelWebSeatJoinWatch(inboundCallID)
 	transferStarted.Delete(inboundCallID)
 	transferLastACDRowByInbound.Delete(inboundCallID)
 	webseat.ReleaseInboundWebACDOffer(inboundCallID)
-	lg := logger.Lg
-	if lg == nil {
-		lg = zap.NewNop()
-	}
-	logger.SafeGo("transfer-retry-join-timeout", func() {
-		time.Sleep(60 * time.Millisecond)
-		TriggerTransferToAgent(context.Background(), inboundCallID, lg)
-	})
+	scheduleTransferRetryToNextAgent(inboundCallID, logger.Lg)
 }

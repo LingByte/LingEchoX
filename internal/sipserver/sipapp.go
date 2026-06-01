@@ -465,6 +465,12 @@ func Start(cfg Config) (*Embedded, error) {
 	conversation.SetTransferDialTargetResolver(func(ctx context.Context, inboundCallID string, exclude []uint) (outbound.DialTarget, bool) {
 		return PickTransferDialTarget(ctx, acdDB, sipRegStore, inboundCallID, exclude)
 	})
+	conversation.SetACDPoolTargetWorkStateUpdater(func(ctx context.Context, targetID uint, workState string) error {
+		if acdDB == nil || targetID == 0 {
+			return nil
+		}
+		return models.UpdateACDPoolTargetWorkState(ctx, acdDB, targetID, workState, "sip-transfer")
+	})
 	sipagentpoll.SetDatabase(acdDB)
 	conversation.SetTransferLegAbandoner(outMgr.AbandonEarlyTransferInvite)
 	conversation.SetTransferLegCanceller(outMgr.SendCANCEL)
@@ -577,7 +583,8 @@ func Start(cfg Config) (*Embedded, error) {
 		PlayTransferAgentBrief: func(ctx context.Context, callID string, agentDownlink media.MediaTransport) (bool, error) {
 			return conversation.PlayTransferAgentBriefForWebSeat(ctx, callID, agentDownlink, nil)
 		},
-		StopTransferRinging: conversation.StopTransferRingingForCall,
+		StopTransferRinging:        conversation.StopTransferRingingForCall,
+		AbortTransferOnAgentReject: conversation.AbortTransferOnAgentReject,
 		OnWebSeatBridgeEstablished: func(callID string) {
 			conversation.ResetTransferRoutingState(callID)
 		},

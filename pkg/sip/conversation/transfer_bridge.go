@@ -76,6 +76,24 @@ func normCallID(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// ResolveInboundCallIDForTransfer maps an inbound or outbound bridge Call-ID to the PSTN inbound leg.
+func ResolveInboundCallIDForTransfer(callID string) string {
+	callID = normCallID(callID)
+	if callID == "" {
+		return ""
+	}
+	if id, ok := PeekInboundTransferACDTargetID(callID); ok && id > 0 {
+		return callID
+	}
+	bridgeMu.Lock()
+	bs := findBridgeStateUnlocked(callID)
+	bridgeMu.Unlock()
+	if bs != nil {
+		return bs.inboundID
+	}
+	return ""
+}
+
 // bridgeCallLocalPart returns the substring before '@' so we can match dialog Call-IDs when only the host differs (SBC).
 func bridgeCallLocalPart(cid string) (string, bool) {
 	cid = normCallID(cid)
@@ -470,6 +488,7 @@ func startTransferBridgeNow(inboundCallID string, outboundCS *sipSession.CallSes
 		logFields = append(logFields, zap.String("pcm_reason", pcmReason))
 	}
 	lg.Info("sip transfer bridge started", logFields...)
+	markTransferACDWorkStateForCall(inboundCallID, "busy")
 	sipagentpoll.MarkInboundConnected(inboundCallID)
 	MarkInboundHadSIPAgentTransfer(inboundCallID)
 	notifyTransferPhase(inboundCallID, TransferPhaseConnected, map[string]any{
