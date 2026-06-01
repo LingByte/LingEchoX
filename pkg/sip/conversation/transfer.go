@@ -575,19 +575,38 @@ func stopNoAgentRetryLoop(inboundCallID string) {
 	}
 }
 
+// IsTransferRingingActive is true while hold/ring WAV is playing on the inbound leg.
+func IsTransferRingingActive(callID string) bool {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return false
+	}
+	transferRingMu.Lock()
+	defer transferRingMu.Unlock()
+	if transferRingStop == nil {
+		return false
+	}
+	_, ok := transferRingStop[callID]
+	return ok
+}
+
 // IsTransferInProgress 表示该呼叫已进入「转人工」流程（候选/振铃/桥接任意阶段），
 // 期间应停止 ASR/LLM 对话:此时主叫已切到 hold 音乐或坐席通话,继续跑 AI 会"AI 跟坐席抢话"。
 //
 // 返回 true 的条件（任一）：
 //  1. transferStarted 标记位已置（TriggerTransferToAgent 已成功进入派单阶段，含 ringing/loading）。
-//  2. 已建立 SIP 转接桥接（PSTN ↔ 坐席 RTP 桥）。
-//  3. 已建立 Web 坐席桥接（PSTN ↔ 浏览器 WebRTC）。
+//  2. 入局正在播放转接等待音（即使 Web 坐席 join 超时后清掉了 transferStarted，铃音仍可能循环）。
+//  3. 已建立 SIP 转接桥接（PSTN ↔ 坐席 RTP 桥）。
+//  4. 已建立 Web 坐席桥接（PSTN ↔ 浏览器 WebRTC）。
 func IsTransferInProgress(callID string) bool {
 	callID = strings.TrimSpace(callID)
 	if callID == "" {
 		return false
 	}
 	if _, ok := transferStarted.Load(callID); ok {
+		return true
+	}
+	if IsTransferRingingActive(callID) {
 		return true
 	}
 	if ActiveTransferBridgeForCallID(callID) {

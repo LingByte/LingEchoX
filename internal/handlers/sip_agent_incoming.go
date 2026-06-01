@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
@@ -60,18 +64,142 @@ func (h *Handlers) pollSIPAgentIncoming(c *gin.Context) {
 	}
 
 	snap := sipagentpoll.ResolveSnapshot(row.ID, conversation.IsTransferInProgress)
-	out := gin.H{
-		"incoming":      snap.Incoming,
-		"acdTargetId":   row.ID,
-		"seatName":      strings.TrimSpace(row.Name),
-		"targetValue":   strings.TrimSpace(row.TargetValue),
-		"routeType":     row.RouteType,
-		"callId":        snap.InboundCallID,
-		"callerNumber":  snap.CallerNumber,
-		"phase":         snap.Phase,
-		"since":         snap.Since,
+	response.Success(c, "success", sipAgentIncomingPayload(row, snap))
+}
+
+func sipAgentIncomingPayload(row models.ACDPoolTarget, snap sipagentpoll.Snapshot) gin.H {
+	return gin.H{
+		"incoming":     snap.Incoming,
+		"acdTargetId":  row.ID,
+		"seatName":     strings.TrimSpace(row.Name),
+		"targetValue":  strings.TrimSpace(row.TargetValue),
+		"routeType":    row.RouteType,
+		"callId":       snap.InboundCallID,
+		"callerNumber": snap.CallerNumber,
+		"phase":        snap.Phase,
+		"since":        snap.Since,
 	}
-	response.Success(c, "success", out)
+}
+
+// parseACDTargetIDsQuery reads acdTargetIds as comma-separated decimal IDs (snowflake-safe).
+func parseACDTargetIDsQuery(c *gin.Context) ([]uint, bool) {
+	raw := strings.TrimSpace(c.Query("acdTargetIds"))
+	if raw == "" {
+		return nil, false
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]uint, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		id, err := utils.ParseID(p)
+		if err != nil {
+			return nil, true
+		}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, false
+}
+
+// streamSIPAgentIncoming pushes seat ringing state over Server-Sent Events (SSE).
+// Query: acdTargetIds=1,2,3 (required, comma-separated acd_pool_targets.id).
+// Events: ready, snapshot, heartbeat. Poll GET /sip-agent/incoming remains available.
+func (h *Handlers) streamSIPAgentIncoming(c *gin.Context) {
+	tid := middleware.CurrentTenantID(c)
+	ids, bad := parseACDTargetIDsQuery(c)
+	if bad {
+		response.Fail(c, "invalid acdTargetIds", nil)
+		return
+	}
+	if len(ids) == 0 {
+		response.Fail(c, "acdTargetIds is required", nil)
+		return
+	}
+
+	rows := make([]models.ACDPoolTarget, 0, len(ids))
+	for _, acdID := range ids {
+		row, ok, err := models.FindSIPACDPoolTargetForIncomingPoll(h.db, tid, acdID, "", "")
+		if err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+		if !ok || row.RouteType != constants.ACDPoolRouteTypeSIP {
+			response.Fail(c, "not found", gin.H{"acdTargetId": acdID})
+			return
+		}
+		rows = append(rows, row)
+	}
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		response.AbortWithStatusJSON(c, http.StatusInternalServerError, fmt.Errorf("streaming not supported"))
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream; charset=utf-8")
+	c.Header("Cache-Control", "no-cache, no-transform")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	writeSSE := func(event string, payload any) {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, b)
+		flusher.Flush()
+	}
+
+	sendSnapshots := func() {
+		for _, row := range rows {
+			snap := sipagentpoll.ResolveSnapshot(row.ID, conversation.IsTransferInProgress)
+			writeSSE("snapshot", sipAgentIncomingPayload(row, snap))
+		}
+	}
+
+	sendSnapshots()
+	idStrs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		idStrs = append(idStrs, strconv.FormatUint(uint64(id), 10))
+	}
+	writeSSE("ready", gin.H{"acdTargetIds": idStrs})
+
+	updates, cancel := sipagentpoll.SubscribeACDChanges(ids)
+	defer cancel()
+
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+
+	ctx := c.Request.Context()
+	rowByID := make(map[uint]models.ACDPoolTarget, len(rows))
+	for _, row := range rows {
+		rowByID[row.ID] = row
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case acdID, ok := <-updates:
+			if !ok {
+				return
+			}
+			row, found := rowByID[acdID]
+			if !found {
+				continue
+			}
+			snap := sipagentpoll.ResolveSnapshot(acdID, conversation.IsTransferInProgress)
+			writeSSE("snapshot", sipAgentIncomingPayload(row, snap))
+		case <-heartbeat.C:
+			writeSSE("heartbeat", gin.H{"ts": time.Now().UTC().Format(time.RFC3339)})
+		}
+	}
 }
 
 // listSIPAgentIncomingLogs returns persisted transfer-offer history for one SIP seat.

@@ -225,6 +225,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
     setModalOpen(true)
   }
   const openEdit = (r: ACDPoolTargetRow) => {
+    // @ts-ignore
     setEditingId(r.id)
     setForm({
       trunkNumberId: r.trunkNumberId ?? 0,
@@ -438,7 +439,8 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
                   <td className="p-3 text-right">
                     <Space>
                       <Button type="outline" size="small" onClick={() => openEdit(r)}>编辑</Button>
-                      <Button type="outline" status="danger" size="small" icon={<IconDelete />} onClick={() => { setAcdDeleteId(r.id); setAcdDeleteOpen(true) }}>删除</Button>
+                      <Button type="outline" status="danger" size="small" icon={<IconDelete />} onClick={() => { // @ts-ignore
+                          setAcdDeleteId(r.id); setAcdDeleteOpen(true) }}>删除</Button>
                     </Space>
                   </td>
                 </tr>

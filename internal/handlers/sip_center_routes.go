@@ -55,6 +55,7 @@ func (h *Handlers) registerSIPCenterACDRoutes(g *gin.RouterGroup) {
 		read.GET("/acd-pool/:id", h.getACDPoolTarget)
 		read.GET("/acd-dispatch-mode", h.getACDDispatchMode)
 		read.GET("/sip-agent/incoming", h.pollSIPAgentIncoming)
+		read.GET("/sip-agent/incoming/stream", h.streamSIPAgentIncoming)
 		read.GET("/sip-agent/incoming/logs", h.listSIPAgentIncomingLogs)
 	}
 	write := g.Group("")

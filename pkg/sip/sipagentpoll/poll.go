@@ -51,6 +51,7 @@ func SetSIPAgentRinging(acdTargetID uint, inboundCallID, callerNumber string) {
 		since:        time.Now().UTC(),
 	})
 	persistStartRinging(acdTargetID, inboundCallID, callerNumber)
+	NotifyACDTargetChanged(acdTargetID)
 }
 
 func clearMemoryByInbound(inboundCallID string) {
@@ -64,6 +65,7 @@ func clearMemoryByInbound(inboundCallID string) {
 	}
 	if id, ok := v.(uint); ok && id != 0 {
 		byACD.Delete(id)
+		NotifyACDTargetChanged(id)
 	}
 }
 
@@ -87,6 +89,7 @@ func ClearByACDTarget(acdTargetID uint) {
 		inboundToACD.Delete(strings.TrimSpace(e.inbound))
 	}
 	persistFinishACD(acdTargetID, models.SIPACDTransferOfferPhaseSuperseded)
+	NotifyACDTargetChanged(acdTargetID)
 }
 
 // MarkInboundConnected ends ringing offers when the agent leg is answered / bridged.
