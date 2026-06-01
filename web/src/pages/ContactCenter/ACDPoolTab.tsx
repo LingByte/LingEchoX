@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
-  Checkbox,
   Drawer,
   Input,
   Select,
   Space,
   Tag,
-  TimePicker,
   Typography,
 } from '@arco-design/web-react'
-import { IconDelete, IconPhone, IconPlus } from '@arco-design/web-react/icon'
-import dayjs, { type Dayjs } from 'dayjs'
+import { IconDelete, IconPhone } from '@arco-design/web-react/icon'
+import { ShiftScheduleModal } from '@/components/ACD/ShiftScheduleModal'
 import { showAlert } from '@/utils/notification'
+import { shiftScheduleSummary } from '@/utils/shiftSchedule'
 import {
   ACD_ROUTE_TYPES,
   ACD_WORK_STATES,
@@ -25,72 +24,6 @@ import {
 import { seatIdKey, useSIPAgentIncomingPoll } from '@/hooks/useSIPAgentIncomingPoll'
 import { callerDisplay, SIP_INCOMING_POLL_MS } from '@/utils/sipAgentIncoming'
 import { listTrunkNumbers } from '@/api/trunks'
-
-/** Matches backend acd_shift_schedule: weekdays 0=Sun..6=Sat; empty weekdays = all days */
-type ShiftSegment = { weekdays: number[]; start: string; end: string }
-
-const WEEKDAY_OPTS = [
-  { label: '日', value: 0 },
-  { label: '一', value: 1 },
-  { label: '二', value: 2 },
-  { label: '三', value: 3 },
-  { label: '四', value: 4 },
-  { label: '五', value: 5 },
-  { label: '六', value: 6 },
-]
-
-function hmToDayjs(hm: string): Dayjs {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(hm.trim())
-  if (!m) return dayjs().hour(9).minute(0).second(0).millisecond(0)
-  const h = Math.min(23, Math.max(0, parseInt(m[1]!, 10)))
-  const min = Math.min(59, Math.max(0, parseInt(m[2]!, 10)))
-  return dayjs().hour(h).minute(min).second(0).millisecond(0)
-}
-
-function dayjsToHm(d: Dayjs | undefined | null): string {
-  if (!d || !d.isValid()) return '09:00'
-  return d.format('HH:mm')
-}
-
-function validHm(s: string): boolean {
-  return /^([01]?\d|2[0-3]):([0-5]\d)$/.test(s.trim())
-}
-
-function parseShiftScheduleJSON(raw: string): ShiftSegment[] {
-  const t = raw.trim()
-  if (!t) return []
-  try {
-    const arr = JSON.parse(t) as unknown
-    if (!Array.isArray(arr)) return []
-    const out: ShiftSegment[] = []
-    for (const item of arr) {
-      if (!item || typeof item !== 'object') continue
-      const o = item as Record<string, unknown>
-      const wd = o.weekdays
-      let weekdays: number[] = []
-      if (Array.isArray(wd)) {
-        weekdays = wd.filter((n): n is number => typeof n === 'number' && n >= 0 && n <= 6)
-      }
-      const start = typeof o.start === 'string' ? o.start : '09:00'
-      const end = typeof o.end === 'string' ? o.end : '18:00'
-      out.push({ weekdays, start, end })
-    }
-    return out
-  } catch {
-    return []
-  }
-}
-
-function serializeShiftSchedule(segments: ShiftSegment[]): string {
-  if (!segments.length) return ''
-  return JSON.stringify(
-    segments.map((s) => ({
-      weekdays: [...new Set(s.weekdays)].sort((a, b) => a - b),
-      start: s.start.trim(),
-      end: s.end.trim(),
-    })),
-  )
-}
 
 function formatMetaDataForForm(raw?: string): string {
   const t = raw?.trim()
@@ -123,7 +56,7 @@ type FormState = {
   targetValue: string
   weight: number
   workState: string
-  shiftSegments: ShiftSegment[]
+  shiftSchedule: string
   remark: string
   metaDataText: string
 }
@@ -134,15 +67,9 @@ const defaultForm = (): FormState => ({
   targetValue: '',
   weight: 10,
   workState: 'offline',
-  shiftSegments: [],
+  shiftSchedule: '',
   remark: '',
   metaDataText: '',
-})
-
-const defaultShiftSegment = (): ShiftSegment => ({
-  weekdays: [1, 2, 3, 4, 5],
-  start: '09:00',
-  end: '18:00',
 })
 
 export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boolean; refreshNonce?: number }) {
@@ -160,6 +87,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   const [acdDeleteOpen, setAcdDeleteOpen] = useState(false)
   const [acdDeleteId, setAcdDeleteId] = useState<number | null>(null)
   const [acdDeleteLoading, setAcdDeleteLoading] = useState(false)
+  const [shiftModalOpen, setShiftModalOpen] = useState(false)
   const sipRowsOnPage = useMemo(() => rows.filter((r) => r.routeType === 'sip'), [rows])
   const { incomingBySeatId, incomingSeats } = useSIPAgentIncomingPoll(sipRowsOnPage, active)
   const pageSize = 20
@@ -234,7 +162,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
       targetValue: r.targetValue || '',
       weight: r.weight ?? 0,
       workState: r.workState || 'offline',
-      shiftSegments: parseShiftScheduleJSON(r.shiftSchedule ?? ''),
+      shiftSchedule: r.shiftSchedule ?? '',
       remark: r.remark || '',
       metaDataText: formatMetaDataForForm(r.metaData),
     })
@@ -258,15 +186,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         showAlert('SIP 目标不能为空', 'error')
         return
       }
-      const segs = form.shiftSegments
-      for (let i = 0; i < segs.length; i++) {
-        const s = segs[i]!
-        if (!validHm(s.start) || !validHm(s.end)) {
-          showAlert(`第 ${i + 1} 段班次时间须为 HH:mm（00:00–23:59）`, 'error')
-          return
-        }
-      }
-      const shiftTrim = serializeShiftSchedule(segs)
+      const shiftTrim = form.shiftSchedule.trim()
       let metaData: Record<string, unknown> | undefined
       try {
         metaData = parseMetaDataForSave(form.metaDataText)
@@ -330,16 +250,6 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
 
   const workStateLabel = (s: string) =>
     ({ offline: '离线', available: '可用', ringing: '振铃中', busy: '忙碌', acw: '话后整理', break: '休息' } as Record<string, string>)[s] || s
-
-  const shiftScheduleSummary = (json?: string) => {
-    if (!json?.trim()) return '全天'
-    try {
-      const a = JSON.parse(json) as unknown
-      return Array.isArray(a) && a.length ? `已设 ${a.length} 段` : '全天'
-    } catch {
-      return '格式异常'
-    }
-  }
 
   return (
     <div className="mt-4 space-y-3">
@@ -531,137 +441,30 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
           </div>
           <div>
             <Typography.Text style={{ fontSize: 12 }}>接线班次（可选）</Typography.Text>
-            <Typography.Paragraph style={{ margin: '4px 0 8px', fontSize: 11 }} type="secondary">
-              不添加时段表示全天可接线。未勾选任何星期表示全周有效。跨午夜时段（如 22:00–06:00）已支持。判断时区由服务端 ACD_SHIFT_TIMEZONE 决定。
+            <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/20 px-3 py-2.5">
+              <Typography.Text style={{ fontSize: 12 }}>
+                当前：{shiftScheduleSummary(form.shiftSchedule)}
+              </Typography.Text>
+              <Button type="primary" size="small" onClick={() => setShiftModalOpen(true)}>
+                配置座席时间策略
+              </Button>
+            </div>
+            <Typography.Paragraph style={{ margin: '6px 0 0', fontSize: 11 }} type="secondary">
+              按星期逐日配置时段，支持一键应用、复制上一天、多段时段与策略模板。
             </Typography.Paragraph>
-            {form.shiftSegments.length === 0 ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>当前：全天</Typography.Text>
-            ) : (
-              <Space direction="vertical" style={{ width: '100%' }} size={10}>
-                {form.shiftSegments.map((seg, i) => (
-                  <div
-                    key={i}
-                    className="rounded-md border border-border bg-muted/30 p-3 space-y-2"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Typography.Text style={{ fontSize: 12 }}>时段 {i + 1}</Typography.Text>
-                      <Space size={6}>
-                        <Button
-                          type="text"
-                          size="mini"
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              shiftSegments: f.shiftSegments.map((s, j) =>
-                                j === i ? { ...s, weekdays: [1, 2, 3, 4, 5] } : s,
-                              ),
-                            }))
-                          }
-                        >
-                          填入工作日
-                        </Button>
-                        <Button
-                          type="text"
-                          size="mini"
-                          status="danger"
-                          icon={<IconDelete />}
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              shiftSegments: f.shiftSegments.filter((_, j) => j !== i),
-                            }))
-                          }
-                        >
-                          删除
-                        </Button>
-                      </Space>
-                    </div>
-                    <div>
-                      <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
-                        星期（留空=全周）
-                      </Typography.Text>
-                      <Checkbox.Group
-                        value={seg.weekdays}
-                        onChange={(v) =>
-                          setForm((f) => ({
-                            ...f,
-                            shiftSegments: f.shiftSegments.map((s, j) =>
-                              j === i ? { ...s, weekdays: (v as number[]).slice().sort((a, b) => a - b) } : s,
-                            ),
-                          }))
-                        }
-                        options={WEEKDAY_OPTS}
-                      />
-                    </div>
-                    <Space wrap align="center" size={12}>
-                      <Space size={6}>
-                        <Typography.Text style={{ fontSize: 12 }}>开始</Typography.Text>
-                        <TimePicker
-                          format="HH:mm"
-                          disableConfirm
-                          style={{ width: 112 }}
-                          value={hmToDayjs(seg.start)}
-                          onChange={(vs, d) => {
-                            const hm =
-                              d?.isValid?.() === true
-                                ? dayjsToHm(d)
-                                : vs && validHm(vs)
-                                  ? vs.trim()
-                                  : seg.start
-                            setForm((f) => ({
-                              ...f,
-                              shiftSegments: f.shiftSegments.map((s, j) =>
-                                j === i ? { ...s, start: hm } : s,
-                              ),
-                            }))
-                          }}
-                        />
-                      </Space>
-                      <Space size={6}>
-                        <Typography.Text style={{ fontSize: 12 }}>结束</Typography.Text>
-                        <TimePicker
-                          format="HH:mm"
-                          disableConfirm
-                          style={{ width: 112 }}
-                          value={hmToDayjs(seg.end)}
-                          onChange={(vs, d) => {
-                            const hm =
-                              d?.isValid?.() === true
-                                ? dayjsToHm(d)
-                                : vs && validHm(vs)
-                                  ? vs.trim()
-                                  : seg.end
-                            setForm((f) => ({
-                              ...f,
-                              shiftSegments: f.shiftSegments.map((s, j) =>
-                                j === i ? { ...s, end: hm } : s,
-                              ),
-                            }))
-                          }}
-                        />
-                      </Space>
-                    </Space>
-                  </div>
-                ))}
-              </Space>
-            )}
-            <Button
-              type="outline"
-              size="small"
-              style={{ marginTop: 10 }}
-              icon={<IconPlus />}
-              onClick={() =>
-                setForm((f) => ({
-                  ...f,
-                  shiftSegments: [...f.shiftSegments, defaultShiftSegment()],
-                }))
-              }
-            >
-              添加时段
-            </Button>
           </div>
         </Space>
       </Drawer>
+
+      <ShiftScheduleModal
+        visible={shiftModalOpen}
+        value={form.shiftSchedule}
+        onCancel={() => setShiftModalOpen(false)}
+        onConfirm={(serialized) => {
+          setForm((f) => ({ ...f, shiftSchedule: serialized }))
+          setShiftModalOpen(false)
+        }}
+      />
 
       <Drawer
         title="确认删除号码池目标"
