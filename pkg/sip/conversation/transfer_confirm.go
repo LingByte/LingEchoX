@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	defaultTransferConfirmCount = 3
+	defaultTransferConfirmCount = 2
 	minTransferConfirmCount     = 1
 	maxTransferConfirmCount     = 10
 	transferConfirmIdleReset    = 2 * time.Minute
@@ -32,7 +32,7 @@ type sipTransferConfirmState struct {
 }
 
 // TransferConfirmRequired returns how many distinct user transfer intents are
-// required before dial is allowed (clamped 1–10, default 3).
+// required before dial is allowed (clamped 1–10, default 2).
 func TransferConfirmRequired(env VoiceEnv) int {
 	n := env.TransferConfirmCount
 	if n <= 0 {

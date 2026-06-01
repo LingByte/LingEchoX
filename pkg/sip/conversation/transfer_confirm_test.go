@@ -3,8 +3,8 @@ package conversation
 import "testing"
 
 func TestTransferConfirmRequired_Default(t *testing.T) {
-	if got := TransferConfirmRequired(VoiceEnv{}); got != 3 {
-		t.Fatalf("default want 3 got %d", got)
+	if got := TransferConfirmRequired(VoiceEnv{}); got != 2 {
+		t.Fatalf("default want 2 got %d", got)
 	}
 }
 
