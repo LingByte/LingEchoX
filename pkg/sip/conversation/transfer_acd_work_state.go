@@ -47,3 +47,25 @@ func markTransferACDWorkStateForCall(callID string, workState string) {
 func releaseTransferACDWorkState(callID string) {
 	markTransferACDWorkStateForCall(callID, "available")
 }
+
+// releaseTransferRingingSeatForRetry marks the routed ACD seat available and excludes it from
+// the current transfer attempt. Returns the seat id when known (0 otherwise).
+func releaseTransferRingingSeatForRetry(inboundCallID string) uint {
+	inboundCallID = strings.TrimSpace(inboundCallID)
+	if inboundCallID == "" {
+		return 0
+	}
+	var rowID uint
+	if v, ok := transferLastACDRowByInbound.Load(inboundCallID); ok {
+		if id, ok := v.(uint); ok {
+			rowID = id
+		}
+	}
+	if rowID != 0 {
+		markTransferACDWorkState(rowID, "available")
+		transferExcludeAdd(inboundCallID, rowID)
+		return rowID
+	}
+	releaseTransferACDWorkState(inboundCallID)
+	return 0
+}

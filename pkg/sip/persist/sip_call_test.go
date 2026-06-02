@@ -97,25 +97,12 @@ func TestSIPCallEndStatusForBye(t *testing.T) {
 	}
 }
 
-func TestSIPCallDurationSince(t *testing.T) {
-	ack := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	end := ack.Add(90 * time.Second)
-	if n := SIPCallDurationSince(&ack, nil, end); n != 90 {
-		t.Fatalf("got %d", n)
-	}
-	inv := ack.Add(-time.Minute)
-	if n := SIPCallDurationSince(nil, &inv, end); n != int(end.Sub(inv).Seconds()) {
-		t.Fatalf("invite fallback: %d", n)
-	}
-}
-
 func TestApplySIPCallDurationFromRecording(t *testing.T) {
 	ack := time.Date(2026, 6, 1, 7, 36, 44, 0, time.UTC)
 	call := SIPCall{AckAt: &ack}
-	wall := ack.Add(30 * time.Minute) // delayed OnBye
 	upd := map[string]interface{}{"state": SIPCallStateEnded}
 
-	ApplySIPCallDurationFromRecording(upd, call, 51, wall)
+	ApplySIPCallDurationFromRecording(upd, call, 51)
 	if upd["duration_sec"] != 51 {
 		t.Fatalf("duration_sec = %v", upd["duration_sec"])
 	}
@@ -124,11 +111,19 @@ func TestApplySIPCallDurationFromRecording(t *testing.T) {
 	if !end.Equal(wantEnd) {
 		t.Fatalf("ended_at = %v want %v", end, wantEnd)
 	}
+	if upd["bye_at"].(time.Time) != end {
+		t.Fatalf("bye_at = %v want %v", upd["bye_at"], end)
+	}
 
 	upd2 := map[string]interface{}{}
-	ApplySIPCallDurationFromRecording(upd2, call, 0, wall)
-	if upd2["duration_sec"] != int(wall.Sub(ack).Seconds()) {
-		t.Fatalf("fallback duration = %v", upd2["duration_sec"])
+	ApplySIPCallDurationFromRecording(upd2, call, 0)
+	if len(upd2) != 0 {
+		t.Fatalf("expected no updates without recording length, got %#v", upd2)
+	}
+	upd3 := map[string]interface{}{}
+	ApplySIPCallDurationFromRecording(upd3, SIPCall{}, 51)
+	if len(upd3) != 0 {
+		t.Fatalf("expected no updates without ack/invite, got %#v", upd3)
 	}
 }
 
@@ -164,6 +159,10 @@ func TestComputeCallDurationSec_Enrich(t *testing.T) {
 		EndedAt:     &end,
 		DurationSec: 0,
 	}
+	if n := ComputeCallDurationSec(c); n != 0 {
+		t.Fatalf("computed %d, want stored duration_sec only", n)
+	}
+	c.DurationSec = 125
 	if n := ComputeCallDurationSec(c); n != 125 {
 		t.Fatalf("computed %d", n)
 	}

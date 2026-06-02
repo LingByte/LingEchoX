@@ -10,6 +10,13 @@ import {
 } from '@arco-design/web-react'
 import { IconDelete, IconPhone } from '@arco-design/web-react/icon'
 import { ShiftScheduleModal } from '@/components/ACD/ShiftScheduleModal'
+import {
+  MetaDataKeyValueEditor,
+  metaDataJSONFromPairs,
+  metaDataPairsFromJSON,
+  validateMetaDataPairs,
+  type MetaDataPair,
+} from '@/components/ACD/MetaDataKeyValueEditor'
 import { showAlert } from '@/utils/notification'
 import { shiftScheduleSummary } from '@/utils/shiftSchedule'
 import {
@@ -25,30 +32,6 @@ import { seatIdKey, useSIPAgentIncomingPoll } from '@/hooks/useSIPAgentIncomingP
 import { callerDisplay, SIP_INCOMING_POLL_MS } from '@/utils/sipAgentIncoming'
 import { listTrunkNumbers } from '@/api/trunks'
 
-function formatMetaDataForForm(raw?: string): string {
-  const t = raw?.trim()
-  if (!t) return ''
-  try {
-    const parsed = JSON.parse(t) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return JSON.stringify(parsed, null, 2)
-    }
-  } catch {
-    return raw ?? ''
-  }
-  return raw ?? ''
-}
-
-function parseMetaDataForSave(text: string): Record<string, unknown> | undefined {
-  const t = text.trim()
-  if (!t) return undefined
-  const parsed = JSON.parse(t) as unknown
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('扩展字段须为 JSON 对象，例如 {"FactoryNumber":"F-1001"}')
-  }
-  return parsed as Record<string, unknown>
-}
-
 type FormState = {
   trunkNumberId: number
   name: string
@@ -58,7 +41,7 @@ type FormState = {
   workState: string
   shiftSchedule: string
   remark: string
-  metaDataText: string
+  metaDataPairs: MetaDataPair[]
 }
 const defaultForm = (): FormState => ({
   trunkNumberId: 0,
@@ -69,7 +52,7 @@ const defaultForm = (): FormState => ({
   workState: 'offline',
   shiftSchedule: '',
   remark: '',
-  metaDataText: '',
+  metaDataPairs: [],
 })
 
 export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boolean; refreshNonce?: number }) {
@@ -164,7 +147,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
       workState: r.workState || 'offline',
       shiftSchedule: r.shiftSchedule ?? '',
       remark: r.remark || '',
-      metaDataText: formatMetaDataForForm(r.metaData),
+      metaDataPairs: metaDataPairsFromJSON(r.metaData),
     })
     setModalOpen(true)
   }
@@ -187,13 +170,12 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         return
       }
       const shiftTrim = form.shiftSchedule.trim()
-      let metaData: Record<string, unknown> | undefined
-      try {
-        metaData = parseMetaDataForSave(form.metaDataText)
-      } catch (e: unknown) {
-        showAlert(e instanceof Error ? e.message : '扩展字段 JSON 格式错误', 'error')
+      const metaErr = validateMetaDataPairs(form.metaDataPairs)
+      if (metaErr) {
+        showAlert(metaErr, 'error')
         return
       }
+      const metaData = metaDataJSONFromPairs(form.metaDataPairs)
       if (form.remark.trim().length > 128) {
         showAlert('备注最多 128 个字符', 'error')
         return
@@ -427,18 +409,10 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
               onChange={(v) => setForm((f) => ({ ...f, remark: v }))}
             />
           </div>
-          <div>
-            <Typography.Text style={{ fontSize: 12 }}>扩展字段 MetaData（可选）</Typography.Text>
-            <Input.TextArea
-              autoSize={{ minRows: 3, maxRows: 8 }}
-              placeholder={'JSON 对象，例如：\n{\n  "FactoryNumber": "F-1001",\n  "Dept": "售后"\n}'}
-              value={form.metaDataText}
-              onChange={(v) => setForm((f) => ({ ...f, metaDataText: v }))}
-            />
-            <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 11 }}>
-              用于「坐席接听前播报」模板占位符，如 {'{{MetaData.FactoryNumber}}'}（在中继号码设置中配置播报文案）。
-            </Typography.Paragraph>
-          </div>
+          <MetaDataKeyValueEditor
+            pairs={form.metaDataPairs}
+            onChange={(metaDataPairs) => setForm((f) => ({ ...f, metaDataPairs }))}
+          />
           <div>
             <Typography.Text style={{ fontSize: 12 }}>接线班次（可选）</Typography.Text>
             <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/20 px-3 py-2.5">

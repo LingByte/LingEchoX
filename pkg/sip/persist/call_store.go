@@ -15,6 +15,7 @@ import (
 	sipServer "github.com/LinByte/VoiceServer/pkg/sip/server"
 	"github.com/LinByte/VoiceServer/pkg/stores"
 	"github.com/LinByte/VoiceServer/pkg/utils"
+	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -95,7 +96,7 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	if err := s.db.WithContext(ctx).Where("call_id = ?", callID).First(&call).Error; err != nil {
 		s.lg.Warn("sippersist bye lookup", zap.String("call_id", callID), zap.Error(err))
 	}
-	updates := SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat, 0)
+	updates := SIPCallByeFinalizeUpdateMap(now, endStatus, sipAgent, webSeat)
 	recordingSec := 0
 	if transferTargetID > 0 {
 		updates["transfer_acd_target_id"] = transferTargetID
@@ -143,15 +144,17 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 		if wav.Bytes > 0 {
 			updates["recording_wav_bytes"] = wav.Bytes
 		}
-		if wav.DurationMs > 0 {
-			if sec := int((wav.DurationMs + 500) / 1000); sec > 0 {
-				recordingSec = sec
-			}
-		}
 		if wav.Hash != "" {
 			updates["recording_hash"] = wav.Hash
 		}
-		ApplySIPCallDurationFromRecording(updates, call, recordingSec, now)
+		recordingSec = ResolveRecordingDurationSec(wav, nil)
+		ApplySIPCallDurationFromRecording(updates, call, recordingSec)
+		if recordingSec <= 0 {
+			s.lg.Warn("sippersist bye: recording present but duration unknown; duration_sec/ended_at/bye_at not set",
+				zap.String("call_id", callID),
+				zap.String("url", wav.URL),
+			)
+		}
 		s.lg.Info("sippersist recording attached from voice/recorder",
 			zap.String("call_id", callID),
 			zap.String("url", wav.URL),
@@ -215,9 +218,7 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 				zap.String("call_id", callID), zap.String("codec", codecName), zap.Int("raw_bytes", len(raw)))
 		}
 		if len(wav) > 0 {
-			if wavSec := WAVDurationSec(wav); wavSec > 0 {
-				recordingSec = wavSec
-			}
+			recordingSec = ResolveRecordingDurationSec(gateway.RecordingInfo{}, wav)
 			key := fmt.Sprintf("sip/recordings/%s_%d.wav", sanitizeRecordingKey(callID), now.Unix())
 			if err := store.Write(key, bytes.NewReader(wav)); err != nil {
 				s.lg.Warn("sippersist recording upload", zap.String("call_id", callID), zap.Error(err))
@@ -243,7 +244,13 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 			zap.String("call_id", callID), zap.String("codec", codecName))
 	}
 
-	ApplySIPCallDurationFromRecording(updates, call, recordingSec, now)
+	ApplySIPCallDurationFromRecording(updates, call, recordingSec)
+	if recordingSec <= 0 {
+		s.lg.Warn("sippersist bye: no recording duration; duration_sec/ended_at/bye_at not set",
+			zap.String("call_id", callID),
+			zap.Int("raw_bytes", len(raw)),
+		)
+	}
 	if err := s.db.WithContext(ctx).Model(&SIPCall{}).Where("call_id = ?", callID).Updates(updates).Error; err != nil {
 		s.lg.Warn("sippersist bye update", zap.String("call_id", callID), zap.Error(err))
 	}

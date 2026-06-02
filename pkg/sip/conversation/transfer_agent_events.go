@@ -174,17 +174,41 @@ func scheduleTransferInviteWatch(inbound, outbound string) {
 		if !loaded || v == nil {
 			return
 		}
-		if ActiveTransferBridgeForCallID(inbound) || ActiveWebSeatBridge(inbound) {
-			return
-		}
-		if !inboundCallerStillPresentForTransfer(inbound) {
-			cancelTransferInviteWatch(outbound)
-			abandonTransferBecauseCallerGone(inbound)
-			return
-		}
-		_ = abandonTransferLeg(outbound)
+		handleTransferInviteWatchTimeout(inbound, outbound)
 	})
 	transferInviteTimers.Store(outbound, t)
+}
+
+// handleTransferInviteWatchTimeout runs when a SIP agent leg rings past the answer deadline.
+// Work state is cleared synchronously (like web-seat join timeout); abandonTransferLeg then
+// emits DialEventFailed for CANCEL + retry, with a local fallback if the leg is already gone.
+func handleTransferInviteWatchTimeout(inbound, outbound string) {
+	inbound = strings.TrimSpace(inbound)
+	outbound = strings.TrimSpace(outbound)
+	if inbound == "" || outbound == "" {
+		return
+	}
+	if ActiveTransferBridgeForCallID(inbound) || ActiveWebSeatBridge(inbound) {
+		return
+	}
+	if !inboundCallerStillPresentForTransfer(inbound) {
+		abandonTransferBecauseCallerGone(inbound)
+		return
+	}
+	releaseTransferRingingSeatForRetry(inbound)
+	if abandonTransferLeg(outbound) {
+		return
+	}
+	lg := logger.Lg
+	if lg == nil {
+		lg = zap.NewNop()
+	}
+	webseat.ReleaseInboundWebACDOffer(inbound)
+	sipagentpoll.MarkInboundFailed(inbound)
+	transferStarted.Delete(inbound)
+	transferLastACDRowByInbound.Delete(inbound)
+	notifyTransferPhase(inbound, "retrying", map[string]any{"reason": "transfer_invite_timeout"})
+	scheduleTransferRetryToNextAgent(inbound, lg)
 }
 
 func cancelTransferInviteWatch(outbound string) {
@@ -244,6 +268,8 @@ func scheduleWebSeatJoinWatch(inbound string, acdTargetID uint) {
 		if acdTargetID != 0 {
 			markTransferACDWorkState(acdTargetID, "available")
 			transferExcludeAdd(inbound, acdTargetID)
+		} else {
+			releaseTransferRingingSeatForRetry(inbound)
 		}
 		webseat.ReleaseInboundWebACDOffer(inbound)
 		transferStarted.Delete(inbound)
@@ -356,16 +382,7 @@ func onTransferAgentLegFailed(inbound string, evt outbound.DialEvent) {
 		startNoAgentRetryLoop(inbound, lg)
 		return
 	}
-	var rowID uint
-	if v, ok := transferLastACDRowByInbound.Load(inbound); ok {
-		if id, ok := v.(uint); ok {
-			rowID = id
-		}
-	}
-	if rowID != 0 {
-		markTransferACDWorkState(rowID, "available")
-		transferExcludeAdd(inbound, rowID)
-	}
+	releaseTransferRingingSeatForRetry(inbound)
 	webseat.ReleaseInboundWebACDOffer(inbound)
 	sipagentpoll.MarkInboundFailed(inbound)
 	transferStarted.Delete(inbound)

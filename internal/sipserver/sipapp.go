@@ -732,6 +732,7 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 			mode = models.NormalizeACDDispatchMode(tn.ACDDispatchMode)
 		}
 	}
+	logACDPoolTransferCandidateAudit(ctx, db, reg, inboundCallID, tenantID, inboundTrunkNumberID, exclude)
 	tried := append([]uint(nil), exclude...)
 	// Try multiple eligible rows in priority order. One misconfigured row should not block transfer.
 	for attempt := 0; attempt < 32; attempt++ {
@@ -864,4 +865,115 @@ func PickTransferDialTarget(ctx context.Context, db *gorm.DB, reg *persist.GormS
 		return dt, true
 	}
 	return outbound.DialTarget{}, false
+}
+
+func logACDPoolTransferCandidateAudit(ctx context.Context, db *gorm.DB, reg *persist.GormStore, inboundCallID string, tenantID, inboundTrunkNumberID uint, exclude []uint) {
+	lg := logger.Lg
+	if lg == nil {
+		lg = zap.NewNop()
+	}
+	audits, err := models.AuditACDPoolTransferCandidates(ctx, db, models.ACDPoolTransferAuditParams{
+		TenantID:             tenantID,
+		InboundTrunkNumberID: inboundTrunkNumberID,
+		ExcludeIDs:           exclude,
+	})
+	if err != nil {
+		lg.Warn("sip transfer: acd pool candidate audit failed",
+			zap.String("call_id", strings.TrimSpace(inboundCallID)),
+			zap.Error(err),
+		)
+		return
+	}
+	if len(audits) == 0 {
+		lg.Info("sip transfer: acd pool candidate audit — no pool rows for tenant",
+			zap.String("call_id", strings.TrimSpace(inboundCallID)),
+			zap.Uint("tenant_id", tenantID),
+			zap.Uint("inbound_trunk_number_id", inboundTrunkNumberID),
+		)
+		return
+	}
+	eligibleN := 0
+	for _, a := range audits {
+		reasons := append([]string(nil), a.Reasons...)
+		eligible := a.Eligible
+		if eligible && strings.EqualFold(strings.TrimSpace(a.Row.RouteType), constants.ACDPoolRouteTypeSIP) {
+			if r := acdSIPRowTransferRejectReason(ctx, db, reg, a.Row, tenantID, inboundTrunkNumberID); r != "" {
+				reasons = append(reasons, r)
+				eligible = false
+			}
+		}
+		if eligible {
+			eligibleN++
+		}
+		lg.Info("sip transfer: acd pool candidate",
+			zap.String("call_id", strings.TrimSpace(inboundCallID)),
+			zap.Uint("acd_pool_target_id", a.Row.ID),
+			zap.String("name", strings.TrimSpace(a.Row.Name)),
+			zap.String("route_type", strings.TrimSpace(a.Row.RouteType)),
+			zap.Uint("trunk_number_id", a.Row.TrunkNumberID),
+			zap.Int("weight", a.Row.Weight),
+			zap.String("work_state", strings.TrimSpace(a.Row.WorkState)),
+			zap.String("target_value", strings.TrimSpace(a.Row.TargetValue)),
+			zap.Bool("eligible", eligible),
+			zap.Strings("reject_reasons", reasons),
+		)
+	}
+	lg.Info("sip transfer: acd pool candidate audit summary",
+		zap.String("call_id", strings.TrimSpace(inboundCallID)),
+		zap.Uint("tenant_id", tenantID),
+		zap.Uint("inbound_trunk_number_id", inboundTrunkNumberID),
+		zap.Int("pool_rows", len(audits)),
+		zap.Int("eligible", eligibleN),
+		zap.Int("excluded_prior_attempts", len(exclude)),
+	)
+}
+
+func acdSIPRowTransferRejectReason(ctx context.Context, db *gorm.DB, reg *persist.GormStore, row models.ACDPoolTarget, tenantID, inboundTrunkNumberID uint) string {
+	src := strings.ToLower(strings.TrimSpace(row.SipSource))
+	switch src {
+	case constants.ACDSipSourceTrunk:
+		host := row.SipTrunkHost
+		sig := row.SipTrunkSignalingAddr
+		port := row.SipTrunkPort
+		if strings.TrimSpace(host) == "" && inboundTrunkNumberID > 0 && tenantID > 0 {
+			if tn, err := models.GetTrunkNumberByIDForTenant(db, inboundTrunkNumberID, tenantID); err == nil && tn.OutboundTrunkNumberID > 0 {
+				if tc, ok := models.ResolveACDOutboundFromTrunkNumber(db, tenantID, tn.OutboundTrunkNumberID); ok {
+					host = tc.Host
+					if port <= 0 {
+						port = tc.Port
+					}
+					if strings.TrimSpace(sig) == "" {
+						sig = tc.SignalingAddr()
+					}
+				}
+			}
+		}
+		if strings.TrimSpace(host) == "" {
+			if tc, ok := models.PickTrunkTransferConfig(db, tenantID); ok {
+				host = tc.Host
+				if port <= 0 {
+					port = tc.Port
+				}
+				if strings.TrimSpace(sig) == "" {
+					sig = tc.SignalingAddr()
+				}
+			}
+		}
+		if _, ok := outbound.DialTargetFromACDTrunk(row.TargetValue, host, sig, port); !ok {
+			return fmt.Sprintf("sip_trunk_not_dialable(target=%q host=%q port=%d)", strings.TrimSpace(row.TargetValue), strings.TrimSpace(host), port)
+		}
+		return ""
+	default:
+		if reg == nil {
+			return "sip_registry_unavailable"
+		}
+		u := strings.TrimSpace(row.TargetValue)
+		if u == "" {
+			return "sip_username_empty"
+		}
+		if _, ok := reg.DialTargetForUsername(ctx, u); !ok {
+			return fmt.Sprintf("sip_user_not_registered(username=%s)", u)
+		}
+		return ""
+	}
 }

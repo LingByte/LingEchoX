@@ -90,9 +90,6 @@ func main() {
 		}
 		newEnd := start.Add(time.Duration(durSec) * time.Second)
 		oldDur := row.DurationSec
-		if oldDur <= 0 {
-			oldDur = sipPersist.ComputeCallDurationSec(&row)
-		}
 
 		log.Printf("id=%d call_id=%s wav_bytes=%d duration_sec %d -> %d ended_at %s -> %s",
 			row.ID, row.CallID, len(wav), oldDur, durSec,
@@ -124,27 +121,21 @@ func needsFix(c *sipPersist.SIPCall) bool {
 	if c == nil {
 		return false
 	}
-	wall := sipPersist.ComputeCallDurationSec(c)
-	if c.DurationSec > 0 && wall > 0 {
-		diff := c.DurationSec - wall
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff <= 5 {
-			return false
-		}
-	}
 	if c.DurationSec > 3600 {
 		return true
 	}
 	if c.EndedAt != nil && c.ByeAt != nil && c.EndedAt.Sub(*c.ByeAt).Abs() > 2*time.Minute {
 		return true
 	}
-	if c.EndedAt != nil && c.AckAt != nil {
-		endFromAck := int(c.EndedAt.Sub(*c.AckAt).Seconds())
-		if c.DurationSec > 0 && endFromAck > c.DurationSec+120 {
+	start := callStartTime(c)
+	if c.DurationSec > 0 && !start.IsZero() && c.EndedAt != nil {
+		wantEnd := start.Add(time.Duration(c.DurationSec) * time.Second)
+		if c.EndedAt.Sub(wantEnd).Abs() > 5*time.Second {
 			return true
 		}
+	}
+	if c.DurationSec > 0 && c.EndedAt == nil {
+		return true
 	}
 	return c.DurationSec <= 0
 }
