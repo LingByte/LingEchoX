@@ -63,6 +63,7 @@ func (h *Handlers) registerSIPCenterACDRoutes(g *gin.RouterGroup) {
 	{
 		write.POST("/acd-pool", h.createACDPoolTarget)
 		write.PUT("/acd-pool/:id", h.updateACDPoolTarget)
+		write.POST("/acd-pool/reorder", h.reorderACDPoolTargets)
 		write.DELETE("/acd-pool/:id", h.deleteACDPoolTarget)
 		write.PUT("/acd-dispatch-mode", h.updateACDDispatchMode)
 	}

@@ -33,6 +33,7 @@ type acdPoolTargetWriteReq struct {
 	SipCallerID          string `json:"sipCallerId"`
 	SipCallerDisplayName string `json:"sipCallerDisplayName"`
 	Weight               int    `json:"weight"`
+	SortOrder            int    `json:"sortOrder"`
 	WorkState            string `json:"workState"`
 	// ShiftSchedule JSON: e.g. [{"weekdays":[1,2,3,4,5],"start":"09:00","end":"18:00"}] (weekdays 0=Sun .. 6=Sat). Empty = 24/7.
 	ShiftSchedule string `json:"shiftSchedule"`
@@ -213,6 +214,19 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		// SIP ACD rows are now unified as outbound trunk-style targets.
 		sipSrc = constants.ACDSipSourceTrunk
 	}
+	weight := req.Weight
+	if weight <= 0 {
+		weight = 10
+	}
+	sortOrder := req.SortOrder
+	if sortOrder <= 0 {
+		var err error
+		sortOrder, err = models.AllocateNextACDPoolTargetSortOrder(h.db, tid, req.TrunkNumberID)
+		if err != nil {
+			response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	var webSeen *time.Time
 	if rt == constants.ACDPoolRouteTypeWeb && ws == constants.ACDWorkStateAvailable {
 		webSeen = &now
@@ -221,7 +235,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 		req.Name, rt, sipSrc, req.TargetValue,
 		"", 0, "",
 		req.SipCallerID, req.SipCallerDisplayName,
-		req.Weight, ws, now, webSeen,
+		weight, sortOrder, ws, now, webSeen,
 		req.ShiftSchedule,
 		req.TrunkNumberID,
 		nRemark,
@@ -247,7 +261,7 @@ func (h *Handlers) createACDPoolTarget(c *gin.Context) {
 				keep, req.Name, rt, "", req.TargetValue,
 				"", 0, "",
 				"", "",
-				req.Weight, ws, now, op,
+				weight, keep.SortOrder, ws, now, op,
 				req.ShiftSchedule,
 				req.TrunkNumberID,
 				nRemark,
@@ -324,12 +338,20 @@ func (h *Handlers) updateACDPoolTarget(c *gin.Context) {
 		// SIP ACD rows are now unified as outbound trunk-style targets.
 		sipSrc = constants.ACDSipSourceTrunk
 	}
+	weight := req.Weight
+	if weight <= 0 {
+		weight = 10
+	}
+	sortOrder := row.SortOrder
+	if req.SortOrder > 0 {
+		sortOrder = req.SortOrder
+	}
 	op := middleware.AuditOperator(c)
 	updates := models.BuildACDPoolTargetUpdateMap(
 		row, req.Name, rt, sipSrc, req.TargetValue,
 		"", 0, "",
 		req.SipCallerID, req.SipCallerDisplayName,
-		req.Weight, ws, now, op,
+		weight, sortOrder, ws, now, op,
 		req.ShiftSchedule,
 		req.TrunkNumberID,
 		nRemark,
@@ -421,6 +443,65 @@ func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
 	}
 	if err := models.UpdateACDPoolTargetWebSeatHeartbeat(h.db, targetID, op, time.Now()); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
+		return
+	}
+	response.Success(c, "success", gin.H{"ok": true})
+}
+
+type acdPoolReorderReq struct {
+	TrunkNumberID uint              `json:"trunkNumberId"`
+	IDs           []json.RawMessage `json:"ids"`
+}
+
+func parseACDPoolReorderIDs(raw []json.RawMessage) ([]uint, error) {
+	out := make([]uint, 0, len(raw))
+	for _, item := range raw {
+		if len(item) == 0 {
+			continue
+		}
+		var n uint64
+		if err := json.Unmarshal(item, &n); err == nil {
+			if n == 0 {
+				return nil, errors.New("invalid id")
+			}
+			out = append(out, uint(n))
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(item, &s); err != nil {
+			return nil, err
+		}
+		id, err := utils.ParseID(strings.TrimSpace(s))
+		if err != nil || id == 0 {
+			return nil, errors.New("invalid id")
+		}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("ids required")
+	}
+	return out, nil
+}
+
+func (h *Handlers) reorderACDPoolTargets(c *gin.Context) {
+	tid := middleware.CurrentTenantID(c)
+	var req acdPoolReorderReq
+	if err := c.ShouldBindJSON(&req); err != nil || req.TrunkNumberID == 0 {
+		response.Fail(c, "invalid body: need trunkNumberId and ids", nil)
+		return
+	}
+	if num, err := models.GetTrunkNumberByIDForTenant(h.db, req.TrunkNumberID, tid); err != nil || num.ID == 0 {
+		response.Fail(c, "trunkNumberId 不属于当前租户", nil)
+		return
+	}
+	ids, err := parseACDPoolReorderIDs(req.IDs)
+	if err != nil {
+		response.Fail(c, err.Error(), nil)
+		return
+	}
+	op := middleware.AuditOperator(c)
+	if err := models.ReorderACDPoolTargetsForTenant(h.db, tid, req.TrunkNumberID, ids, op); err != nil {
+		response.Fail(c, err.Error(), nil)
 		return
 	}
 	response.Success(c, "success", gin.H{"ok": true})

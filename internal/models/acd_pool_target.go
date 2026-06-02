@@ -29,7 +29,7 @@ func NormalizeACDDispatchMode(raw string) string {
 }
 
 // ACDPoolTarget is one row in the transfer routing table (acd_pool_targets) when cmd/sip uses a database.
-// Selection: highest Weight first, then lowest id; only Weight>0 and WorkState==available.
+// Selection: lowest SortOrder first (admin drag order), then lowest id; only Weight>0 and WorkState==available.
 // SIP rows: internal TargetValue = sip_users.username; trunk = dial string + trunk host fields.
 // Web rows: TargetValue usually empty; WebSeat handoff when this row wins over SIP rows by Weight.
 type ACDPoolTarget struct {
@@ -45,7 +45,8 @@ type ACDPoolTarget struct {
 	SipTrunkSignalingAddr string     `json:"sipTrunkSignalingAddr" gorm:"size:160"` // host:port, optional; default host:port from above
 	SipCallerID           string     `json:"sipCallerId" gorm:"size:64"`            // SIP only: optional outbound From user / display (like SIP_CALLER_ID); empty → cmd/sip uses global .env default.
 	SipCallerDisplayName  string     `json:"sipCallerDisplayName" gorm:"size:128"`
-	Weight                int        `json:"weight" gorm:"not null;default:0;index"`                  // Weight: higher = higher priority when selecting; 0 = disabled (not eligible).
+	Weight                int        `json:"weight" gorm:"not null;default:0;index"`                  // Weight: 0 = disabled (not eligible); >0 = enabled.
+	SortOrder             int        `json:"sortOrder" gorm:"column:sort_order;not null;default:0;index"` // SortOrder: lower = higher transfer priority.
 	WorkState             string     `json:"workState" gorm:"size:24;not null;default:offline;index"` // WorkState: see ACDWorkState*; default offline until sign-in or integration sets available.
 	WorkStateAt           *time.Time `json:"workStateAt"`                                             // WorkStateAt: optional last transition (ring timeouts, metrics).
 	WebSeatLastSeenAt     *time.Time `json:"webSeatLastSeenAt" gorm:"column:web_seat_last_seen_at"`   // WebSeatLastSeenAt: route_type=web only; last heartbeat from browser (keepalive). Used for pick + admin "链路在线".
@@ -171,7 +172,7 @@ func ListACDPoolTargetsPage(db *gorm.DB, tenantID uint, page, size int, routeTyp
 	}
 	offset := (page - 1) * size
 	var list []ACDPoolTarget
-	if err := q.Order("weight DESC, id DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+	if err := q.Order("sort_order ASC, id ASC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
 	return list, total, nil
@@ -265,7 +266,7 @@ func NewACDPoolTargetForCreate(
 	name, routeType, sipSource, targetValue string,
 	trunkHost string, trunkPort int, trunkSig string,
 	sipCallerID, sipCallerDisplayName string,
-	weight int, workState string,
+	weight, sortOrder int, workState string,
 	now time.Time,
 	webSeatLastSeen *time.Time,
 	shiftScheduleJSON string,
@@ -287,6 +288,7 @@ func NewACDPoolTargetForCreate(
 		SipCallerID:           cid,
 		SipCallerDisplayName:  cdn,
 		Weight:                weight,
+		SortOrder:             sortOrder,
 		WorkState:             workState,
 		WorkStateAt:           &now,
 		WebSeatLastSeenAt:     webSeatLastSeen,
@@ -303,7 +305,7 @@ func BuildACDPoolTargetUpdateMap(
 	name, routeType, sipSource, targetValue string,
 	trunkHost string, trunkPort int, trunkSig string,
 	sipCallerID, sipCallerDisplayName string,
-	weight int, workState string,
+	weight, sortOrder int, workState string,
 	now time.Time,
 	updateBy string,
 	shiftScheduleJSON string,
@@ -325,6 +327,7 @@ func BuildACDPoolTargetUpdateMap(
 		"sip_caller_id":            cid,
 		"sip_caller_display_name":  cdn,
 		"weight":                   weight,
+		"sort_order":               sortOrder,
 		"work_state":               workState,
 		"updated_at":               now,
 		"shift_schedule_json":      strings.TrimSpace(shiftScheduleJSON),
@@ -425,7 +428,7 @@ func listEligibleACDPoolTargetsForTransferScoped(ctx context.Context, db *gorm.D
 			[]string{constants.ACDPoolRouteTypeSIP, constants.ACDPoolRouteTypeWeb}).
 		Where("(route_type != ? OR (web_seat_last_seen_at IS NOT NULL AND web_seat_last_seen_at > ?))",
 			constants.ACDPoolRouteTypeWeb, freshWebSince).
-		Order("weight DESC").Order("id ASC").
+		Order("sort_order ASC").Order("id ASC").
 		Limit(limit)
 	if len(excludeIDs) > 0 {
 		q = q.Where("id NOT IN ?", excludeIDs)
@@ -475,9 +478,8 @@ var acdRRLastPicked sync.Map // key=tenantID:trunkNumberScope:topWeight -> uint(
 
 // PickEligibleACDPoolTargetForTransferWithMode picks one eligible target using the given dispatch mode.
 // Modes:
-//   - weight: deterministic (existing behavior): highest weight, then lowest id.
-//   - round_robin: hybrid strategy (available-only + top-weight first + round-robin among same top weight).
-//     This gives "idle priority + weight + round-robin" in one normalized flow.
+//   - weight: deterministic: lowest sort_order, then lowest id.
+//   - round_robin: rotate among eligible rows ordered by sort_order (then id).
 func PickEligibleACDPoolTargetForTransferWithMode(ctx context.Context, db *gorm.DB, excludeIDs []uint, tenantID uint, inboundTrunkNumberID uint, mode string) (ACDPoolTarget, error) {
 	mode = NormalizeACDDispatchMode(mode)
 	if mode != constants.ACDDispatchModeRoundRobin {
@@ -490,8 +492,10 @@ func PickEligibleACDPoolTargetForTransferWithMode(ctx context.Context, db *gorm.
 	if len(rows) == 0 {
 		return ACDPoolTarget{}, gorm.ErrRecordNotFound
 	}
-	// Always sort by id for stable RR candidate order.
 	slices.SortFunc(rows, func(a, b ACDPoolTarget) int {
+		if a.SortOrder != b.SortOrder {
+			return a.SortOrder - b.SortOrder
+		}
 		if a.ID < b.ID {
 			return -1
 		}
@@ -500,36 +504,23 @@ func PickEligibleACDPoolTargetForTransferWithMode(ctx context.Context, db *gorm.
 		}
 		return 0
 	})
-	// Keep only the top-weight group: weight priority remains effective in RR mode.
-	topWeight := rows[0].Weight
-	group := make([]ACDPoolTarget, 0, len(rows))
-	for _, r := range rows {
-		if r.Weight == topWeight {
-			group = append(group, r)
-		}
-	}
-	if len(group) == 0 {
-		return ACDPoolTarget{}, gorm.ErrRecordNotFound
-	}
 
-	key := fmt.Sprintf("%d:%d:%d", tenantID, inboundTrunkNumberID, topWeight)
+	key := fmt.Sprintf("%d:%d", tenantID, inboundTrunkNumberID)
 	var last uint
 	if v, ok := acdRRLastPicked.Load(key); ok {
 		if n, ok := v.(uint); ok {
 			last = n
 		}
 	}
-	// find next after last id (wrap)
-	pick := group[0]
+	pick := rows[0]
 	if last != 0 {
-		for i := 0; i < len(group); i++ {
-			if group[i].ID == last {
-				pick = group[(i+1)%len(group)]
+		for i := 0; i < len(rows); i++ {
+			if rows[i].ID == last {
+				pick = rows[(i+1)%len(rows)]
 				break
 			}
-			// if last falls between ids, pick the first higher id
-			if group[i].ID > last {
-				pick = group[i]
+			if rows[i].ID > last {
+				pick = rows[i]
 				break
 			}
 		}
@@ -776,4 +767,78 @@ func ACDShiftTimeLocation() *time.Location {
 		return time.Local
 	}
 	return loc
+}
+
+// AllocateNextACDPoolTargetSortOrder returns the next sort_order for a new row in one trunk scope.
+func AllocateNextACDPoolTargetSortOrder(db *gorm.DB, tenantID, trunkNumberID uint) (int, error) {
+	if db == nil {
+		return 10, gorm.ErrInvalidDB
+	}
+	var maxSort int
+	q := ActiveACDPoolTargets(db).Select("COALESCE(MAX(sort_order), 0)").
+		Where("tenant_id = ?", tenantID)
+	if trunkNumberID > 0 {
+		q = q.Where("trunk_number_id = ?", trunkNumberID)
+	}
+	if err := q.Scan(&maxSort).Error; err != nil {
+		return 10, err
+	}
+	return maxSort + 10, nil
+}
+
+// ReorderACDPoolTargetsForTenant assigns sort_order 10,20,30… in the given id order for one trunk scope.
+func ReorderACDPoolTargetsForTenant(db *gorm.DB, tenantID, trunkNumberID uint, ids []uint, updateBy string) error {
+	if db == nil {
+		return gorm.ErrInvalidDB
+	}
+	if tenantID == 0 || trunkNumberID == 0 {
+		return fmt.Errorf("tenant and trunkNumberId required")
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("ids required")
+	}
+	seen := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			return fmt.Errorf("invalid id")
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("duplicate id")
+		}
+		seen[id] = struct{}{}
+	}
+	var rows []ACDPoolTarget
+	if err := ActiveACDPoolTargets(db).
+		Where("tenant_id = ? AND trunk_number_id = ? AND id IN ?", tenantID, trunkNumberID, ids).
+		Find(&rows).Error; err != nil {
+		return err
+	}
+	if len(rows) != len(ids) {
+		return fmt.Errorf("some ids not found for tenant/trunk scope")
+	}
+	now := time.Now()
+	return db.Transaction(func(tx *gorm.DB) error {
+		for i, id := range ids {
+			sortOrder := (i + 1) * 10
+			u := map[string]any{
+				"sort_order": sortOrder,
+				"updated_at": now,
+			}
+			meta := BaseModel{}
+			meta.SetUpdateInfo(updateBy)
+			if meta.UpdateBy != "" {
+				u["update_by"] = meta.UpdateBy
+			}
+			res := tx.Model(&ACDPoolTarget{}).
+				Where("id = ? AND tenant_id = ? AND trunk_number_id = ?", id, tenantID, trunkNumberID).
+				Updates(u)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return fmt.Errorf("id %d not found", id)
+			}
+		}
+		return nil
+	})
 }

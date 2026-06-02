@@ -8,7 +8,7 @@ import {
   Tag,
   Typography,
 } from '@arco-design/web-react'
-import { IconDelete, IconPhone } from '@arco-design/web-react/icon'
+import { IconDelete, IconDragDotVertical, IconPhone } from '@arco-design/web-react/icon'
 import { ShiftScheduleModal } from '@/components/ACD/ShiftScheduleModal'
 import {
   MetaDataKeyValueEditor,
@@ -25,19 +25,20 @@ import {
   createACDPoolTarget,
   deleteACDPoolTarget,
   listACDPoolTargets,
+  reorderACDPoolTargets,
   updateACDPoolTarget,
   type ACDPoolTargetRow,
 } from '@/api/acdPool'
 import { seatIdKey, useSIPAgentIncomingPoll } from '@/hooks/useSIPAgentIncomingPoll'
 import { callerDisplay, SIP_INCOMING_POLL_MS } from '@/utils/sipAgentIncoming'
 import { listTrunkNumbers } from '@/api/trunks'
+import './ACDPoolTab.css'
 
 type FormState = {
   trunkNumberId: number
   name: string
   routeType: string
   targetValue: string
-  weight: number
   workState: string
   shiftSchedule: string
   remark: string
@@ -48,7 +49,6 @@ const defaultForm = (): FormState => ({
   name: '',
   routeType: 'sip',
   targetValue: '',
-  weight: 10,
   workState: 'offline',
   shiftSchedule: '',
   remark: '',
@@ -71,15 +71,19 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   const [acdDeleteId, setAcdDeleteId] = useState<number | null>(null)
   const [acdDeleteLoading, setAcdDeleteLoading] = useState(false)
   const [shiftModalOpen, setShiftModalOpen] = useState(false)
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [dropOverIdx, setDropOverIdx] = useState<number | null>(null)
+  const [reordering, setReordering] = useState(false)
   const sipRowsOnPage = useMemo(() => rows.filter((r) => r.routeType === 'sip'), [rows])
   const { incomingBySeatId, incomingSeats } = useSIPAgentIncomingPoll(sipRowsOnPage, active)
-  const pageSize = 20
+  const listPageSize = trunkNumFilter != null && trunkNumFilter > 0 ? 500 : 20
+  const dragEnabled = rows.length > 1 && !reordering
 
   const load = useCallback(async () => {
     if (!active) return
     setLoading(true)
     try {
-      const res = await listACDPoolTargets(page, pageSize, {
+      const res = await listACDPoolTargets(page, listPageSize, {
         routeType: routeTypeFilter.trim() || undefined,
         trunkNumberId: trunkNumFilter,
       })
@@ -92,7 +96,11 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
     } finally {
       setLoading(false)
     }
-  }, [active, page, routeTypeFilter, trunkNumFilter])
+  }, [active, page, listPageSize, routeTypeFilter, trunkNumFilter])
+
+  useEffect(() => {
+    setPage(1)
+  }, [trunkNumFilter, routeTypeFilter])
 
   useEffect(() => {
     void load()
@@ -143,7 +151,6 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
       name: r.name || '',
       routeType: r.routeType || 'sip',
       targetValue: r.targetValue || '',
-      weight: r.weight ?? 0,
       workState: r.workState || 'offline',
       shiftSchedule: r.shiftSchedule ?? '',
       remark: r.remark || '',
@@ -191,7 +198,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         sipTrunkSignalingAddr: '',
         sipCallerId: '',
         sipCallerDisplayName: '',
-        weight: Number(form.weight) || 0,
+        weight: 10,
         workState: form.workState,
         shiftSchedule: shiftTrim,
         remark: form.remark.trim(),
@@ -233,11 +240,79 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
   const workStateLabel = (s: string) =>
     ({ offline: '离线', available: '可用', ringing: '振铃中', busy: '忙碌', acw: '话后整理', break: '休息' } as Record<string, string>)[s] || s
 
+  const persistOrder = async (ordered: ACDPoolTargetRow[], trunkId: number) => {
+    if (!trunkId || trunkId <= 0) {
+      showAlert('该坐席未绑定中继号码，无法排序', 'warning')
+      return
+    }
+    setReordering(true)
+    try {
+      let ids = ordered.filter((r) => r.trunkNumberId === trunkId).map((r) => r.id)
+      if (trunkNumFilter !== trunkId) {
+        const full = await listACDPoolTargets(1, 500, { trunkNumberId: trunkId })
+        const all = full.data?.list ?? []
+        const visSet = new Set(ids.map((id) => String(id)))
+        const rest = all.filter((r) => !visSet.has(String(r.id))).map((r) => r.id)
+        ids = [...ids, ...rest]
+      }
+      const res = await reorderACDPoolTargets(trunkId, ids)
+      if (res.code === 200) {
+        showAlert('优先级已更新', 'success')
+      } else {
+        showAlert(res.msg || '排序保存失败', 'error')
+        void load()
+      }
+    } catch (e: unknown) {
+      showAlert((e as { msg?: string })?.msg || '排序保存失败', 'error')
+      void load()
+    } finally {
+      setReordering(false)
+    }
+  }
+
+  const handleDrop = (toIdx: number) => {
+    if (dragIdx == null || dragIdx === toIdx || !dragEnabled) return
+    const from = rows[dragIdx]
+    const to = rows[toIdx]
+    if (!from || !to) return
+    const trunkId = from.trunkNumberId ?? 0
+    if (trunkId <= 0) {
+      showAlert('该坐席未绑定中继号码，无法排序', 'warning')
+      clearDragState()
+      return
+    }
+    if ((to.trunkNumberId ?? 0) !== trunkId) {
+      showAlert('只能在同一中继号码下调整优先级', 'warning')
+      clearDragState()
+      return
+    }
+    const next = [...rows]
+    const [moved] = next.splice(dragIdx, 1)
+    if (!moved) return
+    next.splice(toIdx, 0, moved)
+    setRows(next)
+    setDragIdx(null)
+    setDropOverIdx(null)
+    void persistOrder(next, trunkId)
+  }
+
+  const clearDragState = () => {
+    setDragIdx(null)
+    setDropOverIdx(null)
+  }
+
+  const rowDragClass = (idx: number) => {
+    if (dragIdx === idx) return ' acd-pool-row--dragging'
+    if (dropOverIdx === idx && dragIdx != null && dragIdx !== idx) return ' acd-pool-row--drop-over'
+    return ''
+  }
+
   return (
     <div className="mt-4 space-y-3">
       <Typography.Paragraph style={{ margin: 0, fontSize: 12 }} className="rounded-lg border px-3 py-2.5">
         每条坐席目标必须绑定本平台已分配给当前租户的中继号码（被叫号码）；来电命中该号码时优先路由到对应坐席。
         SIP 坐席每 {SIP_INCOMING_POLL_MS / 1000} 秒自动查询是否有转接振铃（不含 Web 坐席）。
+        拖动最左侧手柄调整转接优先级（越靠上越优先）；同一中继号码下的坐席才能互相排序。
       </Typography.Paragraph>
       {incomingSipRows.length > 0 && (
         <div className="rounded-lg border border-orange-500/40 bg-orange-500/10 px-3 py-2.5 text-sm">
@@ -263,7 +338,9 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
             placeholder="全部号码"
             allowClear
             value={trunkNumFilter}
-            onChange={(v) => setTrunkNumFilter((v as number | undefined) ?? undefined)}
+            onChange={(v) => {
+              setTrunkNumFilter((v as number | undefined) ?? undefined)
+            }}
             options={trunkNumOpts}
           />
         </Space>
@@ -286,13 +363,13 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
         <div className="p-4 text-sm text-muted-foreground">加载中...</div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <table className="min-w-[860px] w-full text-sm">
+          <table className="acd-pool-table min-w-[860px] w-full text-sm">
             <thead className="bg-muted/50">
               <tr>
+                <th className="text-left p-3 w-16 whitespace-nowrap">排序</th>
                 <th className="text-left p-3 whitespace-nowrap">中继号码</th>
                 <th className="text-left p-3 whitespace-nowrap">名称</th>
                 <th className="text-left p-3 min-w-[180px]">呼叫号码</th>
-                <th className="text-left p-3 whitespace-nowrap">权重</th>
                 <th className="text-left p-3 whitespace-nowrap">班次</th>
                 <th className="text-left p-3 min-w-[140px]">转接来电</th>
                 <th className="text-left p-3 min-w-[200px]">状态</th>
@@ -303,14 +380,56 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
             <tbody>
               {rows.length === 0 ? (
                 <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">暂无数据</td></tr>
-              ) : rows.map((r) => {
+              ) : rows.map((r, idx) => {
                 const inc = r.routeType === 'sip' ? incomingBySeatId[seatIdKey(r.id)] : undefined
                 return (
-                <tr key={seatIdKey(r.id)} className="border-t border-border align-top">
+                <tr
+                  key={seatIdKey(r.id)}
+                  className={`border-t border-border align-top${rowDragClass(idx)}`}
+                  onDragEnter={(e) => {
+                    if (!dragEnabled || dragIdx == null || dragIdx === idx) return
+                    e.preventDefault()
+                    setDropOverIdx(idx)
+                  }}
+                  onDragOver={(e) => {
+                    if (!dragEnabled || dragIdx == null) return
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    if (dragIdx !== idx) setDropOverIdx(idx)
+                  }}
+                  onDragLeave={(e) => {
+                    const related = e.relatedTarget as Node | null
+                    if (related && (e.currentTarget as Node).contains(related)) return
+                    if (dropOverIdx === idx) setDropOverIdx(null)
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    handleDrop(idx)
+                  }}
+                >
+                  <td className="p-3 whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                      <span
+                        className={`acd-pool-drag-handle inline-flex items-center${dragEnabled ? ' cursor-grab active:cursor-grabbing' : ' opacity-40'}`}
+                        draggable={dragEnabled}
+                        title={dragEnabled ? '拖动排序' : '至少两条记录可排序'}
+                        onDragStart={(e) => {
+                          e.stopPropagation()
+                          e.dataTransfer.effectAllowed = 'move'
+                          e.dataTransfer.setData('text/plain', String(idx))
+                          setDragIdx(idx)
+                          setDropOverIdx(null)
+                        }}
+                        onDragEnd={clearDragState}
+                      >
+                        <IconDragDotVertical />
+                      </span>
+                      <span className="text-xs tabular-nums w-4 text-center">{idx + 1}</span>
+                    </span>
+                  </td>
                   <td className="p-3 text-xs text-muted-foreground max-w-[200px]">{trunkNumLabel(r.trunkNumberId)}</td>
                   <td className="p-3 max-w-[200px] truncate">{r.name || '—'}</td>
                   <td className="p-3 font-mono text-xs max-w-[260px] break-all text-muted-foreground">{r.routeType === 'sip' ? r.targetValue || '—' : '—'}</td>
-                  <td className="p-3 whitespace-nowrap">{r.weight}</td>
                   <td className="p-3 whitespace-nowrap text-xs text-muted-foreground">{shiftScheduleSummary(r.shiftSchedule)}</td>
                   <td className="p-3 align-top">
                     {r.routeType === 'sip' ? (
@@ -340,11 +459,16 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
             </tbody>
           </table>
           <div className="flex items-center justify-between p-3 border-t border-border text-sm">
-            <span className="text-muted-foreground">总计: {total}</span>
+            <span className="text-muted-foreground">
+              总计: {total}
+              {reordering ? ' · 保存排序中…' : ''}
+            </span>
+            {!trunkNumFilter && (
             <Space>
               <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</Button>
-              <Button size="small" disabled={page * pageSize >= total} onClick={() => setPage((p) => p + 1)}>下一页</Button>
+              <Button size="small" disabled={page * listPageSize >= total} onClick={() => setPage((p) => p + 1)}>下一页</Button>
             </Space>
+            )}
           </div>
         </div>
       )}
@@ -387,10 +511,6 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
               <Input placeholder="例如 10086 或 13800138000" value={form.targetValue} onChange={(v) => setForm((f) => ({ ...f, targetValue: v }))} />
             </div>
           )}
-          <div>
-            <Typography.Text style={{ fontSize: 12 }}>权重</Typography.Text>
-            <Input type="number" value={String(form.weight)} onChange={(v) => setForm((f) => ({ ...f, weight: parseInt(v, 10) || 0 }))} />
-          </div>
           <div>
             <Typography.Text style={{ fontSize: 12 }}>工作状态</Typography.Text>
             <Select

@@ -11,6 +11,8 @@ export interface ACDPoolTargetRow {
   sipSource?: string
   targetValue?: string
   weight: number
+  /** Lower = higher transfer priority; set via drag reorder in admin UI. */
+  sortOrder?: number
   workState: string
   workStateAt?: string
   sipTrunkHost?: string
@@ -108,4 +110,11 @@ export async function updateACDPoolTarget(id: number | string, body: {
 
 export async function deleteACDPoolTarget(id: number): Promise<ApiResponse<{ id: number }>> {
   return del(`/sip-center/acd-pool/${id}`)
+}
+
+export async function reorderACDPoolTargets(
+  trunkNumberId: number,
+  ids: Array<number | string>,
+): Promise<ApiResponse<{ ok: boolean }>> {
+  return post('/sip-center/acd-pool/reorder', { trunkNumberId, ids })
 }

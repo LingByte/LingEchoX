@@ -34,7 +34,7 @@ func AuditACDPoolTransferCandidates(ctx context.Context, db *gorm.DB, p ACDPoolT
 	if p.TenantID > 0 {
 		q = q.Where("tenant_id = ?", p.TenantID)
 	}
-	q = q.Order("weight DESC").Order("id ASC")
+	q = q.Order("sort_order ASC").Order("id ASC")
 	var rows []ACDPoolTarget
 	if err := q.Find(&rows).Error; err != nil {
 		return nil, err

@@ -710,7 +710,7 @@ func (e *Embedded) Shutdown(ctx context.Context) {
 
 // PickTransferDialTarget selects one row from acd_pool_targets for blind transfer (DTMF).
 // Eligible: not deleted, weight > 0, work_state = available, route_type sip or web.
-// Ordering: weight DESC, id ASC (highest weight wins; tie-break lower id first).
+// Ordering: sort_order ASC, id ASC (lower sort_order = higher priority).
 //   - web → WebSeat (browser agent leg).
 //   - sip trunk → DialTargetFromACDTrunk; sip internal → reg.DialTargetForUsername.
 //
