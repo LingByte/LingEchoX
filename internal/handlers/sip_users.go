@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/ginutil"
@@ -78,6 +79,38 @@ func (h *Handlers) deleteSIPUser(c *gin.Context) {
 //     未匹配 DID 且未开启 SIP_INBOUND_ALLOW_UNKNOWN_DID 的呼叫不会落库为租户数据。
 func (h *Handlers) listSIPCalls(c *gin.Context) {
 	page, size := ginutil.QueryPage(c, 100)
+	parseDate := func(s string) *time.Time {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		// Date-only semantics for call list filters.
+		// Even when frontend passes datetime text, only yyyy-MM-dd is used.
+		if len(s) >= 10 {
+			s = s[:10]
+		}
+		t, err := time.ParseInLocation("2006-01-02", s, time.Local)
+		if err != nil {
+			return nil
+		}
+		return &t
+	}
+	start := parseDate(c.Query("startAt"))
+	end := parseDate(c.Query("endAt"))
+	if end != nil {
+		e := end.Add(24*time.Hour - time.Nanosecond)
+		end = &e
+	}
+	filter := persist.SIPCallListFilter{
+		CallID:     c.Query("callId"),
+		State:      c.Query("state"),
+		From:       c.Query("from"),
+		To:         c.Query("to"),
+		TransferTo: c.Query("transferTo"),
+		Keyword:    c.Query("keyword"),
+		StartAt:    start,
+		EndAt:      end,
+	}
 
 	var (
 		list  []persist.SIPCall
@@ -92,10 +125,10 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 				tenantFilter = uint(v)
 			}
 		}
-		list, total, err = persist.ListAllSIPCallsPage(h.db, tenantFilter, page, size, c.Query("callId"), c.Query("state"))
+		list, total, err = persist.ListAllSIPCallsPage(h.db, tenantFilter, page, size, filter)
 	} else {
 		tid := middleware.CurrentTenantID(c)
-		list, total, err = persist.ListSIPCallsPage(h.db, tid, page, size, c.Query("callId"), c.Query("state"))
+		list, total, err = persist.ListSIPCallsPage(h.db, tid, page, size, filter)
 	}
 	if ginutil.WriteInternalError(c, err) {
 		return

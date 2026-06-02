@@ -26,3 +26,22 @@ func TestTransferTraceLifecycle(t *testing.T) {
 		t.Fatalf("expected cleared trace")
 	}
 }
+
+func TestTransferTraceNoAnswerAfterAnsweredBlocked(t *testing.T) {
+	const inbound = "in-trace-answered-then-noanswer"
+	const acdID uint = 15780195150487093760
+	t.Cleanup(func() {
+		TakeInboundTransferTrace(inbound)
+	})
+
+	RecordTransferAnswered(inbound, acdID)
+	RecordTransferNoAnswer(inbound, acdID)
+
+	trace := TakeInboundTransferTrace(inbound)
+	if len(trace) != 1 {
+		t.Fatalf("len=%d trace=%#v", len(trace), trace)
+	}
+	if trace[0].Outcome != TransferTraceAnswered || trace[0].ACDTargetID != acdID {
+		t.Fatalf("entry=%#v", trace[0])
+	}
+}

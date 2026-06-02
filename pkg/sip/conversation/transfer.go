@@ -644,8 +644,15 @@ func CleanupCallState(callID string) {
 	// 路径，这里 LoadAndDelete 取不到东西就 no-op，互不冲突。
 	CancelPendingTransferLeg(callID)
 	markTransferCallerHungUp(callID)
-	if !ActiveTransferBridgeForCallID(callID) && !ActiveWebSeatBridge(callID) {
-		recordTransferNoAnswerForCurrentTarget(callID)
+	inbound := ResolveInboundCallIDForTransfer(callID)
+	if inbound == "" {
+		inbound = callID
+	}
+	sipAgent, webSeat := PeekInboundTransferFlags(inbound)
+	// HangupTransferBridgeIfAny runs before deferred CleanupCallState, so the bridge
+	// map is often already empty here even though the call connected successfully.
+	if !ActiveTransferBridgeForCallID(callID) && !ActiveWebSeatBridge(callID) && !sipAgent && !webSeat {
+		recordTransferNoAnswerForCurrentTarget(inbound)
 	}
 	sipagentpoll.ClearByInbound(callID)
 	releaseTransferACDWorkState(callID)

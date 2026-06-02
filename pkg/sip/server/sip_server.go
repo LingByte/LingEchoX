@@ -1294,7 +1294,13 @@ func (s *SIPServer) handleBye(msg *stack.Message, addr *net.UDPAddr) *stack.Mess
 	if tb := conversation.HangupTransferBridgeIfAny(callID); tb != nil {
 		s.forgetUASDialog(callID)
 		s.releaseInboundCapacity(tb.InboundCallID)
-		conversation.CleanupCallState(tb.InboundCallID)
+		// Avoid double cleanup when BYE comes from inbound leg itself:
+		// handleBye already defers CleanupCallState(callID) at function entry.
+		// Running cleanup twice can append a stale no_answer trace entry
+		// after transfer bridge teardown.
+		if tb.InboundCallID != callID {
+			conversation.CleanupCallState(tb.InboundCallID)
+		}
 		s.endVoiceDialogBridge(tb.InboundCallID)
 		if s.outboundBYELegCleanup != nil && strings.TrimSpace(tb.OutboundCallID) != "" {
 			s.outboundBYELegCleanup(tb.OutboundCallID, byeReasonClass)

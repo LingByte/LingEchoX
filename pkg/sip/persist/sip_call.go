@@ -684,14 +684,58 @@ func ActiveSIPCalls(db *gorm.DB) *gorm.DB {
 	return db.Model(&SIPCall{}).Where("is_deleted = ?", SoftDeleteStatusActive)
 }
 
-func ListSIPCallsPage(db *gorm.DB, tenantID uint, page, size int, callID, state string) ([]SIPCall, int64, error) {
+type SIPCallListFilter struct {
+	CallID     string
+	State      string
+	From       string
+	To         string
+	TransferTo string
+	Keyword    string
+	StartAt    *time.Time
+	EndAt      *time.Time
+}
+
+func applySIPCallListFilter(q *gorm.DB, f SIPCallListFilter) *gorm.DB {
+	callID := strings.TrimSpace(f.CallID)
+	state := strings.TrimSpace(f.State)
+	from := strings.TrimSpace(f.From)
+	to := strings.TrimSpace(f.To)
+	transferTo := strings.TrimSpace(f.TransferTo)
+	keyword := strings.TrimSpace(f.Keyword)
+
+	if callID != "" {
+		q = q.Where("call_id LIKE ?", "%"+callID+"%")
+	}
+	if state != "" {
+		q = q.Where("state = ?", state)
+	}
+	if from != "" {
+		q = q.Where("from_number LIKE ?", "%"+from+"%")
+	}
+	if to != "" {
+		q = q.Where("to_number LIKE ?", "%"+to+"%")
+	}
+	if transferTo != "" {
+		like := "%" + transferTo + "%"
+		q = q.Joins("LEFT JOIN acd_pool_targets apt ON apt.id = sip_calls.transfer_acd_target_id").
+			Where("(apt.name LIKE ? OR apt.target_value LIKE ?)", like, like)
+	}
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		q = q.Where("(call_id LIKE ? OR from_number LIKE ? OR to_number LIKE ? OR failure_reason LIKE ?)", like, like, like, like)
+	}
+	if f.StartAt != nil {
+		q = q.Where("COALESCE(ended_at, bye_at, updated_at) >= ?", *f.StartAt)
+	}
+	if f.EndAt != nil {
+		q = q.Where("COALESCE(ended_at, bye_at, updated_at) <= ?", *f.EndAt)
+	}
+	return q
+}
+
+func ListSIPCallsPage(db *gorm.DB, tenantID uint, page, size int, f SIPCallListFilter) ([]SIPCall, int64, error) {
 	q := ActiveSIPCalls(db).Where("tenant_id = ?", tenantID)
-	if cid := strings.TrimSpace(callID); cid != "" {
-		q = q.Where("call_id = ?", cid)
-	}
-	if st := strings.TrimSpace(state); st != "" {
-		q = q.Where("state = ?", st)
-	}
+	q = applySIPCallListFilter(q, f)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -706,17 +750,12 @@ func ListSIPCallsPage(db *gorm.DB, tenantID uint, page, size int, callID, state 
 
 // ListAllSIPCallsPage 平台管理员视角：跨租户查看通话记录，包含 tenant_id=0 的测试通话。
 // 当 tenantIDFilter > 0 时按指定租户过滤；为 0 时返回全部。
-func ListAllSIPCallsPage(db *gorm.DB, tenantIDFilter uint, page, size int, callID, state string) ([]SIPCall, int64, error) {
+func ListAllSIPCallsPage(db *gorm.DB, tenantIDFilter uint, page, size int, f SIPCallListFilter) ([]SIPCall, int64, error) {
 	q := ActiveSIPCalls(db)
 	if tenantIDFilter > 0 {
 		q = q.Where("tenant_id = ?", tenantIDFilter)
 	}
-	if cid := strings.TrimSpace(callID); cid != "" {
-		q = q.Where("call_id = ?", cid)
-	}
-	if st := strings.TrimSpace(state); st != "" {
-		q = q.Where("state = ?", st)
-	}
+	q = applySIPCallListFilter(q, f)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err

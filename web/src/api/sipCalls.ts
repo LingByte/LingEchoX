@@ -61,10 +61,27 @@ export async function getSIPCall(id: number): Promise<ApiResponse<SIPCallRow>> {
   return get(`/sip-center/calls/${id}`)
 }
 
-export async function listSIPCalls(page = 1, size = 20, opts?: { callId?: string; state?: string }): Promise<ApiResponse<Paginated<SIPCallRow>>> {
+export type SIPCallListOptions = {
+  callId?: string
+  state?: string
+  from?: string
+  to?: string
+  transferTo?: string
+  keyword?: string
+  startAt?: string
+  endAt?: string
+}
+
+export async function listSIPCalls(page = 1, size = 20, opts?: SIPCallListOptions): Promise<ApiResponse<Paginated<SIPCallRow>>> {
   const q = new URLSearchParams({ page: String(page), size: String(size) })
   if (opts?.callId) q.set('callId', opts.callId)
   if (opts?.state) q.set('state', opts.state)
+  if (opts?.from) q.set('from', opts.from)
+  if (opts?.to) q.set('to', opts.to)
+  if (opts?.transferTo) q.set('transferTo', opts.transferTo)
+  if (opts?.keyword) q.set('keyword', opts.keyword)
+  if (opts?.startAt) q.set('startAt', opts.startAt)
+  if (opts?.endAt) q.set('endAt', opts.endAt)
   return get(`/sip-center/calls?${q.toString()}`)
 }
 

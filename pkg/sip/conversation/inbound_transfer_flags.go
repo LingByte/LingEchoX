@@ -27,6 +27,19 @@ func MarkInboundHadWebSeatHandoff(callID string) {
 	markInboundTransfer(callID, func(f *inboundTransferFlags) { f.WebSeat = true })
 }
 
+// PeekInboundTransferFlags reports whether this inbound leg reached SIP bridge or Web seat handoff without clearing.
+func PeekInboundTransferFlags(callID string) (sipAgent, webSeat bool) {
+	if callID == "" {
+		return false, false
+	}
+	v, ok := inboundTransferFlagsMap.Load(callID)
+	if !ok {
+		return false, false
+	}
+	f := v.(*inboundTransferFlags)
+	return f.SIPAgent, f.WebSeat
+}
+
 // TakeInboundTransferFlags returns transfer flags for this inbound Call-ID and clears them (once per dialog).
 func TakeInboundTransferFlags(callID string) (sipAgent, webSeat bool) {
 	if callID == "" {

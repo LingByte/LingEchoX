@@ -28,7 +28,13 @@ const CallRecords = () => {
   const [calls, setCalls] = useState<SIPCallRow[]>([])
   const [callsPage, setCallsPage] = useState(1)
   const [callsTotal, setCallsTotal] = useState(0)
-  const [callFilter, setCallFilter] = useState('')
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [searchFrom, setSearchFrom] = useState('')
+  const [searchTo, setSearchTo] = useState('')
+  const [searchTransferTo, setSearchTransferTo] = useState('')
+  const [searchState, setSearchState] = useState('')
+  const [searchStartAt, setSearchStartAt] = useState('')
+  const [searchEndAt, setSearchEndAt] = useState('')
   const [callsSearchNonce, setCallsSearchNonce] = useState(0)
   const [callDetailDrawerId, setCallDetailDrawerId] = useState<number | null>(null)
   const [callDetailDrawerData, setCallDetailDrawerData] = useState<SIPCallRow | null>(null)
@@ -40,7 +46,13 @@ const CallRecords = () => {
     setLoading(true)
     try {
       const res = await listSIPCalls(callsPage, pageSize, {
-        callId: callFilter.trim() || undefined,
+        keyword: searchKeyword.trim() || undefined,
+        from: searchFrom.trim() || undefined,
+        to: searchTo.trim() || undefined,
+        transferTo: searchTransferTo.trim() || undefined,
+        state: searchState.trim() || undefined,
+        startAt: searchStartAt || undefined,
+        endAt: searchEndAt || undefined,
       })
       if (res.code === 200 && res.data) {
         setCalls(res.data.list || [])
@@ -53,7 +65,7 @@ const CallRecords = () => {
     } finally {
       setLoading(false)
     }
-  }, [callsPage, callFilter])
+  }, [callsPage, searchKeyword, searchFrom, searchTo, searchTransferTo, searchState, searchStartAt, searchEndAt])
 
   useEffect(() => {
     void loadCalls()
@@ -149,20 +161,77 @@ const CallRecords = () => {
     (d.qosPacketLossPct ?? 0) > 0 ||
     (d.qosMosEstimate ?? 0) > 0
 
+  const applyQuickRange = (kind: '3d' | '7d' | '1m') => {
+    const now = new Date()
+    const start = new Date(now)
+    if (kind === '3d') start.setDate(now.getDate() - 3)
+    else if (kind === '7d') start.setDate(now.getDate() - 7)
+    else start.setMonth(now.getMonth() - 1)
+    const toDay = (d: Date) => {
+      const pad = (n: number) => `${n}`.padStart(2, '0')
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    }
+    setSearchStartAt(toDay(start))
+    setSearchEndAt(toDay(now))
+    setCallsPage(1)
+    setCallsSearchNonce((n) => n + 1)
+  }
+
   return (
     <BaseLayout title={t('pages.callRecords.title')} description={t('pages.callRecords.description')}>
       <div className="mb-3 flex flex-wrap gap-2 items-center">
         <input
           className="border border-border rounded-md px-3 py-1.5 text-sm bg-background max-w-xs"
-          placeholder="Call-ID"
-          value={callFilter}
-          onChange={(e) => setCallFilter(e.target.value)}
+          placeholder="关键词（号码/Call-ID）"
+          value={searchKeyword}
+          onChange={(e) => setSearchKeyword(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               setCallsPage(1)
               setCallsSearchNonce((n) => n + 1)
             }
           }}
+        />
+        <input
+          className="border border-border rounded-md px-3 py-1.5 text-sm bg-background w-[160px]"
+          placeholder="客户号码 From"
+          value={searchFrom}
+          onChange={(e) => setSearchFrom(e.target.value)}
+        />
+        <input
+          className="border border-border rounded-md px-3 py-1.5 text-sm bg-background w-[160px]"
+          placeholder="400 号码 To"
+          value={searchTo}
+          onChange={(e) => setSearchTo(e.target.value)}
+        />
+        <input
+          className="border border-border rounded-md px-3 py-1.5 text-sm bg-background w-[160px]"
+          placeholder="转接人"
+          value={searchTransferTo}
+          onChange={(e) => setSearchTransferTo(e.target.value)}
+        />
+        <select
+          className="border border-border rounded-md px-3 py-1.5 text-sm bg-background"
+          value={searchState}
+          onChange={(e) => setSearchState(e.target.value)}
+        >
+          <option value="">全部状态</option>
+          <option value="ringing">振铃中</option>
+          <option value="answered">已接通</option>
+          <option value="ended">已结束</option>
+          <option value="failed">失败</option>
+        </select>
+        <input
+          type="date"
+          className="border border-border rounded-md px-3 py-1.5 text-sm bg-background"
+          value={searchStartAt}
+          onChange={(e) => setSearchStartAt(e.target.value)}
+        />
+        <input
+          type="date"
+          className="border border-border rounded-md px-3 py-1.5 text-sm bg-background"
+          value={searchEndAt}
+          onChange={(e) => setSearchEndAt(e.target.value)}
         />
         <Button
           type="primary"
@@ -173,6 +242,44 @@ const CallRecords = () => {
           }}
         >
           搜索
+        </Button>
+        <Button
+          type="outline"
+          size="small"
+          onClick={() => applyQuickRange('3d')}
+        >
+          近3天
+        </Button>
+        <Button
+          type="outline"
+          size="small"
+          onClick={() => applyQuickRange('7d')}
+        >
+          近1周
+        </Button>
+        <Button
+          type="outline"
+          size="small"
+          onClick={() => applyQuickRange('1m')}
+        >
+          近1月
+        </Button>
+        <Button
+          type="outline"
+          size="small"
+          onClick={() => {
+            setSearchKeyword('')
+            setSearchFrom('')
+            setSearchTo('')
+            setSearchTransferTo('')
+            setSearchState('')
+            setSearchStartAt('')
+            setSearchEndAt('')
+            setCallsPage(1)
+            setCallsSearchNonce((n) => n + 1)
+          }}
+        >
+          重置
         </Button>
       </div>
       <Card bordered={false} bodyStyle={{ padding: 0 }}>
@@ -190,18 +297,18 @@ const CallRecords = () => {
                 <th className="text-left p-3 whitespace-nowrap min-w-[120px]">结束方式</th>
                 <th className="text-left p-3 whitespace-nowrap">时间</th>
                 <th className="text-left p-3 whitespace-nowrap min-w-[72px]">对话轮次</th>
-                <th className="text-left p-3 whitespace-nowrap min-w-[72px]">录音</th>
-                <th className="text-left p-3 whitespace-nowrap min-w-[100px]">操作</th>
+                <th className="text-left p-3 whitespace-nowrap min-w-[180px]">操作</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="p-6 text-center" colSpan={13}>加载中...</td></tr>
+                <tr><td className="p-6 text-center" colSpan={12}>加载中...</td></tr>
               ) : calls.length === 0 ? (
-                <tr><td className="p-6 text-center" colSpan={13}>暂无数据</td></tr>
+                <tr><td className="p-6 text-center" colSpan={12}>暂无数据</td></tr>
               ) : (
                 calls.map((c) => {
                   const hasRec = Boolean(c.recordingUrl && c.recordingUrl.trim())
+                  const recUrl = resolveSipRecordingUrl(c.recordingUrl)
                   return (
                     <tr key={c.id} className="border-t border-border align-top">
                       <td className="p-3 max-w-[240px] align-top"><EllipsisHoverCell text={c.callId} lines={2} mono /></td>
@@ -220,11 +327,24 @@ const CallRecords = () => {
                       <td className="p-3 text-xs max-w-[140px] align-top"><EllipsisHoverCell text={c.endStatus ? sipAiEndStatusI18nKey(c.endStatus) : '—'} lines={2} /></td>
                       <td className="p-3 whitespace-nowrap text-xs">{fmt(c.endedAt || c.byeAt || c.updatedAt)}</td>
                       <td className="p-3 whitespace-nowrap text-xs">{c.turnCount != null && c.turnCount > 0 ? c.turnCount : '—'}</td>
-                      <td className="p-3 whitespace-nowrap text-xs">{hasRec ? <span className="text-primary font-medium">有录音</span> : <span className="text-muted-foreground">—</span>}</td>
                       <td className="p-3 text-right whitespace-nowrap">
+                        <div className="flex gap-2 justify-end">
                         <Button type="outline" size="small" className="text-xs" onClick={() => void openCallDetailDrawer(c.id)}>
                           查看详情
                         </Button>
+                        <Button
+                          type="outline"
+                          size="small"
+                          className="text-xs"
+                          disabled={!hasRec}
+                          onClick={() => {
+                            if (!recUrl) return
+                            window.open(recUrl, '_blank', 'noopener,noreferrer')
+                          }}
+                        >
+                          下载录音
+                        </Button>
+                        </div>
                       </td>
                     </tr>
                   )

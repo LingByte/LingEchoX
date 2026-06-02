@@ -37,6 +37,15 @@ func recordTransferTraceOutcome(inbound string, acdID uint, outcome string) {
 			return
 		}
 	}
+	// BYE cleanup can run after bridge teardown and try to append no_answer for the
+	// seat that already answered — never downgrade answered → no_answer for same target.
+	if outcome == TransferTraceNoAnswer {
+		for _, e := range trace {
+			if e.ACDTargetID == acdID && e.Outcome == TransferTraceAnswered {
+				return
+			}
+		}
+	}
 	transferTraceByInbound[inbound] = append(trace, SIPCallTransferTraceEntry{
 		ACDTargetID: acdID,
 		Outcome:     outcome,
