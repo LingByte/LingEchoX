@@ -644,6 +644,9 @@ func CleanupCallState(callID string) {
 	// 路径，这里 LoadAndDelete 取不到东西就 no-op，互不冲突。
 	CancelPendingTransferLeg(callID)
 	markTransferCallerHungUp(callID)
+	if !ActiveTransferBridgeForCallID(callID) && !ActiveWebSeatBridge(callID) {
+		recordTransferNoAnswerForCurrentTarget(callID)
+	}
 	sipagentpoll.ClearByInbound(callID)
 	releaseTransferACDWorkState(callID)
 	transferStarted.Delete(callID)

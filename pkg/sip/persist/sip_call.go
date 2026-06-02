@@ -3,6 +3,7 @@ package persist
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"regexp"
 	"strconv"
@@ -122,6 +123,8 @@ type SIPCall struct {
 	// TransferACDTargetID is the acd_pool_targets.id selected when the call was transferred to an agent.
 	// 0 means no transfer or unknown target.
 	TransferACDTargetID uint `json:"transferAcdTargetId,omitempty" gorm:"column:transfer_acd_target_id;index;default:0"`
+	// TransferTraceJSON stores ordered transfer attempts, e.g. [{"acdTargetId":1,"outcome":"no_answer"}].
+	TransferTraceJSON datatypes.JSON `json:"transferTrace,omitempty" gorm:"column:transfer_trace_json;type:json"`
 	// TransferTo is derived for UI (e.g. seat name / targetValue) and is not stored.
 	TransferTo string `json:"transferTo,omitempty" gorm:"-"`
 }
@@ -329,6 +332,72 @@ func ComputeCallDurationSec(c *SIPCall) int {
 		return 0
 	}
 	return c.DurationSec
+}
+
+type sipCallTransferTraceEntry struct {
+	ACDTargetID uint   `json:"acdTargetId"`
+	Outcome     string `json:"outcome"`
+}
+
+// ParseSIPCallTransferTrace decodes transfer_trace_json.
+func ParseSIPCallTransferTrace(j datatypes.JSON) []sipCallTransferTraceEntry {
+	if len(j) == 0 {
+		return nil
+	}
+	var trace []sipCallTransferTraceEntry
+	if err := json.Unmarshal(j, &trace); err != nil {
+		return nil
+	}
+	return trace
+}
+
+// CollectSIPCallTransferTraceTargetIDs returns all acd_pool_targets.id referenced in trace rows.
+func CollectSIPCallTransferTraceTargetIDs(trace []sipCallTransferTraceEntry) []uint {
+	if len(trace) == 0 {
+		return nil
+	}
+	seen := map[uint]struct{}{}
+	out := make([]uint, 0, len(trace))
+	for _, e := range trace {
+		if e.ACDTargetID == 0 {
+			continue
+		}
+		if _, ok := seen[e.ACDTargetID]; ok {
+			continue
+		}
+		seen[e.ACDTargetID] = struct{}{}
+		out = append(out, e.ACDTargetID)
+	}
+	return out
+}
+
+// FormatSIPCallTransferTo builds the UI label, e.g. "沈鑫(未接听),张三".
+func FormatSIPCallTransferTo(trace []sipCallTransferTraceEntry, names map[uint]string, finalTargetID uint) string {
+	if len(trace) == 0 {
+		if finalTargetID > 0 {
+			if n := strings.TrimSpace(names[finalTargetID]); n != "" {
+				return n
+			}
+			return fmt.Sprintf("坐席#%d", finalTargetID)
+		}
+		return ""
+	}
+	parts := make([]string, 0, len(trace))
+	for _, e := range trace {
+		name := strings.TrimSpace(names[e.ACDTargetID])
+		if name == "" {
+			name = fmt.Sprintf("坐席#%d", e.ACDTargetID)
+		}
+		switch strings.TrimSpace(e.Outcome) {
+		case "no_answer":
+			parts = append(parts, name+"(未接听)")
+		case "rejected":
+			parts = append(parts, name+"(拒接)")
+		default:
+			parts = append(parts, name)
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // EffectiveEndStatus fills missing disposition for ended calls.

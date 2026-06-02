@@ -125,6 +125,9 @@ func terminateTransferBecauseAgentRejected(inbound string, sipCode int, reason s
 	if inbound == "" {
 		return
 	}
+	if id, ok := PeekInboundTransferACDTargetID(inbound); ok && id > 0 {
+		RecordTransferRejected(inbound, id)
+	}
 	AbortTransferOnAgentReject(inbound)
 	notifyTransferPhase(inbound, "agent_rejected", map[string]any{
 		"sip_code": sipCode,

@@ -604,6 +604,9 @@ func Start(cfg Config) (*Embedded, error) {
 		StopTransferRinging:        conversation.StopTransferRingingForCall,
 		AbortTransferOnAgentReject: conversation.AbortTransferOnAgentReject,
 		OnWebSeatBridgeEstablished: func(callID string) {
+			if id, ok := conversation.PeekInboundTransferACDTargetID(callID); ok && id > 0 {
+				conversation.RecordTransferAnswered(callID, id)
+			}
 			conversation.ResetTransferRoutingState(callID)
 		},
 		OnWebSeatJoinTimeout: conversation.OnWebSeatJoinTimeout,

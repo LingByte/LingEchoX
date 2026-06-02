@@ -1,4 +1,5 @@
 import { post, type ApiResponse } from '@/utils/request'
+import { formatACDTargetIdParam } from '@/api/sipAgentIncoming'
 import {
   listACDPoolTargets,
   getACDPoolTarget,
@@ -52,6 +53,13 @@ function normOpKey(s: string): string {
   return s.trim().toLowerCase()
 }
 
+function acdTargetIdNumber(id: number | string | undefined | null): number {
+  const s = formatACDTargetIdParam(id)
+  if (!s) return 0
+  const n = Number(s)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
 async function findWebAcdRowIdForOperator(operatorKey: string, trunkNumberId: number): Promise<number | null> {
   const k = normOpKey(operatorKey)
   if (!k || !trunkNumberId) return null
@@ -59,12 +67,15 @@ async function findWebAcdRowIdForOperator(operatorKey: string, trunkNumberId: nu
   if (res.code !== 200 || !res.data?.list?.length) return null
   const mine = res.data.list.filter((r) => normOpKey(r.createBy || '') === k)
   if (!mine.length) return null
-  mine.sort((a, b) => a.id - b.id)
-  return mine[0]!.id
+  mine.sort((a, b) => acdTargetIdNumber(a.id) - acdTargetIdNumber(b.id))
+  const id = acdTargetIdNumber(mine[0]!.id)
+  return id > 0 ? id : null
 }
 
-export async function postWebSeatAcdHeartbeat(targetId: number): Promise<void> {
-  const r: ApiResponse<{ ok?: boolean }> = await post('/sip-center/acd-pool/web-seat/heartbeat', { targetId })
+export async function postWebSeatAcdHeartbeat(targetId: number | string): Promise<void> {
+  const id = acdTargetIdNumber(targetId)
+  if (!id) throw new Error('invalid acd target id for heartbeat')
+  const r: ApiResponse<{ ok?: boolean }> = await post('/sip-center/acd-pool/web-seat/heartbeat', { targetId: id })
   if (r.code !== 200) throw new Error(r.msg || 'web seat heartbeat failed')
 }
 
@@ -124,8 +135,10 @@ export async function ensureWebSeatAcdPoolRowOnline(opts: {
     workState: 'available',
   })
   if (c.code !== 200 || !c.data?.id) throw new Error(c.msg || 'create web seat acd failed')
-  writeAnchoredWebSeatAcdPoolId(tnId, c.data.id)
-  return c.data.id
+  const createdId = acdTargetIdNumber(c.data.id)
+  if (!createdId) throw new Error('create web seat acd returned invalid id')
+  writeAnchoredWebSeatAcdPoolId(tnId, createdId)
+  return createdId
 }
 
 export async function setWebSeatAcdPoolRowOffline(trunkNumberId: number): Promise<void> {

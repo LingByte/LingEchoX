@@ -5,17 +5,19 @@ package handlers
 
 import (
 	"encoding/json"
-	"github.com/LinByte/VoiceServer/internal/constants"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/LinByte/VoiceServer/internal/constants"
 	"github.com/LinByte/VoiceServer/internal/models"
 	"github.com/LinByte/VoiceServer/pkg/ginutil"
 	"github.com/LinByte/VoiceServer/pkg/middleware"
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/sip/persist"
+	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -362,15 +364,40 @@ func (h *Handlers) deleteACDPoolTarget(c *gin.Context) {
 	response.Success(c, "success", gin.H{"id": id})
 }
 
-type webSeatACDHeartbeatReq struct {
-	TargetID uint `json:"targetId"`
+var errWebSeatHeartbeatNeedTargetID = errors.New("need targetId")
+
+func parseWebSeatHeartbeatTargetID(c *gin.Context) (uint, error) {
+	var raw map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		return 0, err
+	}
+	v, ok := raw["targetId"]
+	if !ok || len(v) == 0 {
+		return 0, errWebSeatHeartbeatNeedTargetID
+	}
+	var n uint64
+	if err := json.Unmarshal(v, &n); err == nil {
+		if n == 0 {
+			return 0, errWebSeatHeartbeatNeedTargetID
+		}
+		return uint(n), nil
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err == nil {
+		id, err := utils.ParseID(s)
+		if err != nil || id == 0 {
+			return 0, errWebSeatHeartbeatNeedTargetID
+		}
+		return id, nil
+	}
+	return 0, errWebSeatHeartbeatNeedTargetID
 }
 
 // webSeatACDHeartbeat refreshes web_seat_last_seen_at for the anchored browser row (keepalive).
 func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
 	tid := middleware.CurrentTenantID(c)
-	var req webSeatACDHeartbeatReq
-	if err := c.ShouldBindJSON(&req); err != nil || req.TargetID == 0 {
+	targetID, err := parseWebSeatHeartbeatTargetID(c)
+	if err != nil || targetID == 0 {
 		response.Fail(c, "invalid body: need targetId", nil)
 		return
 	}
@@ -379,7 +406,7 @@ func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
 		response.Fail(c, "unauthorized", nil)
 		return
 	}
-	row, err := models.GetActiveACDPoolTargetByID(h.db, req.TargetID)
+	row, err := models.GetActiveACDPoolTargetByID(h.db, targetID)
 	if err != nil || row.TenantID != tid {
 		response.Fail(c, "not found", nil)
 		return
@@ -392,7 +419,7 @@ func (h *Handlers) webSeatACDHeartbeat(c *gin.Context) {
 		response.Fail(c, "forbidden", nil)
 		return
 	}
-	if err := models.UpdateACDPoolTargetWebSeatHeartbeat(h.db, req.TargetID, op, time.Now()); err != nil {
+	if err := models.UpdateACDPoolTargetWebSeatHeartbeat(h.db, targetID, op, time.Now()); err != nil {
 		response.AbortWithStatusJSON(c, http.StatusInternalServerError, err)
 		return
 	}

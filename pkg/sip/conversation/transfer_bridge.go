@@ -488,6 +488,9 @@ func startTransferBridgeNow(inboundCallID string, outboundCS *sipSession.CallSes
 		logFields = append(logFields, zap.String("pcm_reason", pcmReason))
 	}
 	lg.Info("sip transfer bridge started", logFields...)
+	if id, ok := PeekInboundTransferACDTargetID(inboundCallID); ok && id > 0 {
+		RecordTransferAnswered(inboundCallID, id)
+	}
 	markTransferACDWorkStateForCall(inboundCallID, "busy")
 	sipagentpoll.MarkInboundConnected(inboundCallID)
 	MarkInboundHadSIPAgentTransfer(inboundCallID)

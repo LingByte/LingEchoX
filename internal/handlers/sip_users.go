@@ -14,6 +14,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/response"
 	"github.com/LinByte/VoiceServer/pkg/sip/persist"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // acdPoolTargetDisplayName 给通话记录里的"转接"列生成展示名称：
@@ -103,35 +104,49 @@ func (h *Handlers) listSIPCalls(c *gin.Context) {
 		persist.EnrichSIPCallResponse(&list[i])
 		persist.RedactSIPCallForAPI(&list[i])
 	}
-	// Attach transferTo label in batch (if transferred).
-	{
-		ids := make([]uint, 0, len(list))
-		seen := map[uint]struct{}{}
-		for i := range list {
-			if list[i].TransferACDTargetID > 0 {
-				if _, ok := seen[list[i].TransferACDTargetID]; !ok {
-					seen[list[i].TransferACDTargetID] = struct{}{}
-					ids = append(ids, list[i].TransferACDTargetID)
-				}
+	attachSIPCallTransferToLabels(h.db, list)
+	ginutil.PageSuccess(c, list, total, page, size)
+}
+
+func attachSIPCallTransferToLabels(db *gorm.DB, list []persist.SIPCall) {
+	if db == nil || len(list) == 0 {
+		return
+	}
+	seen := map[uint]struct{}{}
+	ids := make([]uint, 0)
+	for i := range list {
+		trace := persist.ParseSIPCallTransferTrace(list[i].TransferTraceJSON)
+		for _, id := range persist.CollectSIPCallTransferTraceTargetIDs(trace) {
+			if _, ok := seen[id]; ok {
+				continue
 			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
 		}
-		if len(ids) > 0 {
-			var rows []models.ACDPoolTarget
-			_ = h.db.Model(&models.ACDPoolTarget{}).Where("id IN ?", ids).Find(&rows).Error
-			m := map[uint]string{}
-			for _, r := range rows {
-				m[r.ID] = acdPoolTargetDisplayName(r)
-			}
-			for i := range list {
-				if list[i].TransferACDTargetID > 0 {
-					if v := strings.TrimSpace(m[list[i].TransferACDTargetID]); v != "" {
-						list[i].TransferTo = v
-					}
-				}
+		if list[i].TransferACDTargetID > 0 {
+			if _, ok := seen[list[i].TransferACDTargetID]; !ok {
+				seen[list[i].TransferACDTargetID] = struct{}{}
+				ids = append(ids, list[i].TransferACDTargetID)
 			}
 		}
 	}
-	ginutil.PageSuccess(c, list, total, page, size)
+	names := map[uint]string{}
+	if len(ids) > 0 {
+		var rows []models.ACDPoolTarget
+		_ = db.Model(&models.ACDPoolTarget{}).Where("id IN ?", ids).Find(&rows).Error
+		for _, r := range rows {
+			names[r.ID] = acdPoolTargetDisplayName(r)
+		}
+	}
+	for i := range list {
+		trace := persist.ParseSIPCallTransferTrace(list[i].TransferTraceJSON)
+		label := persist.FormatSIPCallTransferTo(trace, names, list[i].TransferACDTargetID)
+		if label != "" {
+			list[i].TransferTo = label
+		} else if list[i].HadSIPTransfer || list[i].HadWebSeat {
+			list[i].TransferTo = ""
+		}
+	}
 }
 
 func (h *Handlers) getSIPCall(c *gin.Context) {
@@ -156,11 +171,7 @@ func (h *Handlers) getSIPCall(c *gin.Context) {
 	}
 	persist.EnrichSIPCallResponse(&row)
 	persist.RedactSIPCallForAPI(&row)
-	if row.TransferACDTargetID > 0 {
-		var tgt models.ACDPoolTarget
-		if err := h.db.Model(&models.ACDPoolTarget{}).Where("id = ?", row.TransferACDTargetID).First(&tgt).Error; err == nil {
-			row.TransferTo = acdPoolTargetDisplayName(tgt)
-		}
-	}
-	response.Success(c, "success", row)
+	rows := []persist.SIPCall{row}
+	attachSIPCallTransferToLabels(h.db, rows)
+	response.Success(c, "success", rows[0])
 }

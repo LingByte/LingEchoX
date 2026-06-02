@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/LinByte/VoiceServer/pkg/utils"
 	"github.com/LinByte/VoiceServer/pkg/voice/gateway"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -89,6 +91,7 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 
 	sipAgent, webSeat := conversation.TakeInboundTransferFlags(callID)
 	transferTargetID := conversation.TakeInboundTransferACDTargetID(callID)
+	transferTrace := conversation.TakeInboundTransferTrace(callID)
 	endStatus := SIPCallEndStatusForBye(initiator, sipAgent, webSeat)
 
 	now := time.Now()
@@ -100,6 +103,11 @@ func (s *CallStore) OnBye(ctx context.Context, p sipServer.ByePersistParams) {
 	recordingSec := 0
 	if transferTargetID > 0 {
 		updates["transfer_acd_target_id"] = transferTargetID
+	}
+	if len(transferTrace) > 0 {
+		if b, err := json.Marshal(transferTrace); err == nil && len(b) > 0 {
+			updates["transfer_trace_json"] = datatypes.JSON(b)
+		}
 	}
 	if bi := strings.ToLower(strings.TrimSpace(initiator)); bi != "" {
 		updates["bye_initiator"] = bi

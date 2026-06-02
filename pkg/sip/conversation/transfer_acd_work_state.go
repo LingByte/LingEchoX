@@ -64,6 +64,7 @@ func releaseTransferRingingSeatForRetry(inboundCallID string) uint {
 	if rowID != 0 {
 		markTransferACDWorkState(rowID, "available")
 		transferExcludeAdd(inboundCallID, rowID)
+		RecordTransferNoAnswer(inboundCallID, rowID)
 		return rowID
 	}
 	releaseTransferACDWorkState(inboundCallID)

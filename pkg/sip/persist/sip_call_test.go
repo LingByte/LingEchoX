@@ -178,6 +178,22 @@ func TestComputeCallDurationSec_Enrich(t *testing.T) {
 	}
 }
 
+func TestFormatSIPCallTransferTo(t *testing.T) {
+	names := map[uint]string{1: "沈鑫", 2: "张三"}
+	trace := []sipCallTransferTraceEntry{
+		{ACDTargetID: 1, Outcome: "no_answer"},
+		{ACDTargetID: 2, Outcome: "answered"},
+	}
+	got := FormatSIPCallTransferTo(trace, names, 2)
+	if got != "沈鑫(未接听),张三" {
+		t.Fatalf("got %q", got)
+	}
+	got2 := FormatSIPCallTransferTo([]sipCallTransferTraceEntry{{ACDTargetID: 1, Outcome: "no_answer"}}, names, 0)
+	if got2 != "沈鑫(未接听)" {
+		t.Fatalf("no answer only: %q", got2)
+	}
+}
+
 func TestApplyRTPMediaToSIPCall(t *testing.T) {
 	var c SIPCall
 	ApplyRTPMediaToSIPCall(&c, "192.0.2.1", 1234, "10.0.0.1", 5678, "PCMU", 0, 8000)

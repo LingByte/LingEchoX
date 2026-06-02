@@ -15,6 +15,13 @@ import { showAlert } from '@/utils/notification'
 import { EllipsisHoverCell } from '@/pages/ContactCenter/EllipsisHoverCell'
 import CallAudioPlayer from '@/components/CallAudioPlayer'
 
+function transferToLabel(c: SIPCallRow): string {
+  const t = c.transferTo?.trim()
+  if (t) return t
+  if (c.hadSipTransfer || c.hadWebSeat) return '未知坐席'
+  return '—'
+}
+
 const CallRecords = () => {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
@@ -178,6 +185,7 @@ const CallRecords = () => {
                 <th className="text-left p-3 whitespace-nowrap">Dir</th>
                 <th className="text-left p-3 min-w-[140px]">From</th>
                 <th className="text-left p-3 min-w-[140px]">To</th>
+                <th className="text-left p-3 whitespace-nowrap min-w-[160px]">转接</th>
                 <th className="text-left p-3 whitespace-nowrap">Dur(s)</th>
                 <th className="text-left p-3 whitespace-nowrap min-w-[120px]">结束方式</th>
                 <th className="text-left p-3 whitespace-nowrap">时间</th>
@@ -188,9 +196,9 @@ const CallRecords = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td className="p-6 text-center" colSpan={12}>加载中...</td></tr>
+                <tr><td className="p-6 text-center" colSpan={13}>加载中...</td></tr>
               ) : calls.length === 0 ? (
-                <tr><td className="p-6 text-center" colSpan={12}>暂无数据</td></tr>
+                <tr><td className="p-6 text-center" colSpan={13}>暂无数据</td></tr>
               ) : (
                 calls.map((c) => {
                   const hasRec = Boolean(c.recordingUrl && c.recordingUrl.trim())
@@ -204,6 +212,9 @@ const CallRecords = () => {
                       </td>
                       <td className="p-3 max-w-[160px] align-top whitespace-nowrap">
                         <div className="font-medium">{c.toNumber?.trim() || '—'}</div>
+                      </td>
+                      <td className="p-3 text-xs max-w-[180px] align-top">
+                        <EllipsisHoverCell text={transferToLabel(c)} lines={2} />
                       </td>
                       <td className="p-3 whitespace-nowrap">{c.durationSec ?? '—'}</td>
                       <td className="p-3 text-xs max-w-[140px] align-top"><EllipsisHoverCell text={c.endStatus ? sipAiEndStatusI18nKey(c.endStatus) : '—'} lines={2} /></td>
@@ -272,7 +283,7 @@ const CallRecords = () => {
                         {detailField('BYE 发起方', d.byeInitiator || '—')}
                         {detailField('录音原始字节', d.recordingRawBytes != null && d.recordingRawBytes > 0 ? d.recordingRawBytes : '—')}
                         {detailField('录音 WAV 字节', d.recordingWavBytes != null && d.recordingWavBytes > 0 ? d.recordingWavBytes : '—')}
-                        {detailField('转接', d.transferTo?.trim() || (d.hadSipTransfer || d.hadWebSeat ? '未知坐席' : '—'))}
+                        {detailField('转接', transferToLabel(d))}
                         {detailField('媒体编码', d.codec || '—')}
                         <div className="col-span-2">{detailField('失败原因', d.failureReason || '—')}</div>
                       </div>

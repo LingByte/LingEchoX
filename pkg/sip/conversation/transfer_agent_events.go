@@ -268,6 +268,7 @@ func scheduleWebSeatJoinWatch(inbound string, acdTargetID uint) {
 		if acdTargetID != 0 {
 			markTransferACDWorkState(acdTargetID, "available")
 			transferExcludeAdd(inbound, acdTargetID)
+			RecordTransferNoAnswer(inbound, acdTargetID)
 		} else {
 			releaseTransferRingingSeatForRetry(inbound)
 		}
@@ -424,6 +425,7 @@ func OnWebSeatJoinTimeout(inboundCallID string, acdTargetID uint) {
 	if acdTargetID != 0 {
 		markTransferACDWorkState(acdTargetID, "available")
 		transferExcludeAdd(inboundCallID, acdTargetID)
+		RecordTransferNoAnswer(inboundCallID, acdTargetID)
 	}
 	cancelWebSeatJoinWatch(inboundCallID)
 	transferStarted.Delete(inboundCallID)
