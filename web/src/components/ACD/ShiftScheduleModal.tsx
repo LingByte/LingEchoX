@@ -8,25 +8,27 @@ import {
   TimePicker,
   Typography,
 } from '@arco-design/web-react'
-import { IconCopy, IconPlus } from '@arco-design/web-react/icon'
+import { IconDelete, IconPlus } from '@arco-design/web-react/icon'
 import dayjs, { type Dayjs } from 'dayjs'
 import { showAlert } from '@/utils/notification'
 import {
   applyTimeTypePreset,
+  buildScheduleSegments,
   bulkApplyTimeRange,
-  copyDaySchedule,
-  dayGridToSegments,
+  defaultHolidaySlots,
   defaultTimeSlot,
   emptyDayGrid,
   parseShiftScheduleJSON,
-  segmentsToDayGrid,
+  segmentsToScheduleView,
   serializeShiftSchedule,
+  TIME_TYPE_LABELS,
   validHm,
   type DaySchedule,
   type ShiftSegment,
   type ShiftTimeType,
   type TimeSlot,
 } from '@/utils/shiftSchedule'
+import './ShiftScheduleModal.css'
 
 function hmToDayjs(hm: string): Dayjs {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hm.trim())
@@ -41,14 +43,16 @@ function dayjsToHm(d: Dayjs | undefined | null): string {
   return d.format('HH:mm')
 }
 
-const TIME_TYPE_OPTS: { value: ShiftTimeType; label: string; disabled?: boolean }[] = [
-  { value: 'all', label: '全部时间' },
-  { value: 'mon_fri', label: '周一到周五' },
-  { value: 'week', label: '星期' },
-  { value: 'holiday', label: '法定节假日', disabled: true },
-  { value: 'workday', label: '工作日' },
-  { value: 'custom', label: '自定义' },
-]
+const TIME_TYPE_OPTS: { value: ShiftTimeType; label: string }[] = (
+  ['all', 'mon_fri', 'workday', 'holiday', 'custom'] as ShiftTimeType[]
+).map((value) => ({ value, label: TIME_TYPE_LABELS[value] }))
+
+const TYPE_HINTS: Partial<Record<ShiftTimeType, string>> = {
+  mon_fri: '周一至周五每天同一时段接线（不含法定节假日规则）。',
+  workday: '按国务院工作日历：含调休补班日，排除法定节假日休息。',
+  holiday: '仅在法定节假日及调休放假日内接线（如国庆、春节等）。',
+  custom: '按星期自由勾选，可配置多段时段。',
+}
 
 type Props = {
   visible: boolean
@@ -57,17 +61,68 @@ type Props = {
   onConfirm: (serialized: string) => void
 }
 
+function SlotLine({
+  slot,
+  disabled,
+  onChange,
+  onRemove,
+  showRemove,
+}: {
+  slot: TimeSlot
+  disabled?: boolean
+  onChange: (patch: Partial<TimeSlot>) => void
+  onRemove?: () => void
+  showRemove?: boolean
+}) {
+  return (
+    <div className="shift-schedule__slot-line">
+      <TimePicker
+        format="HH:mm"
+        disableConfirm
+        className="shift-schedule__time"
+        disabled={disabled}
+        value={hmToDayjs(slot.start)}
+        onChange={(_, d) => onChange({ start: d?.isValid?.() ? dayjsToHm(d) : slot.start })}
+      />
+      <span className="shift-schedule__tilde">至</span>
+      <TimePicker
+        format="HH:mm"
+        disableConfirm
+        className="shift-schedule__time"
+        disabled={disabled}
+        value={hmToDayjs(slot.end)}
+        onChange={(_, d) => onChange({ end: d?.isValid?.() ? dayjsToHm(d) : slot.end })}
+      />
+      <span className="shift-schedule__slot-actions">
+        {showRemove && onRemove && (
+          <Button
+            type="text"
+            size="mini"
+            status="danger"
+            icon={<IconDelete />}
+            disabled={disabled}
+            aria-label="删除时段"
+            onClick={onRemove}
+          />
+        )}
+      </span>
+    </div>
+  )
+}
+
 export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Props) {
   const [timeType, setTimeType] = useState<ShiftTimeType>('all')
   const [days, setDays] = useState<DaySchedule[]>(() => emptyDayGrid())
+  const [holidaySlots, setHolidaySlots] = useState<TimeSlot[]>(() => defaultHolidaySlots())
   const [bulkStart, setBulkStart] = useState('09:00')
   const [bulkEnd, setBulkEnd] = useState('18:00')
 
   const resetFromValue = useCallback((raw: string) => {
     const segs = parseShiftScheduleJSON(raw)
-    const { days: grid, timeType: inferred } = segmentsToDayGrid(segs)
-    setDays(grid)
-    setTimeType(inferred)
+    const view = segmentsToScheduleView(segs)
+    setDays(view.days)
+    setTimeType(view.timeType)
+    setHolidaySlots(view.holidaySlots)
     if (segs.length === 1) {
       setBulkStart(segs[0]!.start)
       setBulkEnd(segs[0]!.end)
@@ -79,17 +134,16 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
   }, [visible, value, resetFromValue])
 
   const onTimeTypeChange = (t: ShiftTimeType) => {
-    if (t === 'holiday') {
-      showAlert('法定节假日需对接假日库，当前请使用「自定义」按天配置', 'info')
-      return
-    }
     setTimeType(t)
     setDays((prev) => applyTimeTypePreset(t, prev))
+    if (t === 'holiday' && holidaySlots.length === 0) {
+      setHolidaySlots(defaultHolidaySlots())
+    }
   }
 
   const updateDay = (weekday: number, patch: Partial<DaySchedule>) => {
     setDays((prev) => prev.map((d) => (d.weekday === weekday ? { ...d, ...patch } : d)))
-    if (timeType !== 'custom' && timeType !== 'week') setTimeType('custom')
+    if (timeType !== 'custom') setTimeType('custom')
   }
 
   const updateSlot = (weekday: number, slotIdx: number, patch: Partial<TimeSlot>) => {
@@ -100,7 +154,7 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
         return { ...d, slots }
       }),
     )
-    if (timeType !== 'custom' && timeType !== 'week') setTimeType('custom')
+    if (timeType !== 'custom') setTimeType('custom')
   }
 
   const addSlot = (weekday: number) => {
@@ -114,14 +168,32 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
     setTimeType('custom')
   }
 
-  const copyFromPrev = (idx: number) => {
-    if (idx <= 0) return
-    setDays((prev) => {
-      const from = prev[idx - 1]!
-      const to = prev[idx]!
-      return prev.map((d, i) => (i === idx ? copyDaySchedule(from, to) : d))
-    })
+  const removeSlot = (weekday: number, slotIdx: number) => {
+    setDays((prev) =>
+      prev.map((d) => {
+        if (d.weekday !== weekday) return d
+        if (d.slots.length <= 1) return d
+        const slots = d.slots.filter((_, i) => i !== slotIdx)
+        return { ...d, slots: slots.length ? slots : [defaultTimeSlot()] }
+      }),
+    )
     setTimeType('custom')
+  }
+
+  const updateHolidaySlot = (slotIdx: number, patch: Partial<TimeSlot>) => {
+    setHolidaySlots((prev) => prev.map((s, i) => (i === slotIdx ? { ...s, ...patch } : s)))
+  }
+
+  const addHolidaySlot = () => {
+    setHolidaySlots((prev) => [...prev, defaultTimeSlot()])
+  }
+
+  const removeHolidaySlot = (slotIdx: number) => {
+    setHolidaySlots((prev) => {
+      if (prev.length <= 1) return prev
+      const next = prev.filter((_, i) => i !== slotIdx)
+      return next.length ? next : defaultHolidaySlots()
+    })
   }
 
   const handleConfirm = () => {
@@ -129,9 +201,12 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
       onConfirm('')
       return
     }
-    const segs = dayGridToSegments(days)
+    const segs = buildScheduleSegments(timeType, days, holidaySlots)
     if (!segs.length) {
-      showAlert('请至少勾选一天并填写有效时段', 'warning')
+      showAlert(
+        timeType === 'holiday' ? '请至少添加一段法定节假日接线时段' : '请至少勾选一天并填写有效时段',
+        'warning',
+      )
       return
     }
     for (let i = 0; i < segs.length; i++) {
@@ -149,16 +224,25 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
       showAlert('一键应用时间须为 HH:mm', 'warning')
       return
     }
+    if (timeType === 'holiday') {
+      setHolidaySlots([{ start: bulkStart, end: bulkEnd }])
+      return
+    }
     setDays((prev) => bulkApplyTimeRange(prev, bulkStart, bulkEnd, false))
     setTimeType('custom')
   }
+
+  const showWeekGrid = timeType !== 'all' && timeType !== 'holiday'
+  const showHolidayPanel = timeType === 'holiday'
 
   return (
     <Modal
       title="座席时间策略"
       visible={visible}
       onCancel={onCancel}
-      style={{ width: 760 }}
+      className="shift-schedule-modal"
+      style={{ width: 640, maxHeight: 'calc(100vh - 48px)' }}
+      alignCenter
       autoFocus={false}
       focusLock
       footer={
@@ -170,108 +254,134 @@ export function ShiftScheduleModal({ visible, value, onCancel, onConfirm }: Prop
         </Space>
       }
     >
-      <div className="space-y-4">
-        <div>
-            <Typography.Text style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>时间类型</Typography.Text>
-            <Radio.Group
-              type="button"
-              value={timeType}
-              onChange={(v) => onTimeTypeChange(v as ShiftTimeType)}
-            >
-              {TIME_TYPE_OPTS.map((o) => (
-                <Radio key={o.value} value={o.value} disabled={o.disabled}>
-                  {o.label}
-                </Radio>
-              ))}
-            </Radio.Group>
-          </div>
+      <div className="shift-schedule">
+        <div className="shift-schedule__section">
+          <Typography.Text className="shift-schedule__label">时间类型</Typography.Text>
+          <Radio.Group
+            type="button"
+            size="small"
+            value={timeType}
+            onChange={(v) => onTimeTypeChange(v as ShiftTimeType)}
+          >
+            {TIME_TYPE_OPTS.map((o) => (
+              <Radio key={o.value} value={o.value}>
+                {o.label}
+              </Radio>
+            ))}
+          </Radio.Group>
+        </div>
 
-          {timeType !== 'all' && (
-            <>
-              <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/20 px-3 py-2.5">
-                <Typography.Text style={{ fontSize: 12 }}>一键应用</Typography.Text>
+        {timeType === 'all' ? (
+          <Typography.Text className="shift-schedule__hint">
+            全部时间：不限制接线时段，坐席在班次外不会被自动标记离线。
+          </Typography.Text>
+        ) : (
+          <>
+            {TYPE_HINTS[timeType] && (
+              <Typography.Text className="shift-schedule__hint">{TYPE_HINTS[timeType]}</Typography.Text>
+            )}
+
+            <div className="shift-schedule__bulk">
+              <span className="shift-schedule__bulk-title">一键应用</span>
+              <div className="shift-schedule__slot-line">
                 <TimePicker
                   format="HH:mm"
                   disableConfirm
-                  style={{ width: 108 }}
+                  className="shift-schedule__time"
                   value={hmToDayjs(bulkStart)}
                   onChange={(_, d) => setBulkStart(d?.isValid?.() ? dayjsToHm(d) : bulkStart)}
                 />
-                <Typography.Text type="secondary">~</Typography.Text>
+                <span className="shift-schedule__tilde">至</span>
                 <TimePicker
                   format="HH:mm"
                   disableConfirm
-                  style={{ width: 108 }}
+                  className="shift-schedule__time"
                   value={hmToDayjs(bulkEnd)}
                   onChange={(_, d) => setBulkEnd(d?.isValid?.() ? dayjsToHm(d) : bulkEnd)}
                 />
-                <Button type="primary" size="small" onClick={handleBulkApply}>
-                  应用到全部星期
-                </Button>
+                <span className="shift-schedule__slot-actions" />
               </div>
+              <Button type="primary" size="small" onClick={handleBulkApply}>
+                {showHolidayPanel ? '应用到节假日' : '应用到全部星期'}
+              </Button>
+            </div>
 
-              <div className="rounded-md border border-border overflow-hidden">
-                {days.map((day, idx) => (
-                  <div
-                    key={day.weekday}
-                    className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2.5 last:border-b-0 bg-card"
-                  >
-                    <Button
-                      type="text"
-                      size="mini"
-                      icon={<IconCopy />}
-                      disabled={idx === 0}
-                      onClick={() => copyFromPrev(idx)}
-                    >
-                      复制
-                    </Button>
-                    <Checkbox
-                      checked={day.enabled}
-                      onChange={(checked) => updateDay(day.weekday, { enabled: checked })}
-                    >
-                      {day.label}
-                    </Checkbox>
-                    {day.slots.map((slot, slotIdx) => (
-                      <Space key={slotIdx} size={6} align="center">
-                        <TimePicker
-                          format="HH:mm"
-                          disableConfirm
-                          style={{ width: 108 }}
-                          disabled={!day.enabled}
-                          value={hmToDayjs(slot.start)}
-                          onChange={(_, d) =>
-                            updateSlot(day.weekday, slotIdx, {
-                              start: d?.isValid?.() ? dayjsToHm(d) : slot.start,
-                            })
-                          }
-                        />
-                        <Typography.Text type="secondary">~</Typography.Text>
-                        <TimePicker
-                          format="HH:mm"
-                          disableConfirm
-                          style={{ width: 108 }}
-                          disabled={!day.enabled}
-                          value={hmToDayjs(slot.end)}
-                          onChange={(_, d) =>
-                            updateSlot(day.weekday, slotIdx, {
-                              end: d?.isValid?.() ? dayjsToHm(d) : slot.end,
-                            })
-                          }
-                        />
-                      </Space>
-                    ))}
-                    <Button
-                      type="text"
-                      size="mini"
-                      icon={<IconPlus />}
-                      disabled={!day.enabled}
-                      onClick={() => addSlot(day.weekday)}
-                    />
-                  </div>
-                ))}
+            {showHolidayPanel && (
+              <div className="shift-schedule__holiday-panel">
+                <div className="shift-schedule__grid-head shift-schedule__grid-head--holiday">
+                  <span>法定节假日接线时段</span>
+                  <span />
+                </div>
+                <div className="shift-schedule__holiday-slots">
+                  {holidaySlots.map((slot, slotIdx) => (
+                    <div key={slotIdx} className="shift-schedule__holiday-row">
+                      <SlotLine
+                        slot={slot}
+                        onChange={(patch) => updateHolidaySlot(slotIdx, patch)}
+                        showRemove={holidaySlots.length > 1}
+                        onRemove={() => removeHolidaySlot(slotIdx)}
+                      />
+                    </div>
+                  ))}
+                  <Button type="outline" size="small" icon={<IconPlus />} onClick={addHolidaySlot}>
+                    添加时段
+                  </Button>
+                </div>
               </div>
-            </>
-          )}
+            )}
+
+            {showWeekGrid && (
+              <>
+                <div className="shift-schedule__grid-head" aria-hidden>
+                  <span>星期</span>
+                  <span>时段（可多段，如午休前后）</span>
+                  <span />
+                </div>
+
+                <div className="shift-schedule__days">
+                  {days.map((day) => (
+                    <div
+                      key={day.weekday}
+                      className={`shift-schedule__day${day.enabled ? '' : ' shift-schedule__day--off'}`}
+                    >
+                      <div className="shift-schedule__day-label">
+                        <Checkbox
+                          checked={day.enabled}
+                          onChange={(checked) => updateDay(day.weekday, { enabled: checked })}
+                        >
+                          {day.label}
+                        </Checkbox>
+                      </div>
+                      <div className="shift-schedule__slots">
+                        {day.slots.map((slot, slotIdx) => (
+                          <SlotLine
+                            key={slotIdx}
+                            slot={slot}
+                            disabled={!day.enabled}
+                            onChange={(patch) => updateSlot(day.weekday, slotIdx, patch)}
+                            showRemove={day.slots.length > 1}
+                            onRemove={() => removeSlot(day.weekday, slotIdx)}
+                          />
+                        ))}
+                      </div>
+                      <div className="shift-schedule__day-add">
+                        <Button
+                          type="outline"
+                          size="mini"
+                          icon={<IconPlus />}
+                          disabled={!day.enabled}
+                          onClick={() => addSlot(day.weekday)}
+                        >
+                          时段
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
       </div>
     </Modal>
   )

@@ -687,6 +687,7 @@ type acdShiftWindow struct {
 	Weekdays []int  `json:"weekdays"`
 	Start    string `json:"start"`
 	End      string `json:"end"`
+	Calendar string `json:"calendar,omitempty"`
 }
 
 // ACDFitsShiftSchedule reports whether t falls into any configured window. Empty or invalid JSON means 24/7 (eligible).
@@ -707,6 +708,9 @@ func ACDFitsShiftSchedule(scheduleJSON string, t time.Time, loc *time.Location) 
 	minutes := tt.Hour()*60 + tt.Minute()
 
 	for _, w := range windows {
+		if !acdCalendarMatches(w.Calendar, tt, loc) {
+			continue
+		}
 		if !acdWeekdayListed(w.Weekdays, wd) {
 			continue
 		}

@@ -1,0 +1,185 @@
+/* 座席时间策略：列对齐网格，同一天多时段纵向堆叠 */
+.shift-schedule-modal.arco-modal {
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+}
+
+.shift-schedule-modal .arco-modal-body {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.shift-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(520px, calc(100vh - 200px));
+}
+
+.shift-schedule__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shift-schedule__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-1);
+}
+
+/* 与下方星期行对齐：星期列 + 时段列 */
+.shift-schedule__bulk {
+  display: grid;
+  grid-template-columns: 88px 1fr auto;
+  gap: 8px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-fill-1);
+}
+
+.shift-schedule__bulk-title {
+  grid-column: 1;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-2);
+}
+
+.shift-schedule__bulk .shift-schedule__slot-line {
+  grid-column: 2;
+}
+
+.shift-schedule__bulk > .arco-btn {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.shift-schedule__grid-head {
+  display: grid;
+  grid-template-columns: 88px 1fr 72px;
+  gap: 8px 10px;
+  padding: 0 12px 4px;
+  font-size: 11px;
+  color: var(--color-text-3);
+}
+
+.shift-schedule__days {
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: min(260px, calc(100vh - 340px));
+  background: var(--color-bg-2);
+}
+
+.shift-schedule__day {
+  display: grid;
+  grid-template-columns: 88px 1fr 72px;
+  gap: 6px 10px;
+  align-items: start;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border-2);
+}
+
+.shift-schedule__day:last-child {
+  border-bottom: none;
+}
+
+.shift-schedule__day--off {
+  opacity: 0.55;
+}
+
+.shift-schedule__day-label {
+  padding-top: 4px;
+  white-space: nowrap;
+}
+
+.shift-schedule__day-label .arco-checkbox {
+  font-size: 13px;
+}
+
+.shift-schedule__slots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shift-schedule__slot-line {
+  display: grid;
+  grid-template-columns: 100px 20px 100px 32px;
+  align-items: center;
+  gap: 4px;
+}
+
+.shift-schedule__time {
+  width: 100% !important;
+}
+
+.shift-schedule__tilde {
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-3);
+  user-select: none;
+}
+
+.shift-schedule__slot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+}
+
+.shift-schedule__day-add {
+  padding-top: 2px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.shift-schedule__day-add .arco-btn {
+  min-width: 56px;
+}
+
+.shift-schedule__holiday-panel {
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-bg-2);
+}
+
+.shift-schedule__grid-head--holiday {
+  grid-template-columns: 1fr 72px;
+  padding: 8px 12px;
+  background: var(--color-fill-1);
+  border-bottom: 1px solid var(--color-border-2);
+  font-weight: 500;
+}
+
+.shift-schedule__holiday-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.shift-schedule__holiday-row {
+  padding-left: 0;
+}
+
+@media (max-width: 520px) {
+  .shift-schedule__bulk,
+  .shift-schedule__day,
+  .shift-schedule__grid-head {
+    grid-template-columns: 72px 1fr 64px;
+  }
+
+  .shift-schedule__slot-line {
+    grid-template-columns: 1fr 16px 1fr 28px;
+  }
+}

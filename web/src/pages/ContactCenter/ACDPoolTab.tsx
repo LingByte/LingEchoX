@@ -416,7 +416,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
           <div>
             <Typography.Text style={{ fontSize: 12 }}>接线班次（可选）</Typography.Text>
             <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/20 px-3 py-2.5">
-              <Typography.Text style={{ fontSize: 12 }}>
+              <Typography.Text style={{ fontSize: 12, flex: '1 1 200px', minWidth: 0 }}>
                 当前：{shiftScheduleSummary(form.shiftSchedule)}
               </Typography.Text>
               <Button type="primary" size="small" onClick={() => setShiftModalOpen(true)}>
@@ -424,7 +424,7 @@ export default function ACDPoolTab({ active, refreshNonce = 0 }: { active: boole
               </Button>
             </div>
             <Typography.Paragraph style={{ margin: '6px 0 0', fontSize: 11 }} type="secondary">
-              按星期逐日配置时段，支持一键应用、复制上一天与多段时段。
+              按星期配置；同一天可添加多段时段（如午休前后），各时段纵向对齐。
             </Typography.Paragraph>
           </div>
         </Space>
