@@ -60,8 +60,9 @@ export async function listACDPoolTargets(
   return get(`/sip-center/acd-pool?${q.toString()}`)
 }
 
-export async function getACDPoolTarget(id: number): Promise<ApiResponse<ACDPoolTargetRow>> {
-  return get(`/sip-center/acd-pool/${id}`)
+export async function getACDPoolTarget(id: number | string): Promise<ApiResponse<ACDPoolTargetRow>> {
+  const sid = String(id).trim()
+  return get(`/sip-center/acd-pool/${sid}`)
 }
 
 export async function createACDPoolTarget(body: {
@@ -84,7 +85,7 @@ export async function createACDPoolTarget(body: {
   return post('/sip-center/acd-pool', body)
 }
 
-export async function updateACDPoolTarget(id: number, body: {
+export async function updateACDPoolTarget(id: number | string, body: {
   name?: string
   trunkNumberId: number
   routeType: string
@@ -101,7 +102,8 @@ export async function updateACDPoolTarget(id: number, body: {
   remark?: string
   metaData?: string | Record<string, unknown>
 }): Promise<ApiResponse<ACDPoolTargetRow>> {
-  return put(`/sip-center/acd-pool/${id}`, body)
+  const sid = String(id).trim()
+  return put(`/sip-center/acd-pool/${sid}`, body)
 }
 
 export async function deleteACDPoolTarget(id: number): Promise<ApiResponse<{ id: number }>> {

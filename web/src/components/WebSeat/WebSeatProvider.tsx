@@ -246,7 +246,14 @@ export function WebSeatProvider({ children }: { children: ReactNode }) {
       acdHeartbeatTimerRef.current = window.setInterval(() => {
         void postWebSeatAcdHeartbeat(tid)
           .then(() => logSignal('heartbeat ok', tid))
-          .catch(() => logSignal('heartbeat failed', tid))
+          .catch((e: unknown) => {
+            const msg = e instanceof Error ? e.message : String(e)
+            logSignal('heartbeat failed', tid, msg)
+            if (msg.includes('not found') && trunkPickRef.current?.id) {
+              clearWebSeatAcdPoolAnchor(trunkPickRef.current.id)
+              logSignal('cleared stale acd anchor (id precision / row missing); go offline then online again')
+            }
+          })
       }, WEBSEAT_ACD_HEARTBEAT_MS)
       window.dispatchEvent(new CustomEvent('soulnexus-acd-refresh'))
       logSignal('goOnline success')

@@ -9,25 +9,31 @@ import {
 
 const WEBSEAT_ACD_POOL_ROW_SESSION_KEY = 'soulnexus.webseat.acdPoolTargetId'
 
+/** Snowflake ACD row id — always string in JS (never Number: loses precision above 2^53-1). */
+export type WebSeatAcdTargetId = string
+
 function anchorSessionKey(trunkNumberId: number): string {
   return `${WEBSEAT_ACD_POOL_ROW_SESSION_KEY}:${trunkNumberId}`
 }
 
-function readAnchoredWebSeatAcdPoolId(trunkNumberId: number): number | null {
+function normalizeAcdTargetId(id: number | string | undefined | null): WebSeatAcdTargetId | null {
+  const s = formatACDTargetIdParam(id)
+  return s ?? null
+}
+
+function readAnchoredWebSeatAcdPoolId(trunkNumberId: number): WebSeatAcdTargetId | null {
   if (typeof sessionStorage === 'undefined') return null
   try {
-    const s = sessionStorage.getItem(anchorSessionKey(trunkNumberId))
-    if (!s) return null
-    const id = parseInt(s, 10)
-    return Number.isFinite(id) && id > 0 ? id : null
+    const s = sessionStorage.getItem(anchorSessionKey(trunkNumberId))?.trim()
+    return normalizeAcdTargetId(s)
   } catch {
     return null
   }
 }
 
-function writeAnchoredWebSeatAcdPoolId(trunkNumberId: number, id: number): void {
+function writeAnchoredWebSeatAcdPoolId(trunkNumberId: number, id: WebSeatAcdTargetId): void {
   if (typeof sessionStorage === 'undefined') return
-  sessionStorage.setItem(anchorSessionKey(trunkNumberId), String(id))
+  sessionStorage.setItem(anchorSessionKey(trunkNumberId), id)
 }
 
 /** Clears stored ACD row anchor for one trunk (or every trunk prefix if called with clearAllAnchors). */
@@ -53,28 +59,38 @@ function normOpKey(s: string): string {
   return s.trim().toLowerCase()
 }
 
-function acdTargetIdNumber(id: number | string | undefined | null): number {
-  const s = formatACDTargetIdParam(id)
-  if (!s) return 0
-  const n = Number(s)
-  return Number.isFinite(n) && n > 0 ? n : 0
+function compareAcdTargetIds(a: number | string, b: number | string): number {
+  const sa = formatACDTargetIdParam(a) ?? ''
+  const sb = formatACDTargetIdParam(b) ?? ''
+  try {
+    const ba = BigInt(sa || '0')
+    const bb = BigInt(sb || '0')
+    if (ba < bb) return -1
+    if (ba > bb) return 1
+    return 0
+  } catch {
+    return sa.localeCompare(sb)
+  }
 }
 
-async function findWebAcdRowIdForOperator(operatorKey: string, trunkNumberId: number): Promise<number | null> {
+async function findWebAcdRowIdForOperator(
+  operatorKey: string,
+  trunkNumberId: number,
+): Promise<WebSeatAcdTargetId | null> {
   const k = normOpKey(operatorKey)
   if (!k || !trunkNumberId) return null
   const res = await listACDPoolTargets(1, 100, { routeType: 'web', trunkNumberId })
   if (res.code !== 200 || !res.data?.list?.length) return null
   const mine = res.data.list.filter((r) => normOpKey(r.createBy || '') === k)
   if (!mine.length) return null
-  mine.sort((a, b) => acdTargetIdNumber(a.id) - acdTargetIdNumber(b.id))
-  const id = acdTargetIdNumber(mine[0]!.id)
-  return id > 0 ? id : null
+  mine.sort((a, b) => compareAcdTargetIds(a.id, b.id))
+  return normalizeAcdTargetId(mine[0]!.id)
 }
 
 export async function postWebSeatAcdHeartbeat(targetId: number | string): Promise<void> {
-  const id = acdTargetIdNumber(targetId)
+  const id = normalizeAcdTargetId(targetId)
   if (!id) throw new Error('invalid acd target id for heartbeat')
+  // Send string — JSON number cannot represent Snowflake ids exactly in JS.
   const r: ApiResponse<{ ok?: boolean }> = await post('/sip-center/acd-pool/web-seat/heartbeat', { targetId: id })
   if (r.code !== 200) throw new Error(r.msg || 'web seat heartbeat failed')
 }
@@ -83,14 +99,14 @@ export async function ensureWebSeatAcdPoolRowOnline(opts: {
   displayLabel: string
   operatorKey: string
   trunkNumberId: number
-}): Promise<number> {
+}): Promise<WebSeatAcdTargetId> {
   const tnId = opts.trunkNumberId
   if (!tnId || tnId <= 0) {
     throw new Error('请先选择中继号码后再上线')
   }
   const label = opts.displayLabel.trim() || 'Web'
   const existing = await findWebAcdRowIdForOperator(opts.operatorKey, tnId)
-  let targetId: number | null = existing
+  let targetId: WebSeatAcdTargetId | null = existing
   if (targetId == null) {
     const anchor = readAnchoredWebSeatAcdPoolId(tnId)
     if (anchor != null) {
@@ -135,7 +151,7 @@ export async function ensureWebSeatAcdPoolRowOnline(opts: {
     workState: 'available',
   })
   if (c.code !== 200 || !c.data?.id) throw new Error(c.msg || 'create web seat acd failed')
-  const createdId = acdTargetIdNumber(c.data.id)
+  const createdId = normalizeAcdTargetId(c.data.id)
   if (!createdId) throw new Error('create web seat acd returned invalid id')
   writeAnchoredWebSeatAcdPoolId(tnId, createdId)
   return createdId
